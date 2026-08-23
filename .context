@@ -1,0 +1,170 @@
+# Iluminate UI And Persistence Context
+
+This project must follow the presentation and navigation standard already proven in
+`/srv/voxalia/services/web/voxalia`. Do not invent one-off workbench screens when a
+Voxalia pattern exists.
+
+## Source Standard Reviewed
+
+Reference modules:
+
+- Voxalia Asterisk Tenant Profiles list:
+  `/srv/voxalia/services/web/voxalia/components/crud/asterisk-profiles-crud.tsx`
+- Voxalia Asterisk tenant workspace:
+  `/srv/voxalia/services/web/voxalia/components/workspace/asterisk-workspace.tsx`
+  and `/srv/voxalia/services/web/voxalia/components/workspace/workspace-page.tsx`
+- Voxalia Asterisk Infrastructure workspace:
+  `/srv/voxalia/services/web/voxalia/components/workspace/asterisk-infrastructure-placeholder.tsx`
+- Shared CRUD primitives:
+  `/srv/voxalia/services/web/voxalia/components/crud/crud-resource-page.tsx`
+  and `/srv/voxalia/services/web/voxalia/components/crud/crud-grid.tsx`
+
+## Navigation Pattern
+
+Top-level menu items open list or workspace pages through stable routes.
+
+List route pattern:
+
+- Page shell uses `AppShell` with `currentPath` set to the menu route.
+- Page header appears above the grid:
+  - badges for status/context/role when available;
+  - `h1` page title;
+  - short description;
+  - optional `FeedbackAlert`.
+- Main content is a `CrudResourcePage`, not a custom card list.
+
+Detail route pattern:
+
+- Opening a row goes to a stable detail route, for example:
+  `/settings/asterisk/[tenantKey]`.
+- Detail keeps the sidebar menu selected by passing the parent `currentPath`.
+- Detail renders a workspace component.
+- Workspace contains:
+  - top header with context badges, title, description and back link;
+  - optional summary metrics;
+  - a tab bar in a bordered `bg-card` strip;
+  - one active tab body at a time.
+
+Do not rely on query parameters as the main identity route for editable resources
+when the resource has its own workspace. Query parameters are acceptable for tab
+selection and scoped filters.
+
+## Grid Pattern
+
+Resource collections are shown with `CrudResourcePage` plus `CrudGrid`.
+
+Grid standard:
+
+- Toolbar card above the table.
+- Search input on the left with `Search` icon.
+- Select filters next to search.
+- `Clear` button with `Filter` icon.
+- Create button on the right when `canCreate !== false`.
+- Main grid inside a `Card`.
+- Card header shows:
+  - title;
+  - description;
+  - badges for shown and total counts.
+- Table header is always visible and explicit.
+- Table rows use stable height, border separators, hover background.
+- Numeric columns are right-aligned and usually monospace.
+- Status fields render with `Badge`.
+- First identifying column usually shows a primary label plus a secondary key.
+
+Avoid unlabeled form-like rows pretending to be a grid. If it is tabular, it must
+have table/grid headers.
+
+## Row Actions Pattern
+
+Voxalia uses two kinds of row actions:
+
+- Built-in CRUD actions from `allowedActions`:
+  - `view`: icon-only `Eye`;
+  - `edit`: icon-only `Pencil`;
+  - `delete` / `deactivate`: icon-only `Trash2`;
+  - `workspace`: icon-only `ArrowUpRight`.
+- Custom `_actions`:
+  - rendered as compact text button plus `ArrowUpRight`;
+  - used for explicit row navigation/action labels.
+
+Actions live in a right-aligned `Actions` column.
+
+Do not invent per-page action styling. If Iluminate needs custom labels such as
+`Open`, `Duplicate`, or `Simulate`, they must be handled deliberately and
+consistently with this action model.
+
+## Workspace Pattern
+
+Workspaces are for editing or operating inside one selected parent resource.
+
+Workspace standard:
+
+- Header and back link at the top.
+- Tabs in a dedicated bordered `bg-card` container.
+- Tabs should map to business sections, not visual whims.
+- Tab bodies may contain:
+  - overview cards;
+  - `CrudResourcePage` grids with `hideToolbar` / `hideHeader` where nested;
+  - explicit records tables for read-only operational data;
+  - master-detail grids for child entities.
+- Nested sections still use search, filters, grid headers and row actions.
+- Modals use shared `CrudFormDialog` or `Modal`.
+- Empty states use `EmptyState`.
+
+## Iluminate Partitura Application
+
+The current Partitura Generator must be realigned to this standard.
+
+Correct high-level flow:
+
+1. `Partituras` menu opens a list grid of partituras for the active client.
+2. A row action opens a partitura workspace route.
+3. The partitura workspace contains tabs, for example:
+   - `Overview`: project/partitura summary and validation status.
+   - `Scenes`: scenes grid; selected scene can expose clips grid.
+   - `Layout`: chains, segments and zones as explicit grids.
+   - `Simulator`: output preview, Generate, Play/Pause, Reset, timing metrics.
+   - `Export`: generated JSON only when it becomes operationally useful.
+4. Scenes, clips, segments and zones must not be edited as arbitrary stacked
+   cards if they are collections. They should be grids or master-detail grids.
+5. Cards are acceptable for summaries, selected-record detail panels, metrics and
+   simulator preview, but not as a replacement for CRUD grids.
+
+## Partitura Domain Rule
+
+Iluminate does not model partitura revisions.
+
+- One project has one current persisted partitura.
+- Generated JSON must not include `revision`.
+- Persistence must not use a partitura revisions table as the business model.
+- If a user wants a variant, they duplicate the partitura into a separate
+  partitura/project record and edit that record.
+- `schemaVersion` is only a wire-format compatibility marker for core/firmware.
+
+## Persistence Implication
+
+Continuing with in-memory partitura state will cause UI rework later. Before
+building more simulator/editor surface, introduce a stable persistence model:
+
+- `iluminate.projects`: client-scoped installation/project.
+- `iluminate.partituras`: one editable current partitura per project.
+- Child configuration may be persisted either as normalized child tables or as a
+  JSON document while the editor model stabilizes, but the API contract must
+  expose resources in the same shape used by the workspace grids.
+
+The web should stop treating the Partitura Generator as a temporary local-only
+workbench. It should become the partitura workspace backed by API/storage.
+
+## Implementation Mandate
+
+Before changing Iluminate UI:
+
+1. Check this `.context`.
+2. Prefer copying/adapting Voxalia primitives over inventing new layout.
+3. Keep list pages as `CrudResourcePage`.
+4. Keep detail pages as workspace pages with tabs.
+5. Use grids for resource collections.
+6. Use shared CRUD dialogs/actions.
+7. Add persistence when the screen edits business resources that must survive
+   navigation or later deployment.
+

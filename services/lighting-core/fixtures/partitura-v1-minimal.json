@@ -1,0 +1,160 @@
+{
+  "schemaVersion": "partitura.v1",
+  "projectId": "fixture_sign",
+  "requiredCoreVersion": "0.1.0",
+  "defaultScene": "normal",
+  "chains": [
+    {
+      "id": "chain_1",
+      "name": "Output 1",
+      "output": 1,
+      "pixelCount": 24,
+      "direction": "forward"
+    },
+    {
+      "id": "chain_2",
+      "name": "Output 2",
+      "output": 2,
+      "pixelCount": 16,
+      "direction": "forward"
+    },
+    {
+      "id": "chain_3",
+      "name": "Output 3",
+      "output": 3,
+      "pixelCount": 12,
+      "direction": "forward"
+    }
+  ],
+  "segments": [
+    {
+      "id": "ray_left",
+      "name": "Ray left",
+      "chainId": "chain_1",
+      "start": 0,
+      "length": 12
+    },
+    {
+      "id": "ray_right",
+      "name": "Ray right",
+      "chainId": "chain_1",
+      "start": 12,
+      "length": 12
+    },
+    {
+      "id": "circle_outer",
+      "name": "Circle outer",
+      "chainId": "chain_2",
+      "start": 0,
+      "length": 16
+    },
+    {
+      "id": "base_front",
+      "name": "Base front",
+      "chainId": "chain_3",
+      "start": 0,
+      "length": 12
+    }
+  ],
+  "zones": [
+    {
+      "id": "rays",
+      "name": "Rays",
+      "segments": ["ray_left", "ray_right"],
+      "distribution": "continuous"
+    },
+    {
+      "id": "circle",
+      "name": "Circle",
+      "segments": ["circle_outer"],
+      "distribution": "simultaneous"
+    },
+    {
+      "id": "base",
+      "name": "Base",
+      "segments": ["base_front"],
+      "distribution": "simultaneous"
+    },
+    {
+      "id": "installation_visual",
+      "name": "Installation visual",
+      "segments": [],
+      "zones": ["rays", "circle", "base"],
+      "distribution": "simultaneous"
+    }
+  ],
+  "scenes": [
+    {
+      "id": "normal",
+      "name": "Normal",
+      "loop": true,
+      "durationMs": 4000,
+      "tracks": [
+        {
+          "id": "track_base",
+          "name": "Base layer",
+          "target": { "type": "zone", "id": "installation_visual" },
+          "clips": [
+            {
+              "id": "clip_base_blue",
+              "effect": "solid",
+              "startMs": 0,
+              "durationMs": 4000,
+              "layer": 0,
+              "blend": "replace",
+              "params": { "color": "#002244" }
+            }
+          ]
+        },
+        {
+          "id": "track_rays",
+          "name": "Rays chase",
+          "target": { "type": "zone", "id": "rays" },
+          "clips": [
+            {
+              "id": "clip_rays_chase",
+              "effect": "chase",
+              "startMs": 500,
+              "durationMs": 2500,
+              "layer": 1,
+              "blend": "max",
+              "params": {
+                "color": "#FFCC33",
+                "backgroundColor": "#000000",
+                "width": 5,
+                "direction": "forward"
+              },
+              "markers": {
+                "accent": 1800
+              }
+            }
+          ]
+        },
+        {
+          "id": "track_circle",
+          "name": "Circle pulse",
+          "target": { "type": "zone", "id": "circle" },
+          "clips": [
+            {
+              "id": "clip_circle_pulse",
+              "effect": "pulse",
+              "startMs": 0,
+              "durationMs": 4000,
+              "layer": 2,
+              "blend": "add",
+              "params": {
+                "color": "#33AAFF",
+                "minIntensity": 0.15,
+                "maxIntensity": 0.75
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "metadata": {
+    "fixture": true,
+    "purpose": "lighting-core acceptance fixture"
+  }
+}

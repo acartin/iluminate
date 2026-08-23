@@ -1,0 +1,39 @@
+name: iluminate
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: iluminate-postgres
+    restart: unless-stopped
+    command: ["postgres", "-c", "timezone=${TZ:-UTC}"]
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASS}
+      POSTGRES_DB: ${DB_NAME}
+      TZ: ${TZ:-UTC}
+    ports:
+      - "${DB_PORT:-5433}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  iluminate-web:
+    build:
+      context: .
+      dockerfile: services/web/iluminate/Dockerfile
+    image: iluminate-web:dev
+    container_name: iluminate-web
+    environment:
+      ILUMINATE_API_BASE_URL: ${ILUMINATE_API_BASE_URL:-}
+      ILUMINATE_DATABASE_URL: ${ILUMINATE_DATABASE_URL:-postgresql://${DB_USER}:${DB_PASS}@postgres:5432/${DB_NAME}}
+      ILUMINATE_PLACEHOLDER_AUTH: ${ILUMINATE_PLACEHOLDER_AUTH:-true}
+      ILUMINATE_SECURE_COOKIES: ${ILUMINATE_SECURE_COOKIES:-false}
+    ports:
+      - "${ILUMINATE_WEB_PORT:-8420}:3000"
+    restart: unless-stopped
+
+networks:
+  default:
+    name: iluminate-net
+
+volumes:
+  postgres_data:

@@ -1,0 +1,155 @@
+# Iluminate Database Model
+
+**Status:** initial operational model  
+**Database:** PostgreSQL  
+**Tenant convention:** `client_id`  
+**Auth source:** copied `auth_clients` model from `datasyncsa`
+
+## Principle
+
+Iluminate is a multitenant partitura production system. Every persistent business table must be scoped by `client_id` unless it is a global lookup or a deliberately cross-client audit/system table.
+
+The `auth_*` tables live in `public` for now because they were copied from the existing auth model. Iluminate-owned operational tables live in the `iluminate` schema.
+
+## Schemas
+
+- `public`: copied auth model.
+- `iluminate`: projects, controllers, partitura revisions, deployments, device communication, assets and audit.
+
+## Auth Tables
+
+### `public.auth_clients`
+
+Canonical tenant/client table. Every Iluminate project, controller, partitura revision and deployment belongs to one `auth_clients.id` through `client_id`.
+
+### `public.auth_users`
+
+Platform user accounts. Used as authors for partitura revisions, deployment requesters and audit actors.
+
+### `public.auth_roles`
+
+Role catalog. Initial roles are `system-admin`, `system-user`, `client-admin` and `client-viewer`.
+
+### `public.auth_user_roles`
+
+Many-to-many relation between users and roles.
+
+### `public.auth_user_clients`
+
+Many-to-many relation between users and clients. This is how a user receives access to a tenant.
+
+### `public.auth_sessions`
+
+Session records for bearer token auth when the backend auth API is enabled.
+
+### `public.auth_password_reset_tokens`
+
+Password recovery tokens.
+
+### `public.auth_audit_log`
+
+Auth-specific audit log copied from the auth baseline.
+
+## Iluminate Tables
+
+### `iluminate.projects`
+
+Represents a client-owned LED sign, stand, exhibit or installation. It is the top-level workspace for modeling the physical layout, assets, controllers and partitura revisions.
+
+Primary use:
+
+- group the work for one sign or installation;
+- scope all records by `client_id`;
+- connect editor assets, controllers and partitura revision history.
+
+### `iluminate.controllers`
+
+Represents one ESP32 controller registered for a client and optionally attached to a project.
+
+Primary use:
+
+- identify a physical controller;
+- track desired and active partitura revisions;
+- track lifecycle status and last seen time;
+- provide the target for deployments and device commands.
+
+This repo still does not contain firmware. The controller record only describes the device that will consume partituras.
+
+### `iluminate.partitura_revisions`
+
+Stores immutable, versioned `partitura` JSON artifacts. This is the core product output of the repo.
+
+Primary use:
+
+- preserve every version of a partitura;
+- keep validation results and checksums;
+- allow rollback and comparison;
+- provide the artifact that controllers download and interpret.
+
+The partitura JSON remains declarative. It must not contain firmware code.
+
+### `iluminate.deployments`
+
+Records publication attempts from a partitura revision to a controller.
+
+Primary use:
+
+- distinguish "partitura exists" from "partitura was sent to this controller";
+- track pending, downloaded, applied, failed and rollback states;
+- audit who requested the publication.
+
+### `iluminate.device_commands`
+
+Queues lightweight commands for a controller.
+
+Primary use:
+
+- request scene changes without a full partitura update;
+- ask the controller to refresh desired state;
+- trigger rollback, restart or identify behavior;
+- track command revision and processing state.
+
+### `iluminate.device_status_reports`
+
+Stores reports sent by controllers.
+
+Primary use:
+
+- know which partitura revision is actually active on the ESP32;
+- know the active scene reported by the device;
+- capture firmware version, IP and health payload;
+- distinguish desired state from reported state.
+
+### `iluminate.assets`
+
+Stores metadata for project files used by the editor.
+
+Primary use:
+
+- reference photos, renders, plans, SVGs and other files;
+- keep storage URI and metadata;
+- connect visual editor inputs to a project without embedding files in PostgreSQL.
+
+### `iluminate.audit_events`
+
+Append-only operational audit trail.
+
+Primary use:
+
+- record important actions across projects, partituras, deployments and device operations;
+- preserve actor, entity, action and metadata;
+- support future B2B traceability.
+
+## Initial Migration
+
+The initial operational migration is:
+
+```text
+services/lighting-core/migrations/2026-08-19_create_iluminate_operational_tables.sql
+```
+
+Validation command:
+
+```text
+set -a; source .env; set +a; docker compose exec -T postgres psql -v ON_ERROR_STOP=1 -U "$DB_USER" -d "$DB_NAME" < services/lighting-core/migrations/2026-08-19_create_iluminate_operational_tables.sql
+```

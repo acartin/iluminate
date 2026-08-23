@@ -1,0 +1,57 @@
+{
+  "schemaVersion": "partitura.v1",
+  "projectId": "invalid_references",
+  "requiredCoreVersion": "0.1.0",
+  "defaultScene": "missing_scene",
+  "chains": [
+    {
+      "id": "chain_1",
+      "name": "Output 1",
+      "output": 1,
+      "pixelCount": 10,
+      "direction": "forward"
+    }
+  ],
+  "segments": [
+    {
+      "id": "segment_a",
+      "name": "Segment A",
+      "chainId": "chain_1",
+      "start": 8,
+      "length": 8
+    }
+  ],
+  "zones": [
+    {
+      "id": "zone_a",
+      "name": "Zone A",
+      "segments": ["missing_segment"]
+    }
+  ],
+  "scenes": [
+    {
+      "id": "normal",
+      "name": "Normal",
+      "loop": false,
+      "durationMs": 1000,
+      "tracks": [
+        {
+          "id": "track_a",
+          "name": "Track A",
+          "target": { "type": "zone", "id": "missing_zone" },
+          "clips": [
+            {
+              "id": "clip_a",
+              "effect": "unknown_effect",
+              "startMs": 0,
+              "durationMs": 1500,
+              "layer": 0,
+              "blend": "replace",
+              "params": {}
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
