@@ -22,10 +22,14 @@ Este archivo define donde validar cambios segun la ruta afectada. En Iluminate, 
 | `.agent/*.sh` | Sintaxis shell | `bash -n .agent/<script>.sh` |
 | `services/web/iluminate/` | Build/smoke de Next via Docker | `docker compose build iluminate-web` y `curl -I http://localhost:${ILUMINATE_WEB_PORT:-8420}` si esta levantado |
 | `services/lighting-core/` | Build y fixtures del dominio | `docker run --rm -v "$PWD/services/lighting-core:/work" -w /work node:22-alpine sh -c "npm ci && npm test"` |
+| `services/lighting-core/pixel-map/` | Build core y validar generation/simulation por API si afecta web | `docker compose up -d --build iluminate-web` |
+| `services/lighting-core/domain/effects/` | Build core/web y smoke de `/api/lighting/effects`; si cambia renderer, generar frame de Lab por API | `docker compose up -d --build iluminate-web` |
+| `services/web/iluminate/components/lighting/partitura-workspace.tsx` | Build Next y smoke manual/API de Partitura Workspace y Effect Lab | `docker compose up -d --build iluminate-web` |
 | `services/auth/` | Por ahora docs/estructura; futuro tests/API auth | no aplica hasta tener runtime |
 | `services/simulator/` | Por ahora docs/estructura; futuro tests deterministas | no aplica hasta tener runtime |
 | `services/device-protocol/` | Contratos y fixtures; futuro tests de schema | no aplica hasta tener runtime |
-| `services/firmware/` | Revision de notas/contrato externo; no build ESP32 en este repo | no aplica |
+| `services/firmware/` | Revision de notas y spikes temporales; el firmware PlatformIO organizado vive fuera de este repo | revision manual; build real en repo firmware externo |
+| `docs/` | Revision de documentacion de arquitectura | no requiere runtime |
 
 ## Variables clave actuales
 
@@ -52,3 +56,13 @@ Variables previstas:
 3. Ejecutar validacion minima aplicable.
 4. Si cambia compose/env/docs, mantenerlos alineados.
 5. Reportar validacion ejecutada o limitacion concreta.
+
+## Smoke recomendado para Effect Lab
+
+Cuando cambien efectos, presets de Lab, `pixelMap` o simulacion:
+
+1. Reconstruir `iluminate-web`.
+2. Verificar `/api/lighting/effects`.
+3. Generar un frame por API para al menos una matriz `20x15` o un template de letras.
+4. Confirmar que el frame contiene coordenadas `x/y`, pixel count esperado y variedad de colores cuando aplique.
+5. Si el cambio no toca firmware, indicarlo explicitamente.

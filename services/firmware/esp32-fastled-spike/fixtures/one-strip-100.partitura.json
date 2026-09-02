@@ -1,0 +1,88 @@
+{
+  "schemaVersion": "partitura.v1",
+  "projectId": "default_installation",
+  "requiredCoreVersion": "0.1.0",
+  "defaultScene": "calibration",
+  "chains": [
+    { "id": "chain_1", "name": "Logical output 1", "output": 1, "pixelCount": 100, "direction": "forward" },
+    { "id": "chain_2", "name": "Logical output 2", "output": 2, "pixelCount": 0, "direction": "forward" },
+    { "id": "chain_3", "name": "Logical output 3", "output": 3, "pixelCount": 0, "direction": "forward" }
+  ],
+  "segments": [
+    { "id": "segment_1", "name": "Segment 1", "chainId": "chain_1", "start": 0, "length": 25, "reverse": false },
+    { "id": "segment_2", "name": "Segment 2", "chainId": "chain_1", "start": 25, "length": 25, "reverse": false },
+    { "id": "segment_3", "name": "Segment 3", "chainId": "chain_1", "start": 50, "length": 25, "reverse": false },
+    { "id": "segment_4", "name": "Segment 4", "chainId": "chain_1", "start": 75, "length": 25, "reverse": false }
+  ],
+  "zones": [
+    { "id": "zone_1", "name": "Zone 1", "segments": ["segment_1"], "distribution": "simultaneous" },
+    { "id": "zone_2", "name": "Zone 2", "segments": ["segment_2"], "distribution": "simultaneous" },
+    { "id": "zone_3", "name": "Zone 3", "segments": ["segment_3"], "distribution": "simultaneous" },
+    { "id": "zone_4", "name": "Zone 4", "segments": ["segment_4"], "distribution": "simultaneous" },
+    { "id": "full_strip", "name": "Full strip", "segments": ["segment_1", "segment_2", "segment_3", "segment_4"], "distribution": "simultaneous" }
+  ],
+  "scenes": [
+    {
+      "id": "normal",
+      "name": "Normal",
+      "loop": true,
+      "durationMs": 4000,
+      "tracks": [
+        {
+          "id": "track_zone_1",
+          "name": "Zone 1 solid",
+          "target": { "type": "zone", "id": "zone_1" },
+          "clips": [
+            { "id": "clip_zone_1_solid", "effect": "solid", "startMs": 0, "durationMs": 4000, "layer": 0, "blend": "replace", "params": { "color": "#00AA44" } }
+          ]
+        },
+        {
+          "id": "track_zone_2",
+          "name": "Zone 2 chase",
+          "target": { "type": "zone", "id": "zone_2" },
+          "clips": [
+            { "id": "clip_zone_2_chase", "effect": "chase", "startMs": 0, "durationMs": 4000, "layer": 1, "blend": "replace", "params": { "color": "#FF2020", "backgroundColor": "#000000", "width": 5, "direction": "forward" } }
+          ]
+        },
+        {
+          "id": "track_zone_3",
+          "name": "Zone 3 pulse",
+          "target": { "type": "zone", "id": "zone_3" },
+          "clips": [
+            { "id": "clip_zone_3_pulse", "effect": "pulse", "startMs": 0, "durationMs": 4000, "layer": 2, "blend": "replace", "params": { "color": "#3366FF", "minIntensity": 0.15, "maxIntensity": 1 } }
+          ]
+        },
+        {
+          "id": "track_zone_4",
+          "name": "Zone 4 toggle",
+          "target": { "type": "zone", "id": "zone_4" },
+          "clips": [
+            { "id": "clip_zone_4_toggle", "effect": "toggle", "startMs": 0, "durationMs": 4000, "layer": 3, "blend": "replace", "params": { "onColor": "#FFFFFF", "offColor": "#000000", "periodMs": 1000, "dutyCycle": 0.5, "groupCount": 1 } }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "calibration",
+      "name": "Calibration",
+      "loop": true,
+      "durationMs": 10000,
+      "tracks": [
+        { "id": "track_cal_red", "name": "Red", "target": { "type": "zone", "id": "full_strip" }, "clips": [{ "id": "cal_red", "effect": "solid", "startMs": 0, "durationMs": 1000, "layer": 0, "blend": "replace", "params": { "color": "#FF0000" } }] },
+        { "id": "track_cal_green", "name": "Green", "target": { "type": "zone", "id": "full_strip" }, "clips": [{ "id": "cal_green", "effect": "solid", "startMs": 1000, "durationMs": 1000, "layer": 0, "blend": "replace", "params": { "color": "#00FF00" } }] },
+        { "id": "track_cal_blue", "name": "Blue", "target": { "type": "zone", "id": "full_strip" }, "clips": [{ "id": "cal_blue", "effect": "solid", "startMs": 2000, "durationMs": 1000, "layer": 0, "blend": "replace", "params": { "color": "#0000FF" } }] },
+        { "id": "track_cal_white", "name": "White", "target": { "type": "zone", "id": "full_strip" }, "clips": [{ "id": "cal_white", "effect": "solid", "startMs": 3000, "durationMs": 1000, "layer": 0, "blend": "replace", "params": { "color": "#FFFFFF" } }] },
+        { "id": "track_cal_gray_25", "name": "Gray 25%", "target": { "type": "zone", "id": "full_strip" }, "clips": [{ "id": "cal_gray_25", "effect": "solid", "startMs": 4000, "durationMs": 1000, "layer": 0, "blend": "replace", "params": { "color": "#404040" } }] },
+        { "id": "track_cal_gray_50", "name": "Gray 50%", "target": { "type": "zone", "id": "full_strip" }, "clips": [{ "id": "cal_gray_50", "effect": "solid", "startMs": 5000, "durationMs": 1000, "layer": 0, "blend": "replace", "params": { "color": "#808080" } }] },
+        { "id": "track_cal_yellow", "name": "Yellow", "target": { "type": "zone", "id": "full_strip" }, "clips": [{ "id": "cal_yellow", "effect": "solid", "startMs": 6000, "durationMs": 1000, "layer": 0, "blend": "replace", "params": { "color": "#FFFF00" } }] },
+        { "id": "track_cal_cyan", "name": "Cyan", "target": { "type": "zone", "id": "full_strip" }, "clips": [{ "id": "cal_cyan", "effect": "solid", "startMs": 7000, "durationMs": 1000, "layer": 0, "blend": "replace", "params": { "color": "#00FFFF" } }] },
+        { "id": "track_cal_magenta", "name": "Magenta", "target": { "type": "zone", "id": "full_strip" }, "clips": [{ "id": "cal_magenta", "effect": "solid", "startMs": 8000, "durationMs": 1000, "layer": 0, "blend": "replace", "params": { "color": "#FF00FF" } }] },
+        { "id": "track_cal_off", "name": "Off", "target": { "type": "zone", "id": "full_strip" }, "clips": [{ "id": "cal_off", "effect": "off", "startMs": 9000, "durationMs": 1000, "layer": 0, "blend": "replace", "params": {} }] }
+      ]
+    }
+  ],
+  "metadata": {
+    "source": "esp32-fastled-spike",
+    "temporary": true
+  }
+}

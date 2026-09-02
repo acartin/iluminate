@@ -23,15 +23,34 @@ physical installation model
 → rollback or scene change
 ```
 
+## Current Product Direction Snapshot
+
+The near-term focus is no longer firmware parity or over-polishing individual effects. The priority is to make the web simulator and composer concepts convincing.
+
+Current product direction:
+
+```text
+SVG/canvas of real sign
+-> zones such as letters, words, logo and full_sign
+-> continuous LED routes drawn by the operator
+-> sampled real LED points using one project LED density
+-> generated pixelMap
+-> spatial/linear effects
+```
+
+The hidden mega matrix is useful as an internal coordinate field for effects, but the operator should not be forced to see or manage it. Matrix presets remain useful only inside `Effect Lab`.
+
+See `.agent/PIXELMAP_COMPOSER_DIRECTION.md` before redesigning the composer, pixelMap model, effect scope, or UI workflow.
+
 ---
 
 ## Phase 0: Partitura Hardware Boundary
 
-**Objective:** lock the hardware abstraction used by the repo without moving firmware build work into the repo.
+**Objective:** lock the hardware abstraction used by the repo while keeping production firmware work in an external repository.
 
 ### Deliverables
 
-- [x] Treat ESP32 firmware implementation as external to this repo.
+- [x] Treat organized ESP32 firmware implementation as external to this repo.
 - [x] Limit repo hardware modeling to three logical chain outputs: `1`, `2` and `3`.
 - [x] Document the `chain.output` contract in `services/lighting-core`.
 - [x] Document that board pins map to outputs in the external firmware project, not in this repo.
@@ -39,12 +58,12 @@ physical installation model
 - [x] Document LED protocol only as an external firmware note when it matters for compatibility.
 - [x] Keep physical LED counts, pin maps and brightness outside application environment variables.
 - [ ] Measure realistic FPS by chain length in the external firmware environment when needed.
-- [ ] Document firmware framework only as an external environment note when known.
+- [x] Document firmware framework and local flashing flow as external environment notes.
 
 ### Exit Criteria
 
 - [ ] `lighting-core` can validate that chains use only outputs `1`, `2` and `3`.
-- [ ] The repo does not contain ESP32 firmware source or build scripts.
+- [x] The repo contains only temporary firmware spikes; organized PlatformIO firmware lives in a separate repo.
 - [ ] The partitura model stays independent from concrete ESP32 pins, FastLED arrays and brightness constants.
 
 ---
@@ -90,43 +109,53 @@ physical installation model
 - [x] Export a validated JSON partitura fixture from `services/lighting-core`.
 - [x] Document how the external firmware should consume `chain.output` values 1, 2 and 3.
 - [x] Document supported effect identifiers and parameters as contracts.
-- [ ] Keep firmware source, build scripts and hardware drivers outside this repo.
-- [x] Capture compatibility notes in `services/firmware/README.md` without adding a firmware project.
+- [x] Keep organized firmware source, build scripts and hardware drivers outside this repo.
+- [x] Capture compatibility notes in `services/firmware/README.md`; keep monorepo firmware code limited to temporary spikes.
 - [x] Add a WS2812B-like web/core simulator before firmware implementation.
+- [x] Create an external PlatformIO firmware repo for the ESP32 runtime path.
+- [x] Validate local Windows build/upload/serial monitor flow with PlatformIO.
+- [x] Document the partitura lifecycle in `docs/partitura-lifecycle.md`.
 
 ### Exit Criteria
 
-- [ ] An external ESP32 firmware build can load a fixture produced by this repo.
+- [x] An external ESP32 firmware build can load an embedded `partitura.v1` fixture derived from this repo.
 - [ ] Changing timing/colors/zones requires partitura update only, not firmware rebuild.
-- [ ] This repo remains the producer/validator of partitura artifacts, not the firmware source tree.
+- [x] This repo remains the producer/validator of partitura artifacts; organized firmware source lives in the external PlatformIO repo.
 
 ---
 
 ## Phase 3: Technical Web Editor
 
-**Objective:** let a professional model a physical LED installation from the browser.
+**Objective:** let a professional model a real sign from SVG/canvas, zones and continuous LED routes.
 
 ### Deliverables
 
 - [ ] Align `services/web/iluminate` navigation with Iluminate domain.
 - [ ] Add Projects placeholder.
 - [ ] Add Project Editor route.
-- [ ] Add image/render/plan upload placeholder.
-- [ ] Add canvas area.
-- [ ] Add scale calibration tool.
-- [ ] Add rulers/grid.
-- [ ] Draw up to three chains.
-- [ ] Show data direction.
-- [ ] Represent wire jumps without LEDs.
-- [ ] Calculate LED points by density/length.
-- [ ] Show LED indices.
-- [ ] Create segments from ranges.
-- [ ] Create zones from segments.
+- [ ] Add SVG/render/plan upload placeholder.
+- [ ] Add real sign canvas area.
+- [ ] Add scale calibration tool in cm/mm.
+- [ ] Add one project-level LED density setting.
+- [ ] Warn and reset routes/cabling when LED density changes.
+- [ ] Add zone drawing tools: rectangle, circle and polygon.
+- [ ] Allow zones such as letters, words, logo, background and full sign.
+- [ ] Store zone geometry and bounds in the editable document.
+- [ ] Add optional rulers/grid/snap guides only as routing aids.
+- [ ] Draw continuous directional LED routes over the canvas.
+- [ ] Assign each route to logical output `1`, `2` or `3`.
+- [ ] Sample route points using project LED density.
+- [ ] Generate serial LED indices from route order.
+- [ ] Show LED points and indices during route editing.
+- [ ] Represent non-LED jumpers/continuations between route portions.
+- [ ] Calculate zone membership for each sampled LED.
+- [ ] Generate `pixelMap` from routed real LED points.
+- [ ] Keep raw `pixelMap` hidden from normal operators.
 - [ ] Export partitura through `lighting-core`.
 
 ### Exit Criteria
 
-- [ ] A user can model a small sign with chains, segments and zones.
+- [ ] A user can upload or trace a sign, define zones and draw continuous LED routes.
 - [ ] The web editor stores domain data outside any private Konva format.
 - [ ] Exported partitura passes `lighting-core` validation.
 
@@ -138,19 +167,23 @@ physical installation model
 
 ### Deliverables
 
-- [ ] Add scenes.
-- [ ] Add tracks targeting zones.
-- [ ] Add clips to tracks.
-- [ ] Move clips in time.
-- [ ] Resize clip duration.
-- [ ] Edit effect parameters.
-- [ ] Add scene loop.
-- [ ] Add playback head.
-- [ ] Simulate LEDs over the uploaded image.
-- [ ] Support layers minimally.
-- [ ] Support at least `replace` blend.
+- [x] Add scenes.
+- [x] Add clips targeting zones.
+- [x] Edit effect parameters from effect metadata.
+- [x] Add scene loop.
+- [x] Add modal player with play/pause/stop.
+- [x] Add `Effect Lab` for controlled matrix and sign-like templates.
+- [x] Support initial apply modes: whole sign, each element, sequential elements.
+- [x] Support layers minimally.
+- [x] Support at least `replace` blend.
+- [ ] Move clips in time with a timeline UI.
+- [ ] Resize clip duration with a timeline UI.
+- [ ] Add playback head in scene timeline.
+- [ ] Simulate LEDs over the uploaded SVG/image.
+- [ ] Formalize effect coordinate space: global, zone-local and grouped/sequential.
 - [ ] Add deterministic simulator fixtures.
 - [ ] Compare web simulator output against expected effect cases.
+- [ ] Improve effect library enough for convincing demos before prioritizing firmware parity.
 
 ### Exit Criteria
 
@@ -168,15 +201,15 @@ physical installation model
 
 - [ ] Define device identity contract.
 - [ ] Define provisioning placeholder.
-- [ ] Define desired partitura revision.
+- [ ] Define desired partitura id/checksum.
 - [ ] Define desired scene command.
 - [ ] Define reported device status.
 - [ ] Implement controller polling contract.
 - [ ] Store active and previous partitura on device.
 - [ ] Validate checksum before activation.
-- [ ] Apply partitura revision.
+- [ ] Apply partitura artifact.
 - [ ] Activate scene without full partitura change.
-- [ ] Report applied command revision.
+- [ ] Report applied command sequence.
 - [ ] Implement rollback path.
 
 ### Exit Criteria

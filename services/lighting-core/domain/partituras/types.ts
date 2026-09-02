@@ -8,7 +8,7 @@ export type ChainDirection = "forward" | "reverse";
 export type TargetType = "installation" | "chain" | "segment" | "zone";
 export type ZoneDistribution = "simultaneous" | "sequential" | "continuous" | "mirror" | "staggered";
 export type BlendMode = "replace" | "add" | "max" | "multiply" | "alpha" | "mask";
-export type EffectId = "off" | "solid" | "fade" | "pulse" | "chase" | "toggle";
+export type EffectId = "off" | "solid" | "fade" | "pulse" | "chase" | "toggle" | "flame" | "spatial_fill" | "spatial_wave";
 
 export type RgbColor = `#${string}`;
 
@@ -48,6 +48,10 @@ export type Segment = {
   start: number;
   length: number;
   reverse?: boolean;
+  x?: number;
+  y?: number;
+  stepX?: number;
+  stepY?: number;
 };
 
 export type Zone = {
@@ -56,6 +60,17 @@ export type Zone = {
   segments: string[];
   zones?: string[];
   distribution?: ZoneDistribution;
+};
+
+export type SpatialPixel = {
+  id: string;
+  chainId: string;
+  output: LogicalOutput;
+  index: number;
+  segmentId?: string;
+  x: number;
+  y: number;
+  order: number;
 };
 
 export type EffectParameterValue = string | number | boolean | null | string[] | number[];
@@ -96,6 +111,7 @@ export type Partitura = {
   defaultScene: string;
   chains: Chain[];
   segments: Segment[];
+  pixelMap?: SpatialPixel[];
   zones: Zone[];
   scenes: Scene[];
   metadata?: Record<string, string | number | boolean>;
@@ -116,6 +132,7 @@ export type EffectDefinition = {
   id: EffectId;
   label: string;
   description: string;
+  family?: "linear" | "spatial" | "utility";
   parameters: Record<string, EffectParameterDefinition>;
 };
 

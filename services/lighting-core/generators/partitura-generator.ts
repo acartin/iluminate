@@ -12,6 +12,7 @@ import {
   Track,
   Zone
 } from "../domain/partituras/types.js";
+import { createPixelMap } from "../pixel-map/create-pixel-map.js";
 
 export type SegmentConfig = Omit<Segment, "name"> & { name?: string };
 export type ChainConfig = Omit<Chain, "name" | "direction"> & {
@@ -66,7 +67,11 @@ export function generatePartitura(input: GeneratePartituraInput): Partitura {
       chainId: chain.id,
       start: segment.start,
       length: segment.length,
-      reverse: segment.reverse
+      reverse: segment.reverse,
+      x: segment.x,
+      y: segment.y,
+      stepX: segment.stepX,
+      stepY: segment.stepY
     }))
   );
 
@@ -76,8 +81,15 @@ export function generatePartitura(input: GeneratePartituraInput): Partitura {
     chainId: segment.chainId,
     start: segment.start,
     length: segment.length,
-    reverse: segment.reverse
+    reverse: segment.reverse,
+    x: segment.x,
+    y: segment.y,
+    stepX: segment.stepX,
+    stepY: segment.stepY
   }));
+
+  const segments = [...nestedSegments, ...explicitSegments];
+  const pixelMap = createPixelMap(chains, segments);
 
   const zones = input.zones.map<Zone>((zone) => ({
     id: zone.id,
@@ -96,7 +108,8 @@ export function generatePartitura(input: GeneratePartituraInput): Partitura {
     requiredCoreVersion: input.requiredCoreVersion ?? SUPPORTED_CORE_VERSION,
     defaultScene,
     chains,
-    segments: [...nestedSegments, ...explicitSegments],
+    segments,
+    pixelMap,
     zones,
     scenes,
     metadata: input.metadata
@@ -169,4 +182,8 @@ function inferSceneDurationMs(tracks: Track[]) {
     1,
     ...tracks.flatMap((track) => track.clips.map((clip) => clip.startMs + clip.durationMs))
   );
+}
+
+function range(length: number) {
+  return Array.from({ length }, (_, index) => index);
 }

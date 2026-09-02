@@ -20,6 +20,9 @@ Este documento es la referencia conceptual principal del proyecto. Antes de prop
 7. No introducir complejidad futura dentro del MVP, pero evitar decisiones que cierren las extensiones previstas.
 8. Cuando se proponga cambiar un concepto establecido, explicar primero qué problema concreto resuelve el cambio.
 9. Tratar el firmware ESP32 como un ambiente externo a este repo. Este repo produce, valida, simula y publica partituras; no contiene el proyecto Arduino/PlatformIO/ESP-IDF.
+10. Para el composer real, no iniciar desde una matriz visible. El operador debe trabajar sobre SVG/canvas, zonas y rutas LED continuas; el sistema genera el `pixelMap`.
+11. Mantener una sola densidad LED por proyecto. Si cambia, se resetea el cableado/rutas existentes.
+12. Usar `.agent/PIXELMAP_COMPOSER_DIRECTION.md` como referencia actual antes de redisenar composer, efectos espaciales o flujos de mapeo.
 
 ---
 

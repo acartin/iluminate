@@ -9,6 +9,11 @@ export type Ws2812bPixel = {
   chainId: string;
   output: number;
   index: number;
+  x: number;
+  y: number;
+  order: number;
+  normalizedX: number;
+  normalizedY: number;
   color: Rgb;
   grb: [number, number, number];
 };
@@ -49,6 +54,11 @@ export function simulateWs2812bFrame(partitura: Partitura, sceneId: string, time
             chainId: chain.id,
             output: chain.output,
             index,
+            x: index,
+            y: 0,
+            order: index,
+            normalizedX: chain.pixelCount > 1 ? index / (chain.pixelCount - 1) : 0,
+            normalizedY: 0,
             color: { r: 0, g: 0, b: 0 }
           }
         );
@@ -81,6 +91,7 @@ export function simulateWs2812bFrame(partitura: Partitura, sceneId: string, time
 }
 
 export function estimateTransmitTimeUs(pixelCount: number) {
+  if (pixelCount <= 0) return 0;
   return pixelCount * WS2812B_BITS_PER_PIXEL * WS2812B_BIT_TIME_US + WS2812B_RESET_TIME_US;
 }
 
@@ -94,6 +105,11 @@ function toWs2812bPixel(pixel: FramePixel): Ws2812bPixel {
     chainId: pixel.chainId,
     output: pixel.output,
     index: pixel.index,
+    x: pixel.x,
+    y: pixel.y,
+    order: pixel.order,
+    normalizedX: pixel.normalizedX,
+    normalizedY: pixel.normalizedY,
     color,
     grb: [color.g, color.r, color.b]
   };
@@ -110,4 +126,3 @@ function quantizeRgb(color: Rgb): Rgb {
 function clampByte(value: number) {
   return Math.round(Math.min(255, Math.max(0, value)));
 }
-

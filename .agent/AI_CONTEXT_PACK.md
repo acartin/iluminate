@@ -1,9 +1,9 @@
 # AI Context Pack
 
-- Generated UTC: `2026-08-22T22:28:35Z`
+- Generated UTC: `2026-08-29T22:16:03Z`
 - Repo root: `/srv/iluminate`
-- Git branch: `N/A`
-- Git commit: `N/A`
+- Git branch: `HETZNER-DEV-2026-Agosto-23`
+- Git commit: `7f7c4a2`
 - Policy: high-signal only; enfocado en Iluminate.
 
 ## Contexto Maestro
@@ -13,10 +13,10 @@
 ```
 # BRAIN_MAP
 
-- Generated UTC: `2026-08-22T22:28:35Z`
+- Generated UTC: `2026-08-29T22:16:03Z`
 - Repo root: `/srv/iluminate`
-- Git branch: `N/A`
-- Git commit: `N/A`
+- Git branch: `HETZNER-DEV-2026-Agosto-23`
+- Git commit: `7f7c4a2`
 
 ## 1. MAPA DE INTENCIONES (ILUMINATE)
 
@@ -28,12 +28,13 @@
 | `services/auth` | Identidad, organizaciones, roles, permisos, sesiones y auth API. | 4 |
 | `services/simulator` | Simulacion reusable cuando salga del prototipo web. | 4 |
 | `services/device-protocol` | Contratos cloud/controlador y estado deseado/reportado. | 4 |
-| `services/firmware` | Notas de contrato con el firmware ESP32 externo; no build en este repo. | 4 |
+| `services/firmware` | Notas de contrato y spikes temporales; firmware PlatformIO organizado en repo externo. | 4 |
+| `docs` | Documentacion de arquitectura y ciclo de vida de partitura. | 5 |
 | `.agent` | Reglas operativas y contexto maestro para agentes. | 5 |
 
 ## 2. LIMITES DE ARQUITECTURA
 
-- Este repo produce y valida partituras; el firmware ESP32 que las interpreta se construye fuera del monorepo.
+- Este repo produce y valida partituras; el firmware ESP32 organizado vive en repo externo PlatformIO.
 - El modelo de dominio vive en `lighting-core`, no en el web.
 - Auth vive en `auth`, no en `lighting-core`.
 - El web no se conecta directo a Postgres.
@@ -63,6 +64,8 @@ services/auth/storage
 services/auth/tests
 services/device-protocol
 services/firmware
+services/firmware/esp32-fastled-spike
+services/firmware/esp32-fastled-spike/fixtures
 services/lighting-core
 services/lighting-core/api
 services/lighting-core/contracts
@@ -105,6 +108,8 @@ services/web/iluminate/components/ui
 services/web/iluminate/components/workspace
 services/web/iluminate/docs
 services/web/iluminate/lib
+services/web/iluminate/lib/lighting
+services/web/iluminate/lib/server
 services/web/iluminate/public
 ```
 
@@ -123,6 +128,9 @@ services/auth/storage/README.md
 services/auth/tests/.gitkeep
 services/device-protocol/README.md
 services/firmware/README.md
+services/firmware/esp32-fastled-spike/README.md
+services/firmware/esp32-fastled-spike/esp32-fastled-spike.ino
+services/firmware/esp32-fastled-spike/fixtures/one-strip-100.partitura.json
 services/lighting-core/README.md
 services/lighting-core/api/README.md
 services/lighting-core/contracts/README.md
@@ -146,6 +154,8 @@ services/lighting-core/generators/partitura-generator.ts
 services/lighting-core/index.ts
 services/lighting-core/migrations/.gitkeep
 services/lighting-core/migrations/2026-08-19_create_iluminate_operational_tables.sql
+services/lighting-core/migrations/2026-08-22_create_iluminate_partituras.sql
+services/lighting-core/migrations/2026-08-22_remove_partitura_revisions.sql
 services/lighting-core/package-lock.json
 services/lighting-core/package.json
 services/lighting-core/player/scene-player.ts
@@ -181,16 +191,6 @@ services/web/iluminate/postcss.config.mjs
 services/web/iluminate/tailwind.config.ts
 services/web/iluminate/tsconfig.json
 .agent/AI_CONTEXT_LED_ORCHESTRATION_PLATFORM.md
-.agent/AI_CONTEXT_PACK.md
-.agent/BRAIN_MAP.md
-.agent/DATABASE_MODEL.md
-.agent/EXECUTION_MAP.md
-.agent/FILESYSTEM_GUARDRAILS.md
-.agent/ILUMINATE_BOOTSTRAP.md
-.agent/ILUMINATE_UI_STANDARDS.md
-.agent/IMPLEMENTATION_PLAN.md
-.agent/RULES.md
-.agent/regenerar_contexto.sh
 ```
 ### `.agent/AI_CONTEXT_LED_ORCHESTRATION_PLATFORM.md`
 
@@ -736,7 +736,8 @@ Este archivo define donde validar cambios segun la ruta afectada. En Iluminate, 
 | `services/auth/` | Por ahora docs/estructura; futuro tests/API auth | no aplica hasta tener runtime |
 | `services/simulator/` | Por ahora docs/estructura; futuro tests deterministas | no aplica hasta tener runtime |
 | `services/device-protocol/` | Contratos y fixtures; futuro tests de schema | no aplica hasta tener runtime |
-| `services/firmware/` | Revision de notas/contrato externo; no build ESP32 en este repo | no aplica |
+| `services/firmware/` | Revision de notas y spikes temporales; el firmware PlatformIO organizado vive fuera de este repo | revision manual; build real en repo firmware externo |
+| `docs/` | Revision de documentacion de arquitectura | no requiere runtime |
 
 ## Variables clave actuales
 
@@ -796,11 +797,11 @@ physical installation model
 
 ## Phase 0: Partitura Hardware Boundary
 
-**Objective:** lock the hardware abstraction used by the repo without moving firmware build work into the repo.
+**Objective:** lock the hardware abstraction used by the repo while keeping production firmware work in an external repository.
 
 ### Deliverables
 
-- [x] Treat ESP32 firmware implementation as external to this repo.
+- [x] Treat organized ESP32 firmware implementation as external to this repo.
 - [x] Limit repo hardware modeling to three logical chain outputs: `1`, `2` and `3`.
 - [x] Document the `chain.output` contract in `services/lighting-core`.
 - [x] Document that board pins map to outputs in the external firmware project, not in this repo.
@@ -808,12 +809,12 @@ physical installation model
 - [x] Document LED protocol only as an external firmware note when it matters for compatibility.
 - [x] Keep physical LED counts, pin maps and brightness outside application environment variables.
 - [ ] Measure realistic FPS by chain length in the external firmware environment when needed.
-- [ ] Document firmware framework only as an external environment note when known.
+- [x] Document firmware framework and local flashing flow as external environment notes.
 
 ### Exit Criteria
 
 - [ ] `lighting-core` can validate that chains use only outputs `1`, `2` and `3`.
-- [ ] The repo does not contain ESP32 firmware source or build scripts.
+- [x] The repo contains only temporary firmware spikes; organized PlatformIO firmware lives in a separate repo.
 - [ ] The partitura model stays independent from concrete ESP32 pins, FastLED arrays and brightness constants.
 
 ---
@@ -859,15 +860,18 @@ physical installation model
 - [x] Export a validated JSON partitura fixture from `services/lighting-core`.
 - [x] Document how the external firmware should consume `chain.output` values 1, 2 and 3.
 - [x] Document supported effect identifiers and parameters as contracts.
-- [ ] Keep firmware source, build scripts and hardware drivers outside this repo.
-- [x] Capture compatibility notes in `services/firmware/README.md` without adding a firmware project.
+- [x] Keep organized firmware source, build scripts and hardware drivers outside this repo.
+- [x] Capture compatibility notes in `services/firmware/README.md`; keep monorepo firmware code limited to temporary spikes.
 - [x] Add a WS2812B-like web/core simulator before firmware implementation.
+- [x] Create an external PlatformIO firmware repo for the ESP32 runtime path.
+- [x] Validate local Windows build/upload/serial monitor flow with PlatformIO.
+- [x] Document the partitura lifecycle in `docs/partitura-lifecycle.md`.
 
 ### Exit Criteria
 
-- [ ] An external ESP32 firmware build can load a fixture produced by this repo.
+- [x] An external ESP32 firmware build can load an embedded `partitura.v1` fixture derived from this repo.
 - [ ] Changing timing/colors/zones requires partitura update only, not firmware rebuild.
-- [ ] This repo remains the producer/validator of partitura artifacts, not the firmware source tree.
+- [x] This repo remains the producer/validator of partitura artifacts; organized firmware source lives in the external PlatformIO repo.
 
 ---
 
@@ -937,16 +941,13 @@ physical installation model
 
 - [ ] Define device identity contract.
 - [ ] Define provisioning placeholder.
-- [ ] Define desired partitura revision.
+- [ ] Define desired partitura id/checksum.
 - [ ] Define desired scene command.
 - [ ] Define reported device status.
 - [ ] Implement controller polling contract.
 - [ ] Store active and previous partitura on device.
 - [ ] Validate checksum before activation.
-- [ ] Apply partitura revision.
-- [ ] Activate scene without full partitura change.
-- [ ] Report applied command revision.
-- [ ] Implement rollback path.
+- [ ] Apply partitura artifact.
 ```
 ### `.agent/ILUMINATE_UI_STANDARDS.md`
 
@@ -1165,6 +1166,179 @@ El sistema es multitenant por diseno. La notacion canonica de tenant en PostgreS
 - No meter login/sesiones dentro de `lighting-core`.
 ```
 
+## Documentacion de Arquitectura
+
+### `docs/partitura-lifecycle.md`
+
+```
+# Partitura Lifecycle
+
+This document defines where a partitura lives today, which copy is authoritative, and how the firmware path should evolve.
+
+## Current Sources
+
+### Editable Source
+
+The editable source of truth for the web application is:
+
+```text
+PostgreSQL
+iluminate.partituras.document_json
+```
+
+`document_json` stores the authoring document used by the browser workspace:
+
+- logical output sizes;
+- segments;
+- zones;
+- scenes;
+- clips;
+- simulator defaults.
+
+The web UI edits this document and persists it as one JSON value. Segments, zones, scenes and clips are not separate database tables at this stage.
+
+### Generated Artifact
+
+The firmware-facing artifact is:
+
+```text
+PostgreSQL
+iluminate.partituras.generated_json
+```
+
+`generated_json` is produced from `document_json` through `lighting-core` generation and validation. It is the JSON shape that the simulator and firmware interpreter should consume.
+
+The generated artifact must remain declarative. It must not include ESP32 pins, FastLED array names, WiFi credentials, per-device secrets, or firmware code.
+
+### Default Template
+
+New partituras are initialized from:
+
+```text
+services/web/iluminate/lib/lighting/partitura-model.ts
+createDefaultPartituraDocument()
+```
+
+This is a product template, not the live source of truth. Changing it affects newly created partituras only. Existing partituras live in Postgres and must be migrated or updated explicitly when needed.
+
+### Firmware Spike Fixture
+
+The monorepo contains a temporary Arduino IDE spike under:
+
+```text
+services/firmware/esp32-fastled-spike/
+```
+
+This spike embeds a partitura JSON string to prove that an ESP32 can parse and execute `partitura.v1`. It is not the production firmware source tree.
+
+### PlatformIO Firmware Repository
+
+The current organized ESP32 firmware work lives outside this monorepo:
+
+```text
+git@github.com:acartin/iluminate-firmware-esp32.git
+```
+
+Local clone on the development server:
+
+```text
+/home/acartin/iluminate-firmware-esp32
+```
+
+Local clone on the Windows flashing workstation:
+
+```text
+C:\work\Proyecto Iluminate\Dev\iluminate-firmware-esp32
+```
+
+At the current stage, the PlatformIO firmware still embeds a partitura JSON string. This is temporary and exists only to validate the runtime on hardware.
+
+## Target Flow
+
+The intended operating model is:
+
+```text
+Web editor
+  -> persists document_json
+  -> generates and validates generated_json
+  -> exposes generated_json through a device endpoint
+  -> ESP32 downloads generated_json
+  -> ESP32 stores/applies it locally
+  -> ESP32 executes defaultScene
+  -> commands can change active scene without changing the partitura
+```
+
+Once the loader exists, changing colors, timing, zones, scenes or clips should require only a partitura update. It should not require a firmware rebuild.
+
+Firmware upload should be needed only for interpreter changes, new supported effects, device protocol changes, bug fixes, or hardware support changes.
+
+## Runtime Ownership
+
+The partitura owns:
+
+- chains and logical outputs;
+- segment ranges;
+- zones;
+- scenes;
+- tracks and clips;
+- effect identifiers and parameters;
+- `defaultScene`.
+
+The controller runtime owns:
+
+- physical pin mapping;
+- FastLED array allocation;
+- brightness and power limits;
+- WiFi/device credentials;
+- active scene state;
+- applied partitura id/checksum;
+- command polling;
+- status reporting.
+
+`defaultScene` is part of the partitura. The current active scene is device runtime state.
+
+## Three Logical Outputs
+
+Controllers are expected to expose three logical outputs:
+
+```text
+1
+2
+3
+```
+
+The partitura should keep the three logical chains present. An unused output is represented with:
+
+```json
+{ "pixelCount": 0 }
+```
+
+This makes the controller shape stable while allowing a project to use only one or two physical strings.
+
+Concrete pin mapping remains firmware-owned.
+
+## Current Hardware Validation State
+
+The first hardware proof has validated:
+
+- PlatformIO local build on Windows;
+- PlatformIO upload to ESP32 over COM3;
+- serial monitor at 115200;
+- embedded `partitura.v1` parsing;
+- WS2812B output on `output 1`;
+- one 100 LED strip;
+- four 25 LED segments;
+- `solid`, `chase`, `pulse`, `toggle`;
+- calibration scene playback.
+
+The next architectural milestone is a local web loader:
+
+```text
+ESP32 downloads generated_json from Iluminate web/API
+```
+
+```
+
 ## Compose y Variables
 
 ### Servicios del compose principal
@@ -1202,6 +1376,7 @@ services:
     container_name: iluminate-web
     environment:
       ILUMINATE_API_BASE_URL: ${ILUMINATE_API_BASE_URL:-}
+      ILUMINATE_DATABASE_URL: ${ILUMINATE_DATABASE_URL:-postgresql://${DB_USER}:${DB_PASS}@postgres:5432/${DB_NAME}}
       ILUMINATE_PLACEHOLDER_AUTH: ${ILUMINATE_PLACEHOLDER_AUTH:-true}
       ILUMINATE_SECURE_COOKIES: ${ILUMINATE_SECURE_COOKIES:-false}
     ports:
@@ -1254,6 +1429,8 @@ services/auth/storage
 services/auth/tests
 services/device-protocol
 services/firmware
+services/firmware/esp32-fastled-spike
+services/firmware/esp32-fastled-spike/fixtures
 services/lighting-core
 services/lighting-core/api
 services/lighting-core/contracts
@@ -1296,6 +1473,8 @@ services/web/iluminate/components/ui
 services/web/iluminate/components/workspace
 services/web/iluminate/docs
 services/web/iluminate/lib
+services/web/iluminate/lib/lighting
+services/web/iluminate/lib/server
 services/web/iluminate/public
 ```
 
@@ -1314,6 +1493,9 @@ services/auth/storage/README.md
 services/auth/tests/.gitkeep
 services/device-protocol/README.md
 services/firmware/README.md
+services/firmware/esp32-fastled-spike/README.md
+services/firmware/esp32-fastled-spike/esp32-fastled-spike.ino
+services/firmware/esp32-fastled-spike/fixtures/one-strip-100.partitura.json
 services/lighting-core/README.md
 services/lighting-core/api/README.md
 services/lighting-core/contracts/README.md
@@ -1337,6 +1519,8 @@ services/lighting-core/generators/partitura-generator.ts
 services/lighting-core/index.ts
 services/lighting-core/migrations/.gitkeep
 services/lighting-core/migrations/2026-08-19_create_iluminate_operational_tables.sql
+services/lighting-core/migrations/2026-08-22_create_iluminate_partituras.sql
+services/lighting-core/migrations/2026-08-22_remove_partitura_revisions.sql
 services/lighting-core/package-lock.json
 services/lighting-core/package.json
 services/lighting-core/player/scene-player.ts
@@ -1387,7 +1571,9 @@ Current service map:
 - `web/iluminate`: Next.js operator and authoring interface.
 - `lighting-core`: LED installation, partitura, scene, simulator-facing and deployment-domain core.
 - `auth`: identity, organizations, memberships, roles, sessions and authorization contracts.
-- `firmware`: notes for the external ESP32 firmware interpreter; not a firmware build target.
+- `firmware`: compatibility notes and temporary ESP32 spikes; the organized PlatformIO firmware lives in `git@github.com:acartin/iluminate-firmware-esp32.git`.
+
+See `docs/partitura-lifecycle.md` for the authoritative flow between editable partitura documents, generated artifacts, simulator and firmware.
 ```
 ### `services/web/iluminate/README.md`
 
@@ -1460,6 +1646,7 @@ docker compose up --build iluminate-web
     "jssip": "^3.13.8",
     "lucide-react": "0.468.0",
     "next": "16.2.6",
+    "pg": "^8.13.1",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "recharts": "^3.8.1",
@@ -1467,6 +1654,7 @@ docker compose up --build iluminate-web
   },
   "devDependencies": {
     "@types/node": "20.17.12",
+    "@types/pg": "^8.11.11",
     "@types/react": "19.2.8",
     "@types/react-dom": "19.2.3",
     "autoprefixer": "10.4.20",
@@ -1713,13 +1901,15 @@ This service owns:
 - clips
 - effects catalog contracts
 - partitura schemas and validation
-- project revisions
+- single editable partitura per project
 - controller-facing deployment payloads
 - deterministic simulator contracts
 
 It may contain an API under `api/`, pure domain logic under `domain/`, schemas under `schemas/`, persistence under `storage/`, and shared fixtures under `fixtures/`.
 
-Persistent records owned by lighting-core are multitenant by design. Projects, controllers, partitura revisions, deployments, device commands and status records must be scoped by the trusted `client_id` context provided by auth or device identity.
+Persistent records owned by lighting-core are multitenant by design. Projects, controllers, partituras, deployments, device commands and status records must be scoped by the trusted `client_id` context provided by auth or device identity.
+
+Each project owns one current partitura. Iluminate does not model partitura revisions or version history; duplicating a partitura creates a separate partitura record instead of another revision of the same one.
 
 It must not own login, password, sessions, billing, or web component state.
 
@@ -1821,9 +2011,17 @@ This service should define how cloud services and ESP32 controllers communicate 
 ```
 # Firmware Contract Notes
 
-This directory is reserved for notes that help an external ESP32 firmware project consume Iluminate partituras.
+This directory is reserved for notes and temporary spikes that help an external ESP32 firmware project consume Iluminate partituras.
 
-The firmware source, build scripts, Arduino/PlatformIO/ESP-IDF project and hardware drivers live outside this monorepo.
+The organized firmware source, build scripts, Arduino/PlatformIO/ESP-IDF project and hardware drivers live outside this monorepo.
+
+Current organized firmware repo:
+
+```text
+git@github.com:acartin/iluminate-firmware-esp32.git
+```
+
+The temporary `esp32-fastled-spike/` folder in this monorepo is a hardware proof fixture. It is not the production firmware source tree.
 
 Within this repo, the controller is represented only by three logical chain outputs: `1`, `2` and `3`. Mapping those outputs to concrete ESP32 pins is an external firmware concern.
 
@@ -1841,7 +2039,13 @@ Current firmware brightness reference: `150`.
 
 These values are notes about the current external firmware only. They are not application environment variables, database configuration, or partitura schema fields.
 
-The external firmware project remains the source of truth for concrete pins, LED counts, brightness and driver setup. Iluminate should produce validated partituras against logical outputs `1`, `2` and `3`; it should not embed ESP32 driver code, pin maps, or per-installation firmware source.
+The external firmware project remains the source of truth for concrete pins, brightness, power limits and driver setup. Iluminate should produce validated partituras against logical outputs `1`, `2` and `3`; it should not embed ESP32 driver code, pin maps, credentials, or per-installation firmware source.
+
+Authoritative partitura lifecycle documentation:
+
+```text
+docs/partitura-lifecycle.md
+```
 
 ## Partitura Compatibility Target
 
@@ -1854,6 +2058,8 @@ The external firmware interpreter should first target:
 - effects: `off`, `solid`, `fade`, `pulse`, `chase`
 - blend modes used by the fixture: `replace`, `max`, `add`
 - web/core simulator: `simulateWs2812bFrame`
+
+`schemaVersion` is a wire-format compatibility marker for the interpreter. It is not a partitura revision, and generated partituras should not include revision numbers or revision history.
 
 Minimal firmware acceptance checklist:
 
@@ -1869,4 +2075,10 @@ Minimal firmware acceptance checklist:
 10. Keep running locally without requiring cloud access after the partitura is loaded.
 
 The TypeScript simulator models WS2812B-like frame behavior for parity work: serial pixel order, RGB 8-bit values, GRB transport order, 24 bits per pixel, reset/latch delay and estimated refresh timing. It is not a bit-level waveform simulator.
+
+Current status:
+
+- The ESP32 hardware proof can execute an embedded `partitura.v1`.
+- The PlatformIO firmware repo can build and upload from the Windows flashing workstation.
+- The next target is downloading `generated_json` from the web/API so partitura changes no longer require firmware upload.
 ```

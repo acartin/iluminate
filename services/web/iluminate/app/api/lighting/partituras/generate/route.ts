@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { normalizeDefaultSignLayout, type PartituraDocument } from "@/lib/lighting/partitura-model";
 
 export const runtime = "nodejs";
 
@@ -10,7 +11,7 @@ type BlendMode = import("../../../../../../../lighting-core/index.js").BlendMode
 type EffectParams = import("../../../../../../../lighting-core/index.js").EffectParams;
 type EffectParameterDefinition = import("../../../../../../../lighting-core/index.js").EffectParameterDefinition;
 
-const effectIds: EffectId[] = ["off", "solid", "fade", "pulse", "chase", "toggle"];
+const effectIds: EffectId[] = ["off", "solid", "fade", "pulse", "chase", "toggle", "flame", "spatial_fill", "spatial_wave"];
 const blendModes: BlendMode[] = ["replace", "add", "max", "multiply", "alpha", "mask"];
 
 type GenerateRequest = {
@@ -33,6 +34,10 @@ type SegmentInput = {
   start?: number;
   length?: number;
   reverse?: boolean;
+  x?: number;
+  y?: number;
+  stepX?: number;
+  stepY?: number;
 };
 
 type ZoneInput = {
@@ -65,14 +70,15 @@ export async function POST(request: Request) {
   const { effectCatalog, generatePartitura, simulateWs2812bFrame, validatePartitura } = await loadLightingCore();
   let payload: GenerateRequest;
   try {
-    payload = (await request.json()) as GenerateRequest;
+    const rawPayload = await request.json();
+    payload = isPartituraDocument(rawPayload) ? normalizeDefaultSignLayout(rawPayload) : rawPayload as GenerateRequest;
   } catch {
     return NextResponse.json({ ok: false, message: "Request body must be JSON." }, { status: 400 });
   }
 
-  const chain1Pixels = normalizePositiveInteger(payload.chain1Pixels, 50);
-  const chain2Pixels = normalizePositiveInteger(payload.chain2Pixels, 100);
-  const chain3Pixels = normalizePositiveInteger(payload.chain3Pixels, 200);
+  const chain1Pixels = normalizeNonNegativeInteger(payload.chain1Pixels, 50);
+  const chain2Pixels = normalizeNonNegativeInteger(payload.chain2Pixels, 100);
+  const chain3Pixels = normalizeNonNegativeInteger(payload.chain3Pixels, 200);
   const chainPixelCounts = { 1: chain1Pixels, 2: chain2Pixels, 3: chain3Pixels };
   const segments = normalizeSegments(payload.segments, chainPixelCounts);
   const zones = normalizeZones(payload.zones, segments.map((segment) => segment.id));
@@ -160,6 +166,12 @@ export async function POST(request: Request) {
         }
       : null
   });
+}
+
+function isPartituraDocument(value: unknown): value is PartituraDocument {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Partial<PartituraDocument>;
+  return Array.isArray(candidate.segments) && Array.isArray(candidate.zones) && Array.isArray(candidate.scenes);
 }
 
 async function loadLightingCore(): Promise<LightingCore> {
@@ -374,12 +386,15 @@ function isColor(value: unknown): value is string {
 function normalizeSegments(segments: SegmentInput[] | undefined, chainPixelCounts: Record<1 | 2 | 3, number>) {
   const letterLength = Math.max(1, Math.floor(chainPixelCounts[3] / 4));
   const defaults: Required<SegmentInput>[] = [
-    { id: "fondo_segment", name: "Fondo", output: 1, start: 0, length: chainPixelCounts[1], reverse: false },
-    { id: "estrella_segment", name: "Estrella", output: 2, start: 0, length: chainPixelCounts[2], reverse: false },
-    { id: "letra_1_segment", name: "Letra 1", output: 3, start: 0, length: letterLength, reverse: false },
-    { id: "letra_2_segment", name: "Letra 2", output: 3, start: letterLength, length: letterLength, reverse: false },
-    { id: "letra_3_segment", name: "Letra 3", output: 3, start: letterLength * 2, length: letterLength, reverse: false },
-    { id: "letra_4_segment", name: "Letra 4", output: 3, start: letterLength * 3, length: chainPixelCounts[3] - letterLength * 3, reverse: false }
+    { id: "fondo_row_1", name: "Fondo row 1", output: 1, start: 0, length: Math.min(25, chainPixelCounts[1]), reverse: false, x: 0, y: 0, stepX: 1, stepY: 0 },
+    { id: "fondo_row_2", name: "Fondo row 2", output: 1, start: 25, length: Math.min(25, Math.max(0, chainPixelCounts[1] - 25)), reverse: true, x: 0, y: 1, stepX: 1, stepY: 0 },
+    { id: "fondo_row_3", name: "Fondo row 3", output: 1, start: 50, length: Math.min(25, Math.max(0, chainPixelCounts[1] - 50)), reverse: false, x: 0, y: 2, stepX: 1, stepY: 0 },
+    { id: "fondo_row_4", name: "Fondo row 4", output: 1, start: 75, length: Math.max(0, chainPixelCounts[1] - 75), reverse: true, x: 0, y: 3, stepX: 1, stepY: 0 },
+    { id: "estrella_segment", name: "Estrella", output: 2, start: 0, length: chainPixelCounts[2], reverse: false, x: 0, y: 4, stepX: 1, stepY: 0 },
+    { id: "letra_1_segment", name: "Letra 1", output: 3, start: 0, length: letterLength, reverse: false, x: 0, y: 6, stepX: 1, stepY: 0 },
+    { id: "letra_2_segment", name: "Letra 2", output: 3, start: letterLength, length: letterLength, reverse: false, x: letterLength + 3, y: 6, stepX: 1, stepY: 0 },
+    { id: "letra_3_segment", name: "Letra 3", output: 3, start: letterLength * 2, length: letterLength, reverse: false, x: letterLength * 2 + 6, y: 6, stepX: 1, stepY: 0 },
+    { id: "letra_4_segment", name: "Letra 4", output: 3, start: letterLength * 3, length: Math.max(0, chainPixelCounts[3] - letterLength * 3), reverse: false, x: letterLength * 3 + 9, y: 6, stepX: 1, stepY: 0 }
   ];
   const source = segments?.length ? segments : defaults;
 
@@ -387,13 +402,20 @@ function normalizeSegments(segments: SegmentInput[] | undefined, chainPixelCount
     .map((segment, index) => {
       const output = segment.output === 2 || segment.output === 3 ? segment.output : 1;
       const id = normalizeId(segment.id ?? `segment_${index + 1}`);
+      const start = normalizeNonNegativeInteger(segment.start, 0);
+      const maxLength = Math.max(0, chainPixelCounts[output] - start);
+      const rawLength = normalizeNonNegativeInteger(segment.length, 0);
       return {
         id,
         name: String(segment.name ?? id),
         output,
-        start: normalizeNonNegativeInteger(segment.start, 0),
-        length: normalizePositiveInteger(segment.length, 1),
-        reverse: Boolean(segment.reverse)
+        start,
+        length: Math.min(rawLength, maxLength),
+        reverse: Boolean(segment.reverse),
+        x: normalizeNumber(segment.x, start),
+        y: normalizeNumber(segment.y, 0),
+        stepX: normalizeNumber(segment.stepX, 1),
+        stepY: normalizeNumber(segment.stepY, 0)
       };
     })
     .filter((segment) => segment.length > 0);
@@ -401,7 +423,7 @@ function normalizeSegments(segments: SegmentInput[] | undefined, chainPixelCount
 
 function normalizeZones(zones: ZoneInput[] | undefined, segmentIds: string[]) {
   const defaults: ZoneInput[] = [
-    { id: "fondo", name: "Fondo", segments: segmentIds.filter((id) => id === "fondo_segment") },
+    { id: "fondo", name: "Fondo", segments: segmentIds.filter((id) => id.startsWith("fondo_row_")) },
     { id: "estrella", name: "Estrella", segments: segmentIds.filter((id) => id === "estrella_segment") },
     { id: "letras", name: "Letras", segments: segmentIds.filter((id) => id.startsWith("letra_")) },
     { id: "letra_1", name: "Letra 1", segments: segmentIds.filter((id) => id === "letra_1_segment") },

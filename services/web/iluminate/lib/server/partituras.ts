@@ -1,5 +1,5 @@
 import { PoolClient } from "pg";
-import { createDefaultPartituraDocument, PartituraDocument, PersistedPartitura } from "@/lib/lighting/partitura-model";
+import { createDefaultPartituraDocument, normalizeDefaultSignLayout, PartituraDocument, PersistedPartitura } from "@/lib/lighting/partitura-model";
 import { getPool } from "@/lib/server/postgres";
 
 type PartituraRow = {
@@ -101,6 +101,37 @@ export async function getPartitura(id: string) {
   return rows.rows[0] ? mapPartitura(rows.rows[0]) : null;
 }
 
+export async function getGeneratedPartituraByKey(partituraKey: string) {
+  const rows = await getPool().query<{
+    id: string | number;
+    partitura_key: string;
+    status: PersistedPartitura["status"];
+    generated_json: unknown;
+    updated_at: Date | string;
+  }>(
+    `select id,
+            partitura_key,
+            status,
+            generated_json,
+            updated_at
+       from iluminate.partituras
+      where partitura_key = $1
+        and deleted_at is null
+      limit 1`,
+    [partituraKey]
+  );
+
+  const row = rows.rows[0];
+  if (!row) return null;
+  return {
+    id: String(row.id),
+    partituraKey: row.partitura_key,
+    status: row.status,
+    generatedPartitura: row.generated_json,
+    updatedAt: timestamp(row.updated_at)
+  };
+}
+
 async function uniquePartituraKey(client: PoolClient, clientId: number, baseKey: string) {
   let candidate = baseKey;
   for (let index = 2; index < 1000; index += 1) {
@@ -130,7 +161,7 @@ export async function createPartitura({
     const partituraName = name?.trim() || (source ? `${source.name} copy` : "Default installation");
     const partituraKey = await uniquePartituraKey(client, defaultClient.id, slugify(partituraName));
     const document = source
-      ? { ...source.document, projectId: partituraKey }
+      ? normalizeDefaultSignLayout({ ...source.document, projectId: partituraKey })
       : createDefaultPartituraDocument(partituraKey);
 
     const project = await client.query<{ id: string | number }>(
@@ -182,7 +213,7 @@ export async function updatePartitura(
 
   const name = patch.name?.trim() || current.name;
   const status = patch.status ?? current.status;
-  const document = patch.document ?? current.document;
+  const document = normalizeDefaultSignLayout(patch.document ?? current.document);
   const generated = Object.prototype.hasOwnProperty.call(patch, "generatedPartitura") ? patch.generatedPartitura : current.generatedPartitura ?? null;
   const validation = Object.prototype.hasOwnProperty.call(patch, "validationReport") ? patch.validationReport : current.validationReport ?? {};
 

@@ -1,9 +1,9 @@
 # BRAIN_MAP
 
-- Generated UTC: `2026-08-22T22:28:35Z`
+- Generated UTC: `2026-09-02T00:00:00Z`
 - Repo root: `/srv/iluminate`
-- Git branch: `N/A`
-- Git commit: `N/A`
+- Git branch: `HETZNER-DEV-2026-Agosto-23`
+- Git commit: `7f7c4a2`
 
 ## 1. MAPA DE INTENCIONES (ILUMINATE)
 
@@ -11,16 +11,17 @@
 |---|---|---:|
 | `compose.yml` | Compose local actual; validar antes de tocar infraestructura. | 4 |
 | `services/web/iluminate` | Next.js UI, portal, editor/simulador inicial y adaptadores temporales. | 5 |
-| `services/lighting-core` | Dominio LED: chains, segments, zones, partitura, scenes, validation y deployments. | 5 |
+| `services/lighting-core` | Dominio LED: chains, segments, zones, pixelMap, efectos, partitura, scenes, validation y simulacion. | 5 |
 | `services/auth` | Identidad, organizaciones, roles, permisos, sesiones y auth API. | 4 |
 | `services/simulator` | Simulacion reusable cuando salga del prototipo web. | 4 |
 | `services/device-protocol` | Contratos cloud/controlador y estado deseado/reportado. | 4 |
-| `services/firmware` | Notas de contrato con el firmware ESP32 externo; no build en este repo. | 4 |
+| `services/firmware` | Notas de contrato y spikes temporales; firmware PlatformIO organizado en repo externo. | 4 |
+| `docs` | Documentacion de arquitectura y ciclo de vida de partitura. | 5 |
 | `.agent` | Reglas operativas y contexto maestro para agentes. | 5 |
 
 ## 2. LIMITES DE ARQUITECTURA
 
-- Este repo produce y valida partituras; el firmware ESP32 que las interpreta se construye fuera del monorepo.
+- Este repo produce y valida partituras; el firmware ESP32 organizado vive en repo externo PlatformIO.
 - El modelo de dominio vive en `lighting-core`, no en el web.
 - Auth vive en `auth`, no en `lighting-core`.
 - El web no se conecta directo a Postgres.
@@ -28,7 +29,13 @@
 - El hardware se modela aqui solo como tres salidas logicas: `chain.output` 1, 2 y 3.
 - El sistema es multitenant por diseno; toda tabla persistente de negocio debe contemplar `client_id`.
 - PostgreSQL es la base de datos objetivo.
-- Mantener separados chains/segments fisicos y zones visuales.
+- Mantener separados chains/segments/rutas fisicas y zones visuales.
+- `pixelMap` es la capa de georreferenciacion que une `output/index` fisico con `x/y` visual.
+- La matriz gigante es un espacio virtual interno para efectos; no debe ser el concepto principal de UI para el operador.
+- En producto real, el operador trabaja sobre SVG/canvas, zonas y rutas LED continuas; el sistema genera el `pixelMap`.
+- Un proyecto usa una sola densidad LED. Si cambia, se resetea el cableado/rutas.
+- Los presets de matrices son para `Effect Lab`; el composer real debe nacer de SVG/canvas + zonas + rutas.
+- Efectos espaciales deben soportar los modos conceptuales `Whole Sign`, `Each Element` y `Sequential Elements`.
 
 ## 3. SERVICIOS DOCKER ACTUALES
 
@@ -50,6 +57,8 @@ services/auth/storage
 services/auth/tests
 services/device-protocol
 services/firmware
+services/firmware/esp32-fastled-spike
+services/firmware/esp32-fastled-spike/fixtures
 services/lighting-core
 services/lighting-core/api
 services/lighting-core/contracts
@@ -67,6 +76,7 @@ services/lighting-core/domain/zones
 services/lighting-core/fixtures
 services/lighting-core/generators
 services/lighting-core/migrations
+services/lighting-core/pixel-map
 services/lighting-core/player
 services/lighting-core/schemas
 services/lighting-core/storage
@@ -92,6 +102,8 @@ services/web/iluminate/components/ui
 services/web/iluminate/components/workspace
 services/web/iluminate/docs
 services/web/iluminate/lib
+services/web/iluminate/lib/lighting
+services/web/iluminate/lib/server
 services/web/iluminate/public
 ```
 
@@ -110,6 +122,9 @@ services/auth/storage/README.md
 services/auth/tests/.gitkeep
 services/device-protocol/README.md
 services/firmware/README.md
+services/firmware/esp32-fastled-spike/README.md
+services/firmware/esp32-fastled-spike/esp32-fastled-spike.ino
+services/firmware/esp32-fastled-spike/fixtures/one-strip-100.partitura.json
 services/lighting-core/README.md
 services/lighting-core/api/README.md
 services/lighting-core/contracts/README.md
@@ -133,6 +148,8 @@ services/lighting-core/generators/partitura-generator.ts
 services/lighting-core/index.ts
 services/lighting-core/migrations/.gitkeep
 services/lighting-core/migrations/2026-08-19_create_iluminate_operational_tables.sql
+services/lighting-core/migrations/2026-08-22_create_iluminate_partituras.sql
+services/lighting-core/migrations/2026-08-22_remove_partitura_revisions.sql
 services/lighting-core/package-lock.json
 services/lighting-core/package.json
 services/lighting-core/player/scene-player.ts
@@ -176,6 +193,7 @@ services/web/iluminate/tsconfig.json
 .agent/ILUMINATE_BOOTSTRAP.md
 .agent/ILUMINATE_UI_STANDARDS.md
 .agent/IMPLEMENTATION_PLAN.md
+.agent/PIXELMAP_COMPOSER_DIRECTION.md
 .agent/RULES.md
 .agent/regenerar_contexto.sh
 ```

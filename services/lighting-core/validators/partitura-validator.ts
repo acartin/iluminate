@@ -38,6 +38,7 @@ export function validatePartitura(partitura: Partitura): ValidationResult {
   const zoneIds = new Set<string>();
   const sceneIds = new Set<string>();
   const outputIds = new Set<number>();
+  const chainById = new Map<string, Partitura["chains"][number]>();
 
   check(partitura.chains.length > 0, issues, {
     code: "chains.empty",
@@ -59,10 +60,11 @@ export function validatePartitura(partitura: Partitura): ValidationResult {
       message: `Only one chain can own logical output ${chain.output}.`
     });
     outputIds.add(chain.output);
-    check(Number.isInteger(chain.pixelCount) && chain.pixelCount > 0, issues, {
+    chainById.set(chain.id, chain);
+    check(Number.isInteger(chain.pixelCount) && chain.pixelCount >= 0, issues, {
       code: "chain.pixelCount.invalid",
       path: `${path}.pixelCount`,
-      message: "chain.pixelCount must be a positive integer."
+      message: "chain.pixelCount must be a non-negative integer."
     });
     check(["forward", "reverse"].includes(chain.direction), issues, {
       code: "chain.direction.invalid",
@@ -107,6 +109,7 @@ export function validatePartitura(partitura: Partitura): ValidationResult {
   });
 
   validateOverlappingSegments(partitura, issues);
+  validatePixelMap(partitura, chainById, segmentIds, issues);
 
   check(partitura.zones.length > 0, issues, {
     code: "zones.empty",
@@ -207,6 +210,68 @@ export function validatePartitura(partitura: Partitura): ValidationResult {
   return { ok: errors.length === 0, errors, warnings };
 }
 
+function validatePixelMap(
+  partitura: Partitura,
+  chainById: Map<string, Partitura["chains"][number]>,
+  segmentIds: Set<string>,
+  issues: ValidationIssue[]
+) {
+  check((partitura.pixelMap?.length ?? 0) > 0, issues, {
+    code: "pixelMap.empty",
+    path: "pixelMap",
+    message: "pixelMap is required and must include spatial coordinates for rendered pixels."
+  });
+
+  const addresses = new Set<string>();
+  const pixelIds = new Set<string>();
+  partitura.pixelMap?.forEach((pixel, index) => {
+    const path = `pixelMap[${index}]`;
+    checkUniqueId(pixel.id, pixelIds, `${path}.id`, issues);
+    const chain = chainById.get(pixel.chainId);
+    check(Boolean(chain), issues, {
+      code: "pixelMap.chain.missing",
+      path: `${path}.chainId`,
+      message: `Pixel ${pixel.id} references missing chain ${pixel.chainId}.`
+    });
+    if (chain) {
+      check(pixel.output === chain.output, issues, {
+        code: "pixelMap.output.mismatch",
+        path: `${path}.output`,
+        message: `Pixel ${pixel.id} output must match chain ${chain.id}.`
+      });
+      check(Number.isInteger(pixel.index) && pixel.index >= 0 && pixel.index < chain.pixelCount, issues, {
+        code: "pixelMap.index.out_of_chain",
+        path: `${path}.index`,
+        message: `Pixel ${pixel.id} index is outside chain ${chain.id}.`
+      });
+    }
+    if (pixel.segmentId) {
+      check(segmentIds.has(pixel.segmentId), issues, {
+        code: "pixelMap.segment.missing",
+        path: `${path}.segmentId`,
+        message: `Pixel ${pixel.id} references missing segment ${pixel.segmentId}.`
+      });
+    }
+    check(Number.isFinite(pixel.x) && Number.isFinite(pixel.y), issues, {
+      code: "pixelMap.coordinate.invalid",
+      path,
+      message: `Pixel ${pixel.id} must include finite x and y coordinates.`
+    });
+    check(Number.isInteger(pixel.order) && pixel.order >= 0, issues, {
+      code: "pixelMap.order.invalid",
+      path: `${path}.order`,
+      message: `Pixel ${pixel.id} order must be a non-negative integer.`
+    });
+    const address = `${pixel.chainId}:${pixel.index}`;
+    check(!addresses.has(address), issues, {
+      code: "pixelMap.address.duplicate",
+      path,
+      message: `Pixel address ${address} is duplicated in pixelMap.`
+    });
+    addresses.add(address);
+  });
+}
+
 function validateTarget(
   target: PartituraTarget,
   path: string,
@@ -247,13 +312,20 @@ function validateEffectParams(effect: string, params: Record<string, unknown>, p
         message: `Parameter ${name} must be a #RRGGBB color.`
       });
     }
-    if (parameter.type === "number") {
+    if (parameter.type === "number" || parameter.type === "integer" || parameter.type === "percent") {
       check(typeof value === "number" && Number.isFinite(value), issues, {
         code: "clip.params.number",
         path: `${path}.params.${name}`,
         message: `Parameter ${name} must be a finite number.`
       });
       if (typeof value === "number") {
+        if (parameter.type === "integer") {
+          check(Number.isInteger(value), issues, {
+            code: "clip.params.integer",
+            path: `${path}.params.${name}`,
+            message: `Parameter ${name} must be an integer.`
+          });
+        }
         check(parameter.min === undefined || value >= parameter.min, issues, {
           code: "clip.params.min",
           path: `${path}.params.${name}`,
@@ -278,6 +350,13 @@ function validateEffectParams(effect: string, params: Record<string, unknown>, p
         code: "clip.params.string",
         path: `${path}.params.${name}`,
         message: `Parameter ${name} must be a string.`
+      });
+    }
+    if (parameter.type === "select") {
+      check(typeof value === "string" && Boolean(parameter.options?.some((option) => option.value === value)), issues, {
+        code: "clip.params.select",
+        path: `${path}.params.${name}`,
+        message: `Parameter ${name} must be a supported option.`
       });
     }
   }

@@ -132,12 +132,13 @@ cat > "$BRAIN_FILE" <<EOF
 | \`services/auth\` | Identidad, organizaciones, roles, permisos, sesiones y auth API. | 4 |
 | \`services/simulator\` | Simulacion reusable cuando salga del prototipo web. | 4 |
 | \`services/device-protocol\` | Contratos cloud/controlador y estado deseado/reportado. | 4 |
-| \`services/firmware\` | Notas de contrato con el firmware ESP32 externo; no build en este repo. | 4 |
+| \`services/firmware\` | Notas de contrato y spikes temporales; firmware PlatformIO organizado en repo externo. | 4 |
+| \`docs\` | Documentacion de arquitectura y ciclo de vida de partitura. | 5 |
 | \`.agent\` | Reglas operativas y contexto maestro para agentes. | 5 |
 
 ## 2. LIMITES DE ARQUITECTURA
 
-- Este repo produce y valida partituras; el firmware ESP32 que las interpreta se construye fuera del monorepo.
+- Este repo produce y valida partituras; el firmware ESP32 organizado vive en repo externo PlatformIO.
 - El modelo de dominio vive en \`lighting-core\`, no en el web.
 - Auth vive en \`auth\`, no en \`lighting-core\`.
 - El web no se conecta directo a Postgres.
@@ -186,6 +187,9 @@ append_file_excerpt ".agent/EXECUTION_MAP.md"
 append_file_excerpt ".agent/IMPLEMENTATION_PLAN.md"
 append_file_excerpt ".agent/ILUMINATE_UI_STANDARDS.md"
 append_file_excerpt ".agent/ILUMINATE_BOOTSTRAP.md"
+
+append_section "Documentacion de Arquitectura"
+append_file_excerpt "docs/partitura-lifecycle.md"
 
 append_section "Compose y Variables"
 append "### Servicios del compose principal"
