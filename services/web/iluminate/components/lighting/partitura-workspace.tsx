@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle, ArrowLeft, Pause, Play, Plus, RotateCcw, Save, Sparkles, Trash2 } from "lucide-react";
+import { AlertCircle, ArrowLeft, Cable, Circle, Copy, Hand, Maximize2, MousePointer2, Pause, Play, Plus, Route, RotateCcw, Save, Scissors, Sparkles, Square, Trash2, ZoomIn, ZoomOut } from "lucide-react";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,12 @@ import {
   clonePartituraDocument,
   ClipParams,
   ClipForm,
+  DesignerControllerForm,
+  DesignerForm,
+  DesignerPoint,
+  DesignerRouteKind,
+  DesignerRouteForm,
+  DesignerZoneForm,
   normalizeDefaultSignLayout,
   PartituraDocument,
   PersistedPartitura,
@@ -62,6 +68,559 @@ const tabs = [
   { id: "effect_lab", label: "Effect Lab" },
   { id: "simulator", label: "Simulator" }
 ];
+
+type DesignerTool = "select" | "zone_rect" | "zone_ellipse" | "led_string" | "data_cable" | "cut" | "pan";
+type DesignerRouteTerminal = { routeId: string; pointIndex: number };
+type DesignerSelection =
+  | { type: "zone"; id: string }
+  | { type: "route"; id: string; pointIndex?: number }
+  | { type: "controller"; id: string }
+  | null;
+type DesignerDrag =
+  | { type: "controller-move"; start: { x: number; y: number }; original: DesignerControllerForm; originalRoutes: DesignerRouteForm[] }
+  | { type: "zone-move"; zoneId: string; start: { x: number; y: number }; original: DesignerZoneForm }
+  | { type: "zone-resize"; zoneId: string; handle: ResizeHandle; start: { x: number; y: number }; original: DesignerZoneForm }
+  | { type: "route-move"; routeId: string; start: { x: number; y: number }; original: DesignerRouteForm }
+  | { type: "route-point"; routeId: string; pointIndex: number; jointGroup: DesignerRouteTerminal[] }
+  | { type: "pan"; start: { x: number; y: number }; original: DesignerViewport };
+type DesignerViewport = { x: number; y: number; width: number; height: number };
+type ResizeHandle = "nw" | "ne" | "sw" | "se";
+
+export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura: PersistedPartitura }) {
+  const [partitura, setPartitura] = useState(initialPartitura);
+  const [document, setDocument] = useState(() => normalizeDefaultSignLayout(initialPartitura.document));
+  const [saving, setSaving] = useState(false);
+  const [tool, setTool] = useState<DesignerTool>("select");
+  const [selection, setSelection] = useState<DesignerSelection>(null);
+  const [clipboard, setClipboard] = useState<DesignerSelection>(null);
+  const [fabricationNotice, setFabricationNotice] = useState("Ready");
+  const [viewport, setViewport] = useState<DesignerViewport | null>(null);
+  const designerState = document.designer;
+  if (!designerState) return null;
+  const designer: DesignerForm = designerState;
+  const selectedZone = selection?.type === "zone" ? designer.zones.find((zone) => zone.id === selection.id) ?? null : null;
+  const selectedRoute = selection?.type === "route" ? designer.routes.find((route) => route.id === selection.id) ?? null : null;
+  const selectedRoutePointIndex = selection?.type === "route" ? selection.pointIndex : undefined;
+  const selectedController = selection?.type === "controller" ? designer.controller : null;
+  const routeSummaries = designer.routes.map((route) => summarizeRoute(route, designer));
+  const totalGeneratedLeds = routeSummaries.reduce((total, route) => total + route.leds, 0);
+  const activeViewport = viewport ?? { x: 0, y: 0, width: designer.canvasWidthCm, height: designer.canvasHeightCm };
+
+  useEffect(() => {
+    if (viewport) return;
+    setViewport(fitViewportToDesigner(designer));
+  }, [designer.canvasHeightCm, designer.canvasWidthCm, viewport]);
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      const target = event.target as HTMLElement | null;
+      if (target && ["INPUT", "SELECT", "TEXTAREA"].includes(target.tagName)) return;
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "c") {
+        event.preventDefault();
+        copySelection();
+      }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "v") {
+        event.preventDefault();
+        pasteSelection();
+      }
+      if (event.key === "Delete" || event.key === "Backspace") {
+        event.preventDefault();
+        deleteSelection();
+      }
+      if (event.key.toLowerCase() === "v") setTool("select");
+      if (event.key.toLowerCase() === "h") setTool("pan");
+      if (event.key.toLowerCase() === "r") setTool("zone_rect");
+      if (event.key.toLowerCase() === "e") setTool("zone_ellipse");
+      if (event.key.toLowerCase() === "l") setTool("led_string");
+      if (event.key.toLowerCase() === "d") setTool("data_cable");
+      if (event.key.toLowerCase() === "x") setTool("cut");
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  });
+
+  async function save(nextDocument = document, generatedPartitura = partitura.generatedPartitura) {
+    const normalizedDocument = normalizeDefaultSignLayout(nextDocument);
+    setSaving(true);
+    try {
+      const response = await fetch(`/api/lighting/partituras/${encodeURIComponent(partitura.id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: partitura.name,
+          status: partitura.status,
+          document: normalizedDocument,
+          generatedPartitura: generatedPartitura ?? null,
+          validationReport: partitura.validationReport ?? {}
+        })
+      });
+      const payload = (await response.json()) as { partitura?: PersistedPartitura };
+      if (payload.partitura) {
+        setPartitura(payload.partitura);
+        setDocument(clonePartituraDocument(payload.partitura.document));
+      }
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function updateDesigner(nextDesigner: DesignerForm) {
+    setDocument((current) => ({ ...current, designer: nextDesigner }));
+  }
+
+  function patchDesigner(patch: Partial<DesignerForm>) {
+    updateDesigner({ ...designer, ...patch });
+  }
+
+  function patchController(patch: Partial<DesignerControllerForm>) {
+    updateDesigner({ ...designer, controller: { ...designer.controller, ...patch, id: "controller" } });
+  }
+
+  function patchZone(zoneId: string, patch: Partial<DesignerZoneForm>) {
+    const previousId = zoneId;
+    const nextId = patch.id ?? previousId;
+    updateDesigner({
+      ...designer,
+      zones: designer.zones.map((zone) => (zone.id === zoneId ? { ...zone, ...patch } : zone)),
+      routes: previousId && nextId && previousId !== nextId
+        ? designer.routes.map((route) => (route.zoneId === previousId ? { ...route, zoneId: nextId } : route))
+        : designer.routes
+    });
+    if (nextId !== previousId) setSelection({ type: "zone", id: nextId });
+  }
+
+  function patchRoute(routeId: string, patch: Partial<DesignerRouteForm>) {
+    updateDesigner({
+      ...designer,
+      routes: designer.routes.map((route) => (route.id === routeId ? { ...route, ...patch } : route))
+    });
+    if (patch.id && patch.id !== routeId) setSelection({ type: "route", id: patch.id });
+  }
+
+  function addZone(shape: DesignerZoneForm["shape"] = "rect") {
+    const next = designer.zones.length + 1;
+    const width = Math.max(8, Math.round(activeViewport.width * 0.22));
+    const height = Math.max(6, Math.round(activeViewport.height * 0.22));
+    const zone = {
+      id: `zone_${next}`,
+      name: `Zone ${next}`,
+      shape,
+      x: snapValue(activeViewport.x + activeViewport.width / 2 - width / 2, designer.snapCm),
+      y: snapValue(activeViewport.y + activeViewport.height / 2 - height / 2, designer.snapCm),
+      width,
+      height
+    };
+    updateDesigner({
+      ...designer,
+      zones: [...designer.zones, zone]
+    });
+    setSelection({ type: "zone", id: zone.id });
+    setTool("select");
+  }
+
+  function addRoute(kind: DesignerRouteKind = "led_string") {
+    const next = designer.routes.length + 1;
+    const routeName = kind === "data_cable" ? `Data cable ${next}` : `LED string ${next}`;
+    const route = {
+      id: `route_${next}`,
+      name: routeName,
+      kind,
+      output: 1,
+      zoneId: designer.zones[0]?.id ?? "",
+      points: [
+        { x: snapValue(activeViewport.x + activeViewport.width * 0.25, designer.snapCm), y: snapValue(activeViewport.y + activeViewport.height * 0.5, designer.snapCm) },
+        { x: snapValue(activeViewport.x + activeViewport.width * 0.65, designer.snapCm), y: snapValue(activeViewport.y + activeViewport.height * 0.5, designer.snapCm) }
+      ]
+    };
+    updateDesigner({
+      ...designer,
+      routes: [...designer.routes, route]
+    });
+    setSelection({ type: "route", id: route.id });
+    setTool("select");
+  }
+
+  function updateRoutePoint(routeId: string, pointIndex: number, patch: Partial<{ x: number; y: number }>) {
+    const route = designer.routes.find((entry) => entry.id === routeId);
+    if (!route) return;
+    patchRoute(routeId, { points: route.points.map((point, index) => (index === pointIndex ? { ...point, ...patch } : point)) });
+  }
+
+  function addRoutePoint(routeId: string) {
+    const route = designer.routes.find((entry) => entry.id === routeId);
+    const last = route?.points[route.points.length - 1] ?? { x: 0, y: 0 };
+    if (!route) return;
+    patchRoute(routeId, { points: [...route.points, { x: last.x + designer.snapCm, y: last.y }] });
+  }
+
+  function insertRoutePoint(routeId: string, point: DesignerPoint) {
+    const route = designer.routes.find((entry) => entry.id === routeId);
+    if (!route) return;
+    const insertIndex = nearestRouteInsertIndex(route, point);
+    const nextPoint = { x: snapValue(point.x, designer.snapCm), y: snapValue(point.y, designer.snapCm) };
+    patchRoute(routeId, { points: [...route.points.slice(0, insertIndex), nextPoint, ...route.points.slice(insertIndex)] });
+    setSelection({ type: "route", id: routeId, pointIndex: insertIndex });
+  }
+
+  function deleteRoutePoint(routeId: string, pointIndex: number) {
+    const route = designer.routes.find((entry) => entry.id === routeId);
+    if (!route || route.points.length <= 2 || pointIndex <= 0 || pointIndex >= route.points.length - 1) return;
+    patchRoute(routeId, { points: route.points.filter((_, index) => index !== pointIndex) });
+    setSelection({ type: "route", id: routeId });
+  }
+
+  function splitRoute(routeId: string, pointIndex: number) {
+    const route = designer.routes.find((entry) => entry.id === routeId);
+    if (!route || pointIndex <= 0 || pointIndex >= route.points.length - 1) return;
+    const next = designer.routes.length + 1;
+    const firstRoute = { ...route, points: route.points.slice(0, pointIndex + 1) };
+    const secondRoute = {
+      ...route,
+      id: `${route.id}_cut_${next}`,
+      name: `${route.name} cut`,
+      points: route.points.slice(pointIndex)
+    };
+    updateDesigner({
+      ...designer,
+      routes: designer.routes.flatMap((entry) => entry.id === routeId ? [firstRoute, secondRoute] : [entry])
+    });
+    setSelection({ type: "route", id: secondRoute.id });
+  }
+
+  function handleCutRoutePoint(routeId: string, pointIndex: number) {
+    splitRoute(routeId, pointIndex);
+    setTool("select");
+  }
+
+  function autoSolderRoutePoint(routeId: string, pointIndex: number, finalPoint?: DesignerPoint) {
+    const routes = finalPoint ? moveRoutePoint(designer.routes, routeId, pointIndex, finalPoint) : designer.routes;
+    const route = routes.find((entry) => entry.id === routeId);
+    if (!route || !isRouteTerminal(route, pointIndex)) {
+      return;
+    }
+    const matchingTerminal = findMatchingSolderTerminal(routes, routeId, pointIndex, designer.snapCm);
+    if (matchingTerminal) {
+      solderRouteTerminals({ routeId, pointIndex }, matchingTerminal, routes);
+      return;
+    }
+    const controllerPort = findMatchingControllerPort(designer.controller, routes, routeId, pointIndex, designer.snapCm);
+    if (controllerPort !== null) {
+      updateDesigner({
+        ...designer,
+        routes: routes.map((entry) => (
+          entry.id === routeId
+            ? {
+              ...entry,
+              output: controllerPort + 1,
+              points: entry.points.map((point, index) => index === pointIndex ? { ...point, joint: true } : point)
+            }
+            : entry
+        ))
+      });
+      setFabricationNotice(`Data cable soldered to controller output ${controllerPort + 1}.`);
+      return;
+    }
+    if (finalPoint) updateDesigner({ ...designer, routes });
+    setFabricationNotice("Place a green and red terminal on the same snap point to solder.");
+  }
+
+  function moveSolderedTerminals(terminals: DesignerRouteTerminal[], finalPoint: DesignerPoint) {
+    updateDesigner({
+      ...designer,
+      routes: moveRouteTerminals(designer.routes, terminals, { ...finalPoint, joint: true })
+    });
+    setFabricationNotice("Soldered joint moved.");
+  }
+
+  function solderRouteTerminals(source: DesignerRouteTerminal, target: DesignerRouteTerminal, routeSet = designer.routes) {
+    const sourceRoute = routeSet.find((route) => route.id === source.routeId);
+    const targetRoute = routeSet.find((route) => route.id === target.routeId);
+    if (!sourceRoute || !targetRoute || sourceRoute.id === targetRoute.id) return;
+    if (!canSolderRoutes(sourceRoute, source.pointIndex, targetRoute, target.pointIndex, designer.snapCm)) {
+      return;
+    }
+
+    const sourcePoint = sourceRoute.points[source.pointIndex];
+    const targetPoint = targetRoute.points[target.pointIndex];
+    const solderPoint = {
+      x: snapValue((sourcePoint.x + targetPoint.x) / 2, designer.snapCm),
+      y: snapValue((sourcePoint.y + targetPoint.y) / 2, designer.snapCm),
+      joint: true
+    };
+    if (sourceRoute.kind !== targetRoute.kind) {
+      const ledRoute = sourceRoute.kind === "led_string" ? sourceRoute : targetRoute;
+      const dataRoute = sourceRoute.kind === "data_cable" ? sourceRoute : targetRoute;
+      updateDesigner({
+        ...designer,
+        routes: moveRouteTerminals(routeSet, [source, target], solderPoint).map((route) => (
+          route.id === dataRoute.id ? { ...route, output: ledRoute.output } : route
+        ))
+      });
+      setSelection({ type: "route", id: source.routeId, pointIndex: source.pointIndex });
+      setFabricationNotice("Cable and LED string snapped and soldered.");
+      return;
+    }
+    const sourcePoints = sourceRoute.points.map((point, index) => index === source.pointIndex ? solderPoint : point);
+    const targetPoints = targetRoute.points.map((point, index) => index === target.pointIndex ? solderPoint : point);
+    const sourceAtStart = source.pointIndex === 0;
+    const targetAtStart = target.pointIndex === 0;
+    const orientedSource = sourceAtStart ? [...sourcePoints].reverse() : sourcePoints;
+    const orientedTarget = targetAtStart ? targetPoints : [...targetPoints].reverse();
+    const mergedRoute = {
+      ...sourceRoute,
+      name: `${sourceRoute.name} soldered`,
+      points: [...orientedSource, ...orientedTarget.slice(1)]
+    };
+    updateDesigner({
+      ...designer,
+      routes: routeSet.flatMap((route) => {
+        if (route.id === sourceRoute.id) return [mergedRoute];
+        if (route.id === targetRoute.id) return [];
+        return [route];
+      })
+    });
+    setSelection({ type: "route", id: mergedRoute.id });
+    setFabricationNotice("Routes snapped and soldered.");
+  }
+
+  function deleteSelection() {
+    if (!selection) return;
+    if (selection.type === "zone" && designer.zones.length > 1) {
+      const zones = designer.zones.filter((zone) => zone.id !== selection.id);
+      const fallbackZoneId = zones[0]?.id ?? "";
+      updateDesigner({
+        ...designer,
+        zones,
+        routes: designer.routes.map((route) => (route.zoneId === selection.id ? { ...route, zoneId: fallbackZoneId } : route))
+      });
+      setSelection(null);
+    }
+    if (selection.type === "route" && typeof selection.pointIndex === "number") {
+      deleteRoutePoint(selection.id, selection.pointIndex);
+      return;
+    }
+    if (selection.type === "route" && designer.routes.length > 1) {
+      const routes = clearFloatingTerminalJoints(
+        designer.routes.filter((route) => route.id !== selection.id),
+        designer.controller,
+        designer.snapCm
+      );
+      updateDesigner({ ...designer, routes });
+      setSelection(null);
+    }
+  }
+
+  function copySelection() {
+    if (selection && selection.type !== "controller") setClipboard(selection);
+  }
+
+  function pasteSelection() {
+    if (!clipboard) return;
+    if (clipboard.type === "controller") return;
+    if (clipboard.type === "zone") {
+      const source = designer.zones.find((zone) => zone.id === clipboard.id);
+      if (!source) return;
+      const next = designer.zones.length + 1;
+      const copy = { ...source, id: `${source.id}_copy_${next}`, name: `${source.name} Copy`, x: source.x + designer.snapCm, y: source.y + designer.snapCm };
+      updateDesigner({ ...designer, zones: [...designer.zones, copy] });
+      setSelection({ type: "zone", id: copy.id });
+    }
+    if (clipboard.type === "route") {
+      const source = designer.routes.find((route) => route.id === clipboard.id);
+      if (!source) return;
+      const next = designer.routes.length + 1;
+      const copy = { ...source, id: `${source.id}_copy_${next}`, name: `${source.name} Copy`, points: source.points.map((point) => ({ x: point.x + designer.snapCm, y: point.y + designer.snapCm })) };
+      updateDesigner({ ...designer, routes: [...designer.routes, copy] });
+      setSelection({ type: "route", id: copy.id });
+    }
+  }
+
+  function zoom(factor: number) {
+    setViewport((current) => {
+      const base = current ?? activeViewport;
+      const width = clamp(base.width * factor, designer.canvasWidthCm * 0.08, designer.canvasWidthCm * 2);
+      const height = clamp(base.height * factor, designer.canvasHeightCm * 0.08, designer.canvasHeightCm * 2);
+      return clampViewport({
+        x: clamp(base.x + (base.width - width) / 2, -designer.canvasWidthCm, designer.canvasWidthCm),
+        y: clamp(base.y + (base.height - height) / 2, -designer.canvasHeightCm, designer.canvasHeightCm),
+        width,
+        height
+      }, designer);
+    });
+  }
+
+  function zoomToFit() {
+    setViewport(fitViewportToDesigner(designer));
+  }
+
+  function compileLayout() {
+    const nextDocument = buildDocumentFromDesigner(document);
+    setDocument(nextDocument);
+    void save(nextDocument);
+  }
+
+  const selectedRouteSummary = selectedRoute ? routeSummaries.find((_, index) => designer.routes[index]?.id === selectedRoute.id) : null;
+
+  return (
+    <div className="flex h-screen w-screen flex-col overflow-hidden bg-slate-100 text-slate-950">
+      <header className="flex h-14 shrink-0 items-center justify-between border-b border-slate-300 bg-white px-4">
+        <div className="flex min-w-0 items-center gap-3">
+          <Button asChild variant="outline" type="button">
+            <Link href={`/partituras/generator/${encodeURIComponent(partitura.id)}`}>
+              <ArrowLeft className="h-4 w-4" />
+              Back
+            </Link>
+          </Button>
+          <div className="min-w-0">
+            <div className="truncate text-body-sm font-semibold">{partitura.name}</div>
+            <div className="font-mono text-[10px] uppercase text-slate-500">{partitura.partituraKey}</div>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <Badge>{designer.canvasWidthCm}x{designer.canvasHeightCm} cm</Badge>
+          <Badge>{designer.ledDensityPerMeter} LED/m</Badge>
+          <Badge>{totalGeneratedLeds} LEDs</Badge>
+          <Button type="button" variant="outline" title="Copy" className="h-9 w-9 px-0" disabled={!selection || selection.type === "controller"} onClick={copySelection}>
+            <Copy className="h-4 w-4" />
+          </Button>
+          <Button type="button" variant="outline" title="Paste" className="h-9 px-2" disabled={!clipboard} onClick={pasteSelection}>
+            Paste
+          </Button>
+          <Button type="button" variant="outline" title="Delete" className="h-9 w-9 px-0" disabled={!selection || selection.type === "controller"} onClick={deleteSelection}>
+            <Trash2 className="h-4 w-4" />
+          </Button>
+          <Button type="button" variant="outline" onClick={() => void save()} disabled={saving}>
+            <Save className="h-4 w-4" />
+            {saving ? "Saving" : "Save"}
+          </Button>
+          <Button type="button" onClick={compileLayout} disabled={saving}>
+            <Cable className="h-4 w-4" />
+            Compile
+          </Button>
+        </div>
+      </header>
+
+      <div className="flex min-h-[52px] shrink-0 flex-wrap items-center gap-3 border-b border-slate-300 bg-white px-4 py-2">
+        <ToolbarField label="Ruler">
+          <select className="h-8 rounded-md border bg-white px-2 text-body-sm" value={designer.rulerUnit} onChange={(event) => patchDesigner({ rulerUnit: event.target.value as DesignerForm["rulerUnit"] })}>
+            <option value="cm">cm</option>
+            <option value="in">inches</option>
+          </select>
+        </ToolbarField>
+        <label className="flex h-8 items-center gap-2 rounded-md border bg-white px-2 text-body-sm">
+          <input type="checkbox" checked={designer.rulerVisible} onChange={(event) => patchDesigner({ rulerVisible: event.target.checked })} />
+          Show ruler
+        </label>
+        <ToolbarNumber label="W" value={designer.canvasWidthCm} suffix="cm" onChange={(canvasWidthCm) => patchDesigner({ canvasWidthCm })} />
+        <ToolbarNumber label="H" value={designer.canvasHeightCm} suffix="cm" onChange={(canvasHeightCm) => patchDesigner({ canvasHeightCm })} />
+        <ToolbarNumber label="LED/m" value={designer.ledDensityPerMeter} onChange={(ledDensityPerMeter) => patchDesigner({ ledDensityPerMeter })} />
+        <ToolbarNumber label="Snap" value={designer.snapCm} suffix="cm" onChange={(snapCm) => patchDesigner({ snapCm })} />
+        <Badge>{designer.sourceSvg ? "SVG loaded" : "SVG source pending"}</Badge>
+        <Badge>{fabricationNotice}</Badge>
+        <div className="h-8 w-px bg-slate-200" />
+        {selectedZone ? (
+          <>
+            <ToolbarText label="Name" value={selectedZone.name} onChange={(name) => patchZone(selectedZone.id, { name })} />
+            <ToolbarNumber label="X" value={selectedZone.x} onChange={(x) => patchZone(selectedZone.id, { x })} />
+            <ToolbarNumber label="Y" value={selectedZone.y} onChange={(y) => patchZone(selectedZone.id, { y })} />
+            <ToolbarNumber label="W" value={selectedZone.width} onChange={(width) => patchZone(selectedZone.id, { width })} />
+            <ToolbarNumber label="H" value={selectedZone.height} onChange={(height) => patchZone(selectedZone.id, { height })} />
+          </>
+        ) : selectedController ? (
+          <>
+            <ToolbarText label="Name" value={selectedController.name} onChange={(name) => patchController({ name })} />
+            <ToolbarNumber label="X" value={selectedController.x} onChange={(x) => patchController({ x })} />
+            <ToolbarNumber label="Y" value={selectedController.y} onChange={(y) => patchController({ y })} />
+            <ToolbarNumber label="Ports" value={selectedController.dataOutputs} onChange={(dataOutputs) => patchController({ dataOutputs: Math.max(1, Math.round(dataOutputs)) })} />
+            <Badge>Controller</Badge>
+          </>
+        ) : selectedRoute ? (
+          <>
+            <ToolbarText label="Name" value={selectedRoute.name} onChange={(name) => patchRoute(selectedRoute.id, { name })} />
+            <ToolbarField label="Type">
+              <select className="h-8 rounded-md border bg-white px-2 text-body-sm" value={selectedRoute.kind} onChange={(event) => patchRoute(selectedRoute.id, { kind: event.target.value as DesignerRouteKind })}>
+                <option value="led_string">LED string</option>
+                <option value="data_cable">Data cable</option>
+              </select>
+            </ToolbarField>
+            <ToolbarField label="Output">
+              <select className="h-8 rounded-md border bg-white px-2 text-body-sm" value={selectedRoute.output} onChange={(event) => patchRoute(selectedRoute.id, { output: Number(event.target.value) })}>
+                <option value="1">Out 1</option>
+                <option value="2">Out 2</option>
+                <option value="3">Out 3</option>
+              </select>
+            </ToolbarField>
+            {selectedRoute.kind === "led_string" ? (
+              <ToolbarField label="Zone">
+                <select className="h-8 max-w-[180px] rounded-md border bg-white px-2 text-body-sm" value={selectedRoute.zoneId} onChange={(event) => patchRoute(selectedRoute.id, { zoneId: event.target.value })}>
+                  {designer.zones.map((zone) => <option key={zone.id} value={zone.id}>{zone.name}</option>)}
+                </select>
+              </ToolbarField>
+            ) : null}
+            <Badge>{formatMeasure(selectedRouteSummary?.lengthCm ?? 0, designer.rulerUnit)}</Badge>
+            <Badge>{selectedRoute.kind === "data_cable" ? "Signal only" : `${selectedRouteSummary?.leds ?? 0} LEDs @ ${designer.ledDensityPerMeter}/m`}</Badge>
+            <Button type="button" variant="outline" onClick={() => addRoutePoint(selectedRoute.id)}>
+              <Plus className="h-4 w-4" />
+              End Point
+            </Button>
+            <Button type="button" variant="outline" disabled={typeof selectedRoutePointIndex !== "number" || selectedRoutePointIndex <= 0 || selectedRoutePointIndex >= selectedRoute.points.length - 1} onClick={() => deleteRoutePoint(selectedRoute.id, selectedRoutePointIndex ?? -1)}>
+              <Trash2 className="h-4 w-4" />
+              Point
+            </Button>
+            <Button type="button" variant="outline" disabled={typeof selectedRoutePointIndex !== "number" || selectedRoutePointIndex <= 0 || selectedRoutePointIndex >= selectedRoute.points.length - 1} onClick={() => splitRoute(selectedRoute.id, selectedRoutePointIndex ?? -1)}>
+              <Cable className="h-4 w-4" />
+              Cut
+            </Button>
+          </>
+        ) : (
+          <span className="text-body-sm text-slate-500">Select an object to edit its properties.</span>
+        )}
+      </div>
+
+      <div className="grid min-h-0 flex-1 grid-cols-[56px_minmax(0,1fr)]">
+        <aside className="flex flex-col items-center gap-2 border-r border-slate-300 bg-white py-3">
+          <ToolButton active={tool === "select"} label="Select" icon={MousePointer2} onClick={() => setTool("select")} />
+          <ToolButton active={tool === "zone_rect"} label="Rectangle Zone" icon={Square} onClick={() => addZone("rect")} />
+          <ToolButton active={tool === "zone_ellipse"} label="Ellipse Zone" icon={Circle} onClick={() => addZone("ellipse")} />
+          <ToolButton active={tool === "led_string"} label="LED string" icon={Route} tone="amber" onClick={() => addRoute("led_string")} />
+          <ToolButton active={tool === "data_cable"} label="Data cable" icon={Cable} tone="green" onClick={() => addRoute("data_cable")} />
+          <ToolButton active={tool === "cut"} label="Cut route" icon={Scissors} onClick={() => setTool("cut")} />
+          <ToolButton label="Delete selected" icon={Trash2} disabled={!selection || selection.type === "controller"} onClick={deleteSelection} />
+          <ToolButton active={tool === "pan"} label="Pan" icon={Hand} onClick={() => setTool("pan")} />
+          <div className="my-2 h-px w-8 bg-slate-200" />
+          <ToolButton label="Zoom In" icon={ZoomIn} onClick={() => zoom(0.78)} />
+          <ToolButton label="Zoom Out" icon={ZoomOut} onClick={() => zoom(1.28)} />
+          <ToolButton label="Fit" icon={Maximize2} onClick={zoomToFit} />
+        </aside>
+
+        <main className="min-w-0 overflow-hidden bg-slate-900 p-4">
+          <DesignerStudioCanvas
+            designer={designer}
+            tool={tool}
+            viewport={activeViewport}
+            selectedZoneId={selectedZone?.id}
+            selectedRouteId={selectedRoute?.id}
+            selectedRoutePointIndex={selectedRoutePointIndex}
+            selectedController={Boolean(selectedController)}
+            onViewportChange={setViewport}
+            onChange={updateDesigner}
+            onSelect={setSelection}
+            onInsertRoutePoint={insertRoutePoint}
+            onCutRoutePoint={handleCutRoutePoint}
+            onRoutePointDragEnd={autoSolderRoutePoint}
+            onSolderedTerminalsDragEnd={moveSolderedTerminals}
+          />
+        </main>
+      </div>
+
+      <footer className="flex h-8 shrink-0 items-center justify-between border-t border-slate-300 bg-white px-4 font-mono text-[11px] text-slate-500">
+        <span>Canvas {formatMeasure(designer.canvasWidthCm, designer.rulerUnit)} x {formatMeasure(designer.canvasHeightCm, designer.rulerUnit)} · Snap {formatMeasure(designer.snapCm, designer.rulerUnit)}</span>
+        <span>{designer.zones.length} zones · {designer.routes.filter((route) => route.kind === "led_string").length} LED strings · {designer.routes.filter((route) => route.kind === "data_cable").length} data cables · {totalGeneratedLeds} estimated LEDs</span>
+      </footer>
+    </div>
+  );
+}
 
 export function PartituraWorkspace({ initialPartitura }: { initialPartitura: PersistedPartitura }) {
   const [partitura, setPartitura] = useState(initialPartitura);
@@ -907,6 +1466,1016 @@ function MapRow({ label, value }: { label: string; value: string }) {
       <span className="min-w-0 break-words font-mono text-meta text-foreground">{value}</span>
     </div>
   );
+}
+
+function DesignerStudioCanvas({
+  designer,
+  tool,
+  viewport,
+  selectedZoneId,
+  selectedRouteId,
+  selectedRoutePointIndex,
+  selectedController,
+  onViewportChange,
+  onChange,
+  onSelect,
+  onInsertRoutePoint,
+  onCutRoutePoint,
+  onRoutePointDragEnd,
+  onSolderedTerminalsDragEnd
+}: {
+  designer: DesignerForm;
+  tool: DesignerTool;
+  viewport: DesignerViewport;
+  selectedZoneId?: string;
+  selectedRouteId?: string;
+  selectedRoutePointIndex?: number;
+  selectedController?: boolean;
+  onViewportChange: (viewport: DesignerViewport) => void;
+  onChange: (designer: DesignerForm) => void;
+  onSelect: (selection: DesignerSelection) => void;
+  onInsertRoutePoint: (routeId: string, point: DesignerPoint) => void;
+  onCutRoutePoint: (routeId: string, pointIndex: number) => void;
+  onRoutePointDragEnd: (routeId: string, pointIndex: number, finalPoint: DesignerPoint) => void;
+  onSolderedTerminalsDragEnd: (terminals: DesignerRouteTerminal[], finalPoint: DesignerPoint) => void;
+}) {
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const [drag, setDrag] = useState<DesignerDrag | null>(null);
+  const viewBox = `${viewport.x} ${viewport.y} ${viewport.width} ${viewport.height}`;
+  const rulerGrid = designer.rulerVisible ? "grid-cols-[48px_minmax(0,1fr)] grid-rows-[28px_minmax(0,1fr)]" : "grid-cols-[0_minmax(0,1fr)] grid-rows-[0_minmax(0,1fr)]";
+
+  function eventPoint(event: React.PointerEvent<SVGElement> | React.MouseEvent<SVGElement>) {
+    const svg = svgRef.current;
+    if (!svg) return { x: 0, y: 0 };
+    const point = svg.createSVGPoint();
+    point.x = event.clientX;
+    point.y = event.clientY;
+    const matrix = svg.getScreenCTM();
+    if (!matrix) return { x: 0, y: 0 };
+    const transformed = point.matrixTransform(matrix.inverse());
+    return { x: transformed.x, y: transformed.y };
+  }
+
+  function patchZone(zoneId: string, patch: Partial<DesignerZoneForm>) {
+    onChange({ ...designer, zones: designer.zones.map((zone) => (zone.id === zoneId ? { ...zone, ...patch } : zone)) });
+  }
+
+  function patchRoute(routeId: string, patch: Partial<DesignerRouteForm>) {
+    onChange({ ...designer, routes: designer.routes.map((route) => (route.id === routeId ? { ...route, ...patch } : route)) });
+  }
+
+  function handlePointerMove(event: React.PointerEvent<SVGSVGElement>) {
+    if (!drag) return;
+    const point = eventPoint(event);
+    if (drag.type === "pan") {
+      const scaleX = viewport.width / Math.max(1, svgRef.current?.clientWidth ?? 1);
+      const scaleY = viewport.height / Math.max(1, svgRef.current?.clientHeight ?? 1);
+      onViewportChange(clampViewport({
+        ...drag.original,
+        x: drag.original.x - (event.clientX - drag.start.x) * scaleX,
+        y: drag.original.y - (event.clientY - drag.start.y) * scaleY
+      }, designer));
+      return;
+    }
+    if (drag.type === "controller-move") {
+      const nextController = {
+        ...designer.controller,
+        x: snapValue(drag.original.x + point.x - drag.start.x, designer.snapCm),
+        y: snapValue(drag.original.y + point.y - drag.start.y, designer.snapCm)
+      };
+      onChange(moveControllerWithSolderedCables(designer, drag.original, nextController, drag.originalRoutes, designer.snapCm));
+      return;
+    }
+    if (drag.type === "zone-move") {
+      patchZone(drag.zoneId, {
+        x: snapValue(drag.original.x + point.x - drag.start.x, designer.snapCm),
+        y: snapValue(drag.original.y + point.y - drag.start.y, designer.snapCm)
+      });
+      return;
+    }
+    if (drag.type === "zone-resize") {
+      patchZone(drag.zoneId, resizedZone(drag.original, drag.handle, point.x - drag.start.x, point.y - drag.start.y, designer.snapCm));
+      return;
+    }
+    if (drag.type === "route-move") {
+      onChange({
+        ...designer,
+        routes: moveRouteWithSolderedTerminals(designer.routes, drag.routeId, drag.original, point.x - drag.start.x, point.y - drag.start.y, designer.snapCm)
+      });
+      return;
+    }
+    if (drag.type === "route-point") {
+      const nextPoint = { x: snapValue(point.x, designer.snapCm), y: snapValue(point.y, designer.snapCm), joint: drag.jointGroup.length > 1 };
+      if (drag.jointGroup.length > 1) {
+        onChange({ ...designer, routes: moveRouteTerminals(designer.routes, drag.jointGroup, nextPoint) });
+        return;
+      }
+      onChange({ ...designer, routes: moveRoutePoint(designer.routes, drag.routeId, drag.pointIndex, nextPoint) });
+    }
+  }
+
+  return (
+    <div className={`grid h-full w-full ${rulerGrid} overflow-hidden rounded-md border border-slate-700 bg-slate-950`}>
+      <div className={designer.rulerVisible ? "border-b border-r border-slate-700 bg-slate-900" : "overflow-hidden"} />
+      {designer.rulerVisible ? <HorizontalRuler viewport={viewport} unit={designer.rulerUnit} /> : <div className="overflow-hidden" />}
+      {designer.rulerVisible ? <VerticalRuler viewport={viewport} unit={designer.rulerUnit} /> : <div className="overflow-hidden" />}
+      <div className="min-h-0 min-w-0 overflow-auto bg-slate-950">
+      <svg
+        ref={svgRef}
+        viewBox={viewBox}
+        className={`block h-full min-h-[620px] min-w-[1100px] bg-slate-950 ${tool === "pan" ? "cursor-grab" : "cursor-default"}`}
+        role="img"
+        aria-label="Designer studio canvas"
+        onPointerDown={(event) => {
+          if (tool === "pan") {
+            (event.currentTarget as SVGSVGElement).setPointerCapture(event.pointerId);
+            setDrag({ type: "pan", start: { x: event.clientX, y: event.clientY }, original: viewport });
+            return;
+          }
+          onSelect(null);
+        }}
+        onPointerMove={handlePointerMove}
+        onPointerUp={(event) => {
+          const endedDrag = drag;
+          const point = eventPoint(event);
+          const finalPoint = { x: snapValue(point.x, designer.snapCm), y: snapValue(point.y, designer.snapCm), joint: false };
+          if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+          setDrag(null);
+          if (endedDrag?.type === "route-point" && endedDrag.jointGroup.length > 1) {
+            onSolderedTerminalsDragEnd(endedDrag.jointGroup, { ...finalPoint, joint: true });
+            return;
+          }
+          if (endedDrag?.type === "route-point") onRoutePointDragEnd(endedDrag.routeId, endedDrag.pointIndex, finalPoint);
+        }}
+      >
+        <defs>
+          <marker id="designer-route-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="2.2" markerHeight="2.2" orient="auto-start-reverse">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill="#e2e8f0" />
+          </marker>
+        </defs>
+        <rect x="0" y="0" width={designer.canvasWidthCm} height={designer.canvasHeightCm} fill="#020617" />
+        <GridLines width={designer.canvasWidthCm} height={designer.canvasHeightCm} snapCm={designer.snapCm} />
+        {designer.zones.map((zone, index) => (
+          <ZoneShape
+            key={`${zone.id}:${index}`}
+            zone={zone}
+            selected={zone.id === selectedZoneId}
+            onPointerDown={(event) => {
+              event.stopPropagation();
+              const point = eventPoint(event);
+              onSelect({ type: "zone", id: zone.id });
+              setDrag({ type: "zone-move", zoneId: zone.id, start: point, original: zone });
+            }}
+            onResizePointerDown={(event, handle) => {
+              event.stopPropagation();
+              const point = eventPoint(event);
+              onSelect({ type: "zone", id: zone.id });
+              setDrag({ type: "zone-resize", zoneId: zone.id, handle, start: point, original: zone });
+            }}
+          />
+        ))}
+        {designer.routes.map((route, index) => (
+          <RouteShape
+            key={`${route.id}:${index}`}
+            route={route}
+            ledDensityPerMeter={designer.ledDensityPerMeter}
+            selected={route.id === selectedRouteId}
+            selectedPointIndex={route.id === selectedRouteId ? selectedRoutePointIndex : undefined}
+            onPointerDown={(event) => {
+              event.stopPropagation();
+              const point = eventPoint(event);
+              onSelect({ type: "route", id: route.id });
+              setDrag({ type: "route-move", routeId: route.id, start: point, original: route });
+            }}
+            onDoubleClick={(event) => {
+              event.stopPropagation();
+              onInsertRoutePoint(route.id, eventPoint(event));
+            }}
+            onPointPointerDown={(event, pointIndex) => {
+              event.stopPropagation();
+              if (tool === "cut") {
+                onCutRoutePoint(route.id, pointIndex);
+                return;
+              }
+              const routePoint = route.points[pointIndex];
+              const jointGroup = routePoint?.joint ? findJointGroup(designer.routes, route.id, pointIndex, designer.snapCm) : [{ routeId: route.id, pointIndex }];
+              onSelect({ type: "route", id: route.id, pointIndex });
+              setDrag({ type: "route-point", routeId: route.id, pointIndex, jointGroup });
+            }}
+          />
+        ))}
+        <ControllerShape
+          controller={designer.controller}
+          snapCm={designer.snapCm}
+          connectedPorts={controllerConnectedPorts(designer.controller, designer.routes, designer.snapCm)}
+          selected={Boolean(selectedController)}
+          onPointerDown={(event) => {
+            event.stopPropagation();
+            const point = eventPoint(event);
+            onSelect({ type: "controller", id: designer.controller.id });
+            setDrag({ type: "controller-move", start: point, original: designer.controller, originalRoutes: designer.routes });
+          }}
+        />
+      </svg>
+      </div>
+    </div>
+  );
+}
+
+function ToolButton({
+  label,
+  icon: Icon,
+  active = false,
+  tone = "blue",
+  disabled = false,
+  onClick
+}: {
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+  active?: boolean;
+  tone?: "blue" | "amber" | "green";
+  disabled?: boolean;
+  onClick?: () => void;
+}) {
+  const activeClass = {
+    blue: "border-blue-500 bg-blue-50 text-blue-700",
+    amber: "border-amber-500 bg-amber-50 text-amber-700",
+    green: "border-emerald-500 bg-emerald-50 text-emerald-700"
+  }[tone];
+  return (
+    <button
+      type="button"
+      title={label}
+      disabled={disabled}
+      onClick={onClick}
+      className={`relative flex h-10 w-10 items-center justify-center rounded-md border text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40 ${active ? activeClass : "border-transparent bg-white"}`}
+    >
+      {(tone === "amber" || tone === "green") ? <span className={`absolute bottom-1 h-1.5 w-5 rounded-full ${tone === "amber" ? "bg-amber-500" : "bg-emerald-500"}`} /> : null}
+      <Icon className="h-5 w-5" />
+    </button>
+  );
+}
+
+function ToolbarField({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <label className="flex items-center gap-1.5">
+      <span className="text-[11px] font-medium uppercase text-slate-500">{label}</span>
+      {children}
+    </label>
+  );
+}
+
+function ToolbarText({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+  return (
+    <ToolbarField label={label}>
+      <input className="h-8 w-40 rounded-md border bg-white px-2 text-body-sm outline-none focus:ring-2 focus:ring-blue-500" value={value} onChange={(event) => onChange(event.target.value)} />
+    </ToolbarField>
+  );
+}
+
+function ToolbarNumber({ label, value, suffix, onChange }: { label: string; value: number; suffix?: string; onChange: (value: number) => void }) {
+  return (
+    <ToolbarField label={label}>
+      <div className="flex h-8 items-center rounded-md border bg-white">
+        <input className="h-full w-16 rounded-md bg-transparent px-2 text-right font-mono text-body-sm outline-none" type="number" step="any" value={value} onChange={(event) => onChange(Number(event.target.value))} />
+        {suffix ? <span className="pr-2 text-[11px] text-slate-500">{suffix}</span> : null}
+      </div>
+    </ToolbarField>
+  );
+}
+
+function HorizontalRuler({ viewport, unit }: { viewport: DesignerViewport; unit: DesignerForm["rulerUnit"] }) {
+  const ticks = rulerTicks(viewport.x, viewport.x + viewport.width, viewport.width, unit);
+  return (
+    <div className="relative h-full w-full overflow-hidden border-b border-slate-700 bg-slate-900">
+      {ticks.map((tick) => (
+        <div key={`${tick.cm}-${tick.major ? "major" : "minor"}`} className="absolute bottom-0" style={{ left: `${((tick.cm - viewport.x) / viewport.width) * 100}%` }}>
+          <div className={tick.major ? "h-5 border-l border-slate-200" : "h-2.5 border-l border-slate-500"} />
+          {tick.major ? <div className="absolute left-1 top-0 whitespace-nowrap font-mono text-[15px] leading-none text-slate-200">{tick.label}</div> : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function VerticalRuler({ viewport, unit }: { viewport: DesignerViewport; unit: DesignerForm["rulerUnit"] }) {
+  const ticks = rulerTicks(viewport.y, viewport.y + viewport.height, viewport.height, unit);
+  return (
+    <div className="relative h-full w-full overflow-hidden border-r border-slate-700 bg-slate-900">
+      {ticks.map((tick) => (
+        <div key={`${tick.cm}-${tick.major ? "major" : "minor"}`} className="absolute right-0" style={{ top: `${((tick.cm - viewport.y) / viewport.height) * 100}%` }}>
+          <div className={tick.major ? "w-6 border-t border-slate-200" : "w-3 border-t border-slate-500"} />
+          {tick.major ? (
+            <div className="absolute right-9 top-[-7px] origin-right -rotate-90 whitespace-nowrap font-mono text-[15px] leading-none text-slate-200">
+              {tick.label}
+            </div>
+          ) : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function GridLines({ width, height, snapCm }: { width: number; height: number; snapCm: number }) {
+  const step = Math.max(1, snapCm);
+  const verticals = Array.from({ length: Math.floor(width / step) + 1 }, (_, index) => index * step);
+  const horizontals = Array.from({ length: Math.floor(height / step) + 1 }, (_, index) => index * step);
+  return (
+    <g opacity="0.22">
+      {verticals.map((x) => <line key={`v-${x}`} x1={x} y1={0} x2={x} y2={height} stroke="#64748b" strokeWidth="0.08" />)}
+      {horizontals.map((y) => <line key={`h-${y}`} x1={0} y1={y} x2={width} y2={y} stroke="#64748b" strokeWidth="0.08" />)}
+    </g>
+  );
+}
+
+function ZoneShape({
+  zone,
+  selected,
+  onPointerDown,
+  onResizePointerDown
+}: {
+  zone: DesignerZoneForm;
+  selected: boolean;
+  onPointerDown: (event: React.PointerEvent<SVGElement>) => void;
+  onResizePointerDown: (event: React.PointerEvent<SVGCircleElement>, handle: ResizeHandle) => void;
+}) {
+  const common = {
+    fill: selected ? "rgba(14,165,233,0.24)" : "rgba(148,163,184,0.12)",
+    stroke: selected ? "#38bdf8" : "#64748b",
+    strokeWidth: selected ? 0.45 : 0.25,
+    onPointerDown
+  };
+  const handles: Array<{ handle: ResizeHandle; x: number; y: number }> = [
+    { handle: "nw", x: zone.x, y: zone.y },
+    { handle: "ne", x: zone.x + zone.width, y: zone.y },
+    { handle: "sw", x: zone.x, y: zone.y + zone.height },
+    { handle: "se", x: zone.x + zone.width, y: zone.y + zone.height }
+  ];
+  const shape = zone.shape === "ellipse"
+    ? <ellipse cx={zone.x + zone.width / 2} cy={zone.y + zone.height / 2} rx={zone.width / 2} ry={zone.height / 2} {...common} />
+    : <rect x={zone.x} y={zone.y} width={zone.width} height={zone.height} rx="0.8" {...common} />;
+  return (
+    <g>
+      {shape}
+      {selected ? handles.map((handle) => (
+        <circle
+          key={handle.handle}
+          cx={handle.x}
+          cy={handle.y}
+          r="0.85"
+          className="cursor-nwse-resize"
+          fill="#f8fafc"
+          stroke="#2563eb"
+          strokeWidth="0.25"
+          onPointerDown={(event) => onResizePointerDown(event, handle.handle)}
+        />
+      )) : null}
+    </g>
+  );
+}
+
+function ControllerShape({
+  controller,
+  snapCm,
+  connectedPorts,
+  selected,
+  onPointerDown
+}: {
+  controller: DesignerControllerForm;
+  snapCm: number;
+  connectedPorts: Set<number>;
+  selected: boolean;
+  onPointerDown: (event: React.PointerEvent<SVGGElement>) => void;
+}) {
+  const ports = Array.from({ length: controller.dataOutputs }, (_, index) => index);
+  return (
+    <g className="cursor-move" onPointerDown={onPointerDown}>
+      <rect
+        x={controller.x}
+        y={controller.y}
+        width={controller.width}
+        height={controller.height}
+        rx="0.9"
+        fill="#064e3b"
+        stroke={selected ? "#facc15" : "#34d399"}
+        strokeWidth={selected ? 0.45 : 0.25}
+      />
+      <rect
+        x={controller.x + controller.width * 0.18}
+        y={controller.y + controller.height * 0.18}
+        width={controller.width * 0.46}
+        height={controller.height * 0.64}
+        rx="0.45"
+        fill="#0f172a"
+        stroke="#6ee7b7"
+        strokeWidth="0.14"
+      />
+      <line x1={controller.x + controller.width * 0.3} y1={controller.y + controller.height * 0.32} x2={controller.x + controller.width * 0.52} y2={controller.y + controller.height * 0.32} stroke="#475569" strokeWidth="0.12" />
+      <line x1={controller.x + controller.width * 0.3} y1={controller.y + controller.height * 0.5} x2={controller.x + controller.width * 0.52} y2={controller.y + controller.height * 0.5} stroke="#475569" strokeWidth="0.12" />
+      <line x1={controller.x + controller.width * 0.3} y1={controller.y + controller.height * 0.68} x2={controller.x + controller.width * 0.52} y2={controller.y + controller.height * 0.68} stroke="#475569" strokeWidth="0.12" />
+      <text x={controller.x + controller.width * 0.1} y={controller.y - 0.9} fill="#a7f3d0" fontSize="1.8" fontFamily="monospace">
+        {controller.name}
+      </text>
+      {ports.map((port) => {
+        const portPoint = controllerPortPoint(controller, port, snapCm);
+        const y = portPoint.y;
+        const connected = connectedPorts.has(port);
+        return (
+          <g key={port}>
+            {connected ? <circle cx={portPoint.x} cy={y} r="0.78" fill="none" stroke="#22d3ee" strokeWidth="0.18" /> : null}
+            <circle cx={portPoint.x} cy={y} r={connected ? "0.5" : "0.24"} fill={connected ? "#22d3ee" : "#ef4444"} stroke="#020617" strokeWidth={connected ? "0.22" : "0.1"} />
+            <polygon
+              points={`${portPoint.x - 2.15},${y - 0.52} ${portPoint.x - 1.2},${y} ${portPoint.x - 2.15},${y + 0.52}`}
+              fill={connected ? "#22d3ee" : "#fecaca"}
+              stroke="#020617"
+              strokeWidth="0.08"
+              pointerEvents="none"
+            />
+            <text x={portPoint.x - 2.6} y={y + 0.45} fill="#d1fae5" fontSize="1.25" fontFamily="monospace">
+              {port + 1}
+            </text>
+          </g>
+        );
+      })}
+    </g>
+  );
+}
+
+function RouteShape({
+  route,
+  ledDensityPerMeter,
+  selected,
+  selectedPointIndex,
+  onPointerDown,
+  onDoubleClick,
+  onPointPointerDown
+}: {
+  route: DesignerRouteForm;
+  ledDensityPerMeter: number;
+  selected: boolean;
+  selectedPointIndex?: number;
+  onPointerDown: (event: React.PointerEvent<SVGPolylineElement>) => void;
+  onDoubleClick: (event: React.MouseEvent<SVGPolylineElement>) => void;
+  onPointPointerDown: (event: React.PointerEvent<SVGCircleElement>, pointIndex: number) => void;
+}) {
+  const points = route.points.map((point) => `${point.x},${point.y}`).join(" ");
+  const ledDots = route.kind === "led_string" ? sampleRouteLedDots(route, ledDensityPerMeter) : [];
+  const directionMarkers = routeDirectionMarkers(route);
+  return (
+    <g>
+      <polyline
+        points={points}
+        fill="none"
+        stroke="transparent"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        className="cursor-grab active:cursor-grabbing"
+        onPointerDown={onPointerDown}
+        onDoubleClick={onDoubleClick}
+      />
+      <polyline
+        points={points}
+        fill="none"
+        stroke={selected ? routeSelectedColor(route.kind) : routeColor(route)}
+        strokeWidth={route.kind === "data_cable" ? (selected ? 0.42 : 0.26) : 0.18}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        markerEnd="url(#designer-route-arrow)"
+        pointerEvents="none"
+      />
+      {ledDots.map((dot, index) => (
+        <circle
+          key={`led-${index}`}
+          cx={dot.x}
+          cy={dot.y}
+          r={selected ? 0.48 : 0.4}
+          fill={selected ? "#facc15" : "#f59e0b"}
+          stroke="#020617"
+          strokeWidth="0.1"
+          pointerEvents="none"
+        />
+      ))}
+      {directionMarkers.map((marker, index) => (
+        <g key={`direction-${index}`} transform={`translate(${marker.x} ${marker.y}) rotate(${marker.angle})`} pointerEvents="none">
+          <polygon
+            points="-0.85,-0.58 0.95,0 -0.85,0.58 -0.28,0 -0.85,-0.58"
+            fill={route.kind === "data_cable" ? "#bbf7d0" : "#fde68a"}
+            stroke="#020617"
+            strokeWidth="0.08"
+          />
+        </g>
+      ))}
+      {route.points.map((point, index) => (
+        <g key={index}>
+          {point.joint ? (
+            <circle
+              cx={point.x}
+              cy={point.y}
+              r="0.78"
+              fill="none"
+              stroke="#22d3ee"
+              strokeWidth="0.18"
+              pointerEvents="none"
+            />
+          ) : null}
+          <circle
+            cx={point.x}
+            cy={point.y}
+            r="1.05"
+            className="cursor-grab active:cursor-grabbing"
+            fill="transparent"
+            onPointerDown={(event) => onPointPointerDown(event, index)}
+          />
+          <circle
+            cx={point.x}
+            cy={point.y}
+            r={point.joint ? 0.5 : selectedPointIndex === index ? 0.42 : selected ? 0.32 : 0.24}
+            pointerEvents="none"
+            fill={point.joint ? "#22d3ee" : selectedPointIndex === index ? "#facc15" : index === 0 ? "#22c55e" : index === route.points.length - 1 ? "#ef4444" : "#e2e8f0"}
+            stroke="#020617"
+            strokeWidth={point.joint ? "0.22" : selectedPointIndex === index ? "0.18" : "0.1"}
+          />
+        </g>
+      ))}
+    </g>
+  );
+}
+
+function resizedZone(zone: DesignerZoneForm, handle: ResizeHandle, deltaX: number, deltaY: number, snapCm: number): Partial<DesignerZoneForm> {
+  const minSize = Math.max(1, snapCm);
+  let x = zone.x;
+  let y = zone.y;
+  let width = zone.width;
+  let height = zone.height;
+
+  if (handle.includes("w")) {
+    x = snapValue(zone.x + deltaX, snapCm);
+    width = zone.width + zone.x - x;
+  }
+  if (handle.includes("e")) width = zone.width + deltaX;
+  if (handle.includes("n")) {
+    y = snapValue(zone.y + deltaY, snapCm);
+    height = zone.height + zone.y - y;
+  }
+  if (handle.includes("s")) height = zone.height + deltaY;
+
+  return {
+    x,
+    y,
+    width: Math.max(minSize, snapValue(width, snapCm)),
+    height: Math.max(minSize, snapValue(height, snapCm))
+  };
+}
+
+function snapValue(value: number, snapCm: number) {
+  const step = Math.max(0.1, snapCm);
+  return Math.round(value / step) * step;
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
+
+function rulerTicks(startCm: number, endCm: number, spanCm: number, unit: DesignerForm["rulerUnit"]) {
+  const targetMajorTicks = 8;
+  const majorStep = niceRulerStep(spanCm / targetMajorTicks, unit);
+  const minorStep = majorStep / 5;
+  const first = Math.floor(startCm / minorStep) * minorStep;
+  const ticks: Array<{ cm: number; major: boolean; label: string }> = [];
+
+  for (let cm = first; cm <= endCm + minorStep; cm += minorStep) {
+    const majorIndex = Math.round(cm / majorStep);
+    const major = Math.abs(cm - majorIndex * majorStep) < minorStep * 0.08;
+    ticks.push({
+      cm,
+      major,
+      label: major ? formatRulerLabel(majorIndex * majorStep, unit) : ""
+    });
+  }
+
+  return ticks;
+}
+
+function niceRulerStep(rawStepCm: number, unit: DesignerForm["rulerUnit"]) {
+  if (unit === "in") {
+    const rawIn = Math.max(0.25, rawStepCm / 2.54);
+    const stepIn = niceNumber(rawIn);
+    return stepIn * 2.54;
+  }
+
+  if (rawStepCm >= 100) return niceNumber(rawStepCm / 100) * 100;
+  return niceNumber(Math.max(1, rawStepCm));
+}
+
+function niceNumber(value: number) {
+  const exponent = Math.floor(Math.log10(value));
+  const fraction = value / 10 ** exponent;
+  const niceFraction = fraction <= 1 ? 1 : fraction <= 2 ? 2 : fraction <= 5 ? 5 : 10;
+  return niceFraction * 10 ** exponent;
+}
+
+function formatRulerLabel(valueCm: number, unit: DesignerForm["rulerUnit"]) {
+  if (unit === "in") {
+    const inches = valueCm / 2.54;
+    if (Math.abs(inches) >= 12 && Math.abs(inches % 12) < 0.01) return `${Math.round(inches / 12)} ft`;
+    if (Math.abs(inches) >= 120) return `${(inches / 12).toFixed(1)} ft`;
+    return `${Math.round(inches)} in`;
+  }
+
+  if (Math.abs(valueCm) >= 100) {
+    const meters = valueCm / 100;
+    return Number.isInteger(meters) ? `${meters} m` : `${meters.toFixed(1)} m`;
+  }
+  return `${Math.round(valueCm)} cm`;
+}
+
+function formatMeasure(valueCm: number, unit: DesignerForm["rulerUnit"]) {
+  if (unit === "in") return `${(valueCm / 2.54).toFixed(1)} in`;
+  return `${valueCm} cm`;
+}
+
+function routeColor(route: DesignerRouteForm) {
+  if (route.kind === "data_cable") return "#22c55e";
+  return "#f59e0b";
+}
+
+function routeSelectedColor(kind: DesignerRouteKind) {
+  return kind === "data_cable" ? "#86efac" : "#facc15";
+}
+
+function summarizeRoute(route: DesignerRouteForm, designer: DesignerForm) {
+  const lengthCm = routeLengthCm(route);
+  return {
+    lengthCm,
+    leds: route.kind === "led_string" ? Math.max(0, Math.round(lengthCm * designer.ledDensityPerMeter / 100)) : 0
+  };
+}
+
+function routeLengthCm(route: DesignerRouteForm) {
+  return route.points.slice(1).reduce((total, point, index) => {
+    const previous = route.points[index];
+    return total + Math.hypot(point.x - previous.x, point.y - previous.y);
+  }, 0);
+}
+
+function routeDirectionMarkers(route: DesignerRouteForm) {
+  const markers: Array<{ x: number; y: number; angle: number }> = [];
+  route.points.slice(1).forEach((point, pointIndex) => {
+    const previous = route.points[pointIndex];
+    const lengthCm = Math.hypot(point.x - previous.x, point.y - previous.y);
+    if (lengthCm < 4) return;
+    const count = Math.max(1, Math.floor(lengthCm / 28));
+    const angle = Math.atan2(point.y - previous.y, point.x - previous.x) * 180 / Math.PI;
+    for (let index = 0; index < count; index += 1) {
+      const ratio = (index + 1) / (count + 1);
+      markers.push({
+        x: previous.x + (point.x - previous.x) * ratio,
+        y: previous.y + (point.y - previous.y) * ratio,
+        angle
+      });
+    }
+  });
+  return markers;
+}
+
+function isRouteTerminal(route: DesignerRouteForm, pointIndex: number) {
+  return pointIndex === 0 || pointIndex === route.points.length - 1;
+}
+
+function moveRoutePoint(routes: DesignerRouteForm[], routeId: string, pointIndex: number, point: DesignerPoint) {
+  return routes.map((route) => {
+    if (route.id !== routeId) return route;
+    return {
+      ...route,
+      points: route.points.map((routePoint, index) => index === pointIndex ? { ...routePoint, ...point } : routePoint)
+    };
+  });
+}
+
+function moveRouteTerminals(routes: DesignerRouteForm[], terminals: DesignerRouteTerminal[], point: DesignerPoint) {
+  const terminalKeys = new Set(terminals.map((terminal) => `${terminal.routeId}:${terminal.pointIndex}`));
+  return routes.map((route) => ({
+    ...route,
+    points: route.points.map((routePoint, index) => (
+      terminalKeys.has(`${route.id}:${index}`) ? { ...routePoint, ...point } : routePoint
+    ))
+  }));
+}
+
+function moveRouteWithSolderedTerminals(routes: DesignerRouteForm[], routeId: string, originalRoute: DesignerRouteForm, deltaX: number, deltaY: number, snapCm: number) {
+  const movedPoints = originalRoute.points.map((routePoint) => ({
+    ...routePoint,
+    x: snapValue(routePoint.x + deltaX, snapCm),
+    y: snapValue(routePoint.y + deltaY, snapCm)
+  }));
+  const solderedTerminals = [0, originalRoute.points.length - 1].flatMap((pointIndex) => {
+    if (!originalRoute.points[pointIndex]?.joint) return [];
+    return findJointGroup(routes, routeId, pointIndex, snapCm)
+      .filter((terminal) => terminal.routeId !== routeId || terminal.pointIndex !== pointIndex)
+      .map((terminal) => ({ ...terminal, point: movedPoints[pointIndex] }));
+  });
+
+  return routes.map((route) => {
+    if (route.id === routeId) return { ...route, points: movedPoints };
+    const routeTerminals = solderedTerminals.filter((terminal) => terminal.routeId === route.id);
+    if (!routeTerminals.length) return route;
+    return {
+      ...route,
+      points: route.points.map((point, index) => {
+        const matchingTerminal = routeTerminals.find((terminal) => terminal.pointIndex === index);
+        return matchingTerminal ? { ...point, ...matchingTerminal.point, joint: true } : point;
+      })
+    };
+  });
+}
+
+function canSolderRoutes(sourceRoute: DesignerRouteForm, sourcePointIndex: number, targetRoute: DesignerRouteForm, targetPointIndex: number, snapCm: number) {
+  if (!isRouteTerminal(sourceRoute, sourcePointIndex) || !isRouteTerminal(targetRoute, targetPointIndex)) return false;
+  if (!sameSnapPoint(sourceRoute.points[sourcePointIndex], targetRoute.points[targetPointIndex], snapCm)) return false;
+  const sourceRole = routeTerminalRole(sourcePointIndex);
+  const targetRole = routeTerminalRole(targetPointIndex);
+  return sourceRole !== targetRole;
+}
+
+function clearFloatingTerminalJoints(routes: DesignerRouteForm[], controller: DesignerControllerForm, snapCm: number) {
+  return routes.map((route) => ({
+    ...route,
+    points: route.points.map((point, pointIndex) => {
+      if (!point.joint || !isRouteTerminal(route, pointIndex)) return point;
+      if (route.kind === "data_cable" && pointIndex === 0 && findControllerPortAtPoint(controller, point, snapCm) !== null) return point;
+      const connectedToRoute = routes.some((candidateRoute) => {
+        if (candidateRoute.id === route.id) return false;
+        return [0, candidateRoute.points.length - 1].some((candidateIndex) => {
+          const candidatePoint = candidateRoute.points[candidateIndex];
+          if (!candidatePoint?.joint) return false;
+          return routeTerminalRole(pointIndex) !== routeTerminalRole(candidateIndex) && sameSnapPoint(point, candidatePoint, snapCm);
+        });
+      });
+      return connectedToRoute ? point : { ...point, joint: false };
+    })
+  }));
+}
+
+function routeTerminalRole(pointIndex: number) {
+  return pointIndex === 0 ? "input" : "output";
+}
+
+function controllerPortPoint(controller: DesignerControllerForm, portIndex: number, snapCm: number) {
+  const portSpacing = controller.height / (controller.dataOutputs + 1);
+  return {
+    x: snapValue(controller.x + controller.width, snapCm),
+    y: snapValue(controller.y + portSpacing * (portIndex + 1), snapCm)
+  };
+}
+
+function controllerConnectedPorts(controller: DesignerControllerForm, routes: DesignerRouteForm[], snapCm: number) {
+  const connectedPorts = new Set<number>();
+  routes.filter((route) => route.kind === "data_cable").forEach((route) => {
+    const terminal = route.points[0];
+    if (!terminal?.joint) return;
+    for (let portIndex = 0; portIndex < controller.dataOutputs; portIndex += 1) {
+      if (sameSnapPoint(terminal, controllerPortPoint(controller, portIndex, snapCm), snapCm)) {
+        connectedPorts.add(portIndex);
+      }
+    }
+  });
+  return connectedPorts;
+}
+
+function findMatchingControllerPort(controller: DesignerControllerForm, routes: DesignerRouteForm[], routeId: string, pointIndex: number, snapCm: number) {
+  const route = routes.find((entry) => entry.id === routeId);
+  if (!route || route.kind !== "data_cable" || pointIndex !== 0) return null;
+  return findControllerPortAtPoint(controller, route.points[pointIndex], snapCm);
+}
+
+function findControllerPortAtPoint(controller: DesignerControllerForm, point: DesignerPoint, snapCm: number) {
+  for (let portIndex = 0; portIndex < controller.dataOutputs; portIndex += 1) {
+    if (sameSnapPoint(point, controllerPortPoint(controller, portIndex, snapCm), snapCm)) return portIndex;
+  }
+  return null;
+}
+
+function moveControllerWithSolderedCables(designer: DesignerForm, originalController: DesignerControllerForm, nextController: DesignerControllerForm, originalRoutes: DesignerRouteForm[], snapCm: number) {
+  const portMoves = Array.from({ length: originalController.dataOutputs }, (_, portIndex) => ({
+    from: controllerPortPoint(originalController, portIndex, snapCm),
+    to: controllerPortPoint(nextController, portIndex, snapCm)
+  }));
+  const connectedCableMoves = originalRoutes.flatMap((route) => {
+    if (route.kind !== "data_cable") return [];
+    const terminal = route.points[0];
+    if (!terminal?.joint) return [];
+    const matchingPortMove = portMoves.find((portMove) => sameSnapPoint(terminal, portMove.from, snapCm));
+    return matchingPortMove ? [{ routeId: route.id, point: matchingPortMove.to }] : [];
+  });
+
+  return {
+    ...designer,
+    controller: nextController,
+    routes: designer.routes.map((route) => {
+      if (route.kind !== "data_cable") return route;
+      const matchingCableMove = connectedCableMoves.find((move) => move.routeId === route.id);
+      if (!matchingCableMove) return route;
+      return {
+        ...route,
+        points: route.points.map((point, index) => (
+          index === 0 ? { ...point, ...matchingCableMove.point, joint: true } : point
+        ))
+      };
+    })
+  };
+}
+
+function findJointGroup(routes: DesignerRouteForm[], routeId: string, pointIndex: number, snapCm: number) {
+  const sourceRoute = routes.find((route) => route.id === routeId);
+  const sourcePoint = sourceRoute?.points[pointIndex];
+  if (!sourceRoute || !sourcePoint) return [{ routeId, pointIndex }];
+  const terminals: DesignerRouteTerminal[] = [];
+
+  routes.forEach((route) => {
+    [0, route.points.length - 1].forEach((candidateIndex) => {
+      const candidatePoint = route.points[candidateIndex];
+      if (!candidatePoint?.joint) return;
+      if (sameSnapPoint(sourcePoint, candidatePoint, snapCm)) {
+        terminals.push({ routeId: route.id, pointIndex: candidateIndex });
+      }
+    });
+  });
+
+  return terminals.some((terminal) => terminal.routeId === routeId && terminal.pointIndex === pointIndex)
+    ? terminals
+    : [{ routeId, pointIndex }, ...terminals];
+}
+
+function findMatchingSolderTerminal(routes: DesignerRouteForm[], routeId: string, pointIndex: number, snapCm: number) {
+  const sourceRoute = routes.find((route) => route.id === routeId);
+  if (!sourceRoute) return null;
+
+  for (const route of routes) {
+    if (route.id === routeId) continue;
+    for (const candidateIndex of [0, route.points.length - 1]) {
+      if (canSolderRoutes(sourceRoute, pointIndex, route, candidateIndex, snapCm)) {
+        return { routeId: route.id, pointIndex: candidateIndex };
+      }
+    }
+  }
+
+  return null;
+}
+
+function sameSnapPoint(a: DesignerPoint, b: DesignerPoint, snapCm: number) {
+  return snapValue(a.x, snapCm) === snapValue(b.x, snapCm) && snapValue(a.y, snapCm) === snapValue(b.y, snapCm);
+}
+
+function distanceBetweenPoints(a: DesignerPoint, b: DesignerPoint) {
+  return Math.hypot(a.x - b.x, a.y - b.y);
+}
+
+function routeBounds(routes: DesignerRouteForm[]) {
+  const points = routes.flatMap((route) => route.points);
+  if (!points.length) return null;
+  return {
+    minX: Math.min(...points.map((point) => point.x)),
+    minY: Math.min(...points.map((point) => point.y)),
+    maxX: Math.max(...points.map((point) => point.x)),
+    maxY: Math.max(...points.map((point) => point.y))
+  };
+}
+
+function designerBounds(designer: DesignerForm) {
+  const routeBox = routeBounds(designer.routes);
+  const padding = Math.max(20, designer.snapCm * 8);
+  return {
+    minX: Math.min(0, routeBox?.minX ?? 0, designer.controller.x) - padding,
+    minY: Math.min(0, routeBox?.minY ?? 0, designer.controller.y) - padding,
+    maxX: Math.max(designer.canvasWidthCm, routeBox?.maxX ?? designer.canvasWidthCm, designer.controller.x + designer.controller.width) + padding,
+    maxY: Math.max(designer.canvasHeightCm, routeBox?.maxY ?? designer.canvasHeightCm, designer.controller.y + designer.controller.height) + padding
+  };
+}
+
+function clampViewport(viewport: DesignerViewport, designer: DesignerForm) {
+  const bounds = designerBounds(designer);
+  const minX = bounds.minX;
+  const minY = bounds.minY;
+  const maxX = Math.max(bounds.maxX - viewport.width, minX);
+  const maxY = Math.max(bounds.maxY - viewport.height, minY);
+  return {
+    ...viewport,
+    x: clamp(viewport.x, minX, maxX),
+    y: clamp(viewport.y, minY, maxY)
+  };
+}
+
+function fitViewportToDesigner(designer: DesignerForm) {
+  const bounds = designerBounds(designer);
+  return {
+    x: bounds.minX,
+    y: bounds.minY,
+    width: Math.max(1, bounds.maxX - bounds.minX),
+    height: Math.max(1, bounds.maxY - bounds.minY)
+  };
+}
+
+function nearestRouteInsertIndex(route: DesignerRouteForm, point: DesignerPoint) {
+  let insertIndex = route.points.length;
+  let nearestDistance = Number.POSITIVE_INFINITY;
+
+  route.points.slice(1).forEach((end, index) => {
+    const start = route.points[index];
+    const distance = pointToSegmentDistance(point, start, end);
+    if (distance < nearestDistance) {
+      nearestDistance = distance;
+      insertIndex = index + 1;
+    }
+  });
+
+  return insertIndex;
+}
+
+function pointToSegmentDistance(point: DesignerPoint, start: DesignerPoint, end: DesignerPoint) {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const lengthSquared = dx * dx + dy * dy;
+  if (lengthSquared === 0) return Math.hypot(point.x - start.x, point.y - start.y);
+  const t = clamp(((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared, 0, 1);
+  const projection = { x: start.x + t * dx, y: start.y + t * dy };
+  return Math.hypot(point.x - projection.x, point.y - projection.y);
+}
+
+function sampleRouteLedDots(route: DesignerRouteForm, ledDensityPerMeter: number) {
+  const pitchCm = 100 / Math.max(1, ledDensityPerMeter);
+  const dots: DesignerPoint[] = [];
+  route.points.slice(1).forEach((point, pointIndex) => {
+    const previous = route.points[pointIndex];
+    const lengthCm = Math.hypot(point.x - previous.x, point.y - previous.y);
+    const ledCount = Math.max(1, Math.round(lengthCm / pitchCm));
+    for (let index = 0; index < ledCount; index += 1) {
+      const ratio = (index + 0.5) / ledCount;
+      dots.push({
+        x: previous.x + (point.x - previous.x) * ratio,
+        y: previous.y + (point.y - previous.y) * ratio
+      });
+    }
+  });
+  return dots;
+}
+
+function buildDocumentFromDesigner(document: PartituraDocument): PartituraDocument {
+  const designer = document.designer;
+  if (!designer) return document;
+
+  const outputStarts: Record<number, number> = { 1: 0, 2: 0, 3: 0 };
+  const segments: SegmentForm[] = [];
+  const zoneSegments = new Map<string, string[]>();
+  designer.zones.forEach((zone) => zoneSegments.set(zone.id, []));
+
+  designer.routes.filter((route) => route.kind === "led_string").forEach((route) => {
+    route.points.slice(1).forEach((point, pointIndex) => {
+      const previous = route.points[pointIndex];
+      const lengthCm = Math.hypot(point.x - previous.x, point.y - previous.y);
+      const ledCount = Math.max(1, Math.round(lengthCm * designer.ledDensityPerMeter / 100));
+      const segmentId = `${route.id}_leg_${pointIndex + 1}`;
+      const stepX = (point.x - previous.x) / ledCount;
+      const stepY = (point.y - previous.y) / ledCount;
+      segments.push({
+        id: segmentId,
+        name: `${route.name} leg ${pointIndex + 1}`,
+        output: route.output,
+        start: outputStarts[route.output] ?? 0,
+        length: ledCount,
+        reverse: false,
+        x: previous.x + stepX * 0.5,
+        y: previous.y + stepY * 0.5,
+        stepX,
+        stepY
+      });
+      outputStarts[route.output] = (outputStarts[route.output] ?? 0) + ledCount;
+      const routeZoneSegments = zoneSegments.get(route.zoneId) ?? [];
+      routeZoneSegments.push(segmentId);
+      zoneSegments.set(route.zoneId, routeZoneSegments);
+    });
+  });
+
+  const zones: ZoneForm[] = designer.zones.map((zone) => ({
+    id: zone.id,
+    name: zone.name,
+    segments: zoneSegments.get(zone.id) ?? []
+  }));
+  zones.push({ id: "rotulo_completo", name: "Rotulo completo", segments: segments.map((segment) => segment.id) });
+
+  const validTargets = new Set(zones.map((zone) => zone.id));
+  return {
+    ...document,
+    chain1Pixels: outputStarts[1],
+    chain2Pixels: outputStarts[2],
+    chain3Pixels: outputStarts[3],
+    segments,
+    zones,
+    scenes: document.scenes.map((scene) => ({
+      ...scene,
+      clips: scene.clips.map((clip) => validTargets.has(clip.target) ? clip : { ...clip, target: "rotulo_completo" })
+    }))
+  };
 }
 
 type LabPresetId = "strip_300" | "matrix_20x15" | "matrix_25x12" | "dual_20x15" | "five_letter_sign" | "six_letter_sign";

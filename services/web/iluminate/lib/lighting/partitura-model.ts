@@ -17,6 +17,56 @@ export type ZoneForm = {
   segments: string[];
 };
 
+export type DesignerPoint = {
+  x: number;
+  y: number;
+  joint?: boolean;
+};
+
+export type DesignerZoneForm = {
+  id: string;
+  name: string;
+  shape: "rect" | "ellipse";
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+export type DesignerRouteKind = "led_string" | "data_cable";
+
+export type DesignerRouteForm = {
+  id: string;
+  name: string;
+  kind: DesignerRouteKind;
+  output: number;
+  zoneId: string;
+  points: DesignerPoint[];
+};
+
+export type DesignerControllerForm = {
+  id: string;
+  name: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  dataOutputs: number;
+};
+
+export type DesignerForm = {
+  canvasWidthCm: number;
+  canvasHeightCm: number;
+  ledDensityPerMeter: number;
+  snapCm: number;
+  rulerUnit: "cm" | "in";
+  rulerVisible: boolean;
+  sourceSvg: string | null;
+  controller: DesignerControllerForm;
+  zones: DesignerZoneForm[];
+  routes: DesignerRouteForm[];
+};
+
 export type ClipParams = Record<string, string | number | boolean | null | string[] | number[]>;
 
 export type ClipForm = {
@@ -50,6 +100,7 @@ export type PartituraDocument = {
   activeSceneId: string;
   previewTimeMs: number;
   accentColor: string;
+  designer?: DesignerForm;
 };
 
 export type PersistedPartitura = {
@@ -67,6 +118,7 @@ export type PersistedPartitura = {
 };
 
 export function createDefaultPartituraDocument(projectId = "web_test_partitura"): PartituraDocument {
+  const designer = createDefaultDesigner();
   return {
     projectId,
     chain1Pixels: 100,
@@ -171,7 +223,8 @@ export function createDefaultPartituraDocument(projectId = "web_test_partitura")
     ],
     activeSceneId: "calibration",
     previewTimeMs: 1000,
-    accentColor: "#FFFFFF"
+    accentColor: "#FFFFFF",
+    designer
   };
 }
 
@@ -181,6 +234,7 @@ export function clonePartituraDocument(document: PartituraDocument) {
 
 export function normalizeDefaultSignLayout(document: PartituraDocument) {
   const next = clonePartituraDocument(document);
+  next.designer = normalizeDesigner(next.designer);
   const segmentsById = new Map(next.segments.map((segment) => [segment.id, segment]));
   const star = segmentsById.get("estrella_ring") ?? segmentsById.get("estrella_segment");
   const secondLetter = segmentsById.get("letra_2_segment");
@@ -197,6 +251,76 @@ export function normalizeDefaultSignLayout(document: PartituraDocument) {
   applySegmentLayout(segmentsById, "letra_4_segment", { x: 84, y: 6, stepX: 1, stepY: 0 });
 
   return next;
+}
+
+export function createDefaultDesigner(): DesignerForm {
+  return {
+    canvasWidthCm: 170,
+    canvasHeightCm: 40,
+    ledDensityPerMeter: 60,
+    snapCm: 2,
+    rulerUnit: "cm",
+    rulerVisible: true,
+    sourceSvg: null,
+    controller: {
+      id: "controller",
+      name: "Controller",
+      x: 4,
+      y: 4,
+      width: 12,
+      height: 12,
+      dataOutputs: 3
+    },
+    zones: [
+      { id: "fondo", name: "Fondo", shape: "rect", x: 42, y: 2, width: 60, height: 16 },
+      { id: "estrella", name: "Estrella", shape: "ellipse", x: 108, y: 2, width: 18, height: 18 },
+      { id: "letras", name: "Letras", shape: "rect", x: 42, y: 22, width: 100, height: 14 },
+      { id: "letra_1", name: "Letra 1", shape: "rect", x: 42, y: 24, width: 22, height: 10 },
+      { id: "letra_2", name: "Letra 2", shape: "rect", x: 68, y: 24, width: 22, height: 10 },
+      { id: "letra_3", name: "Letra 3", shape: "rect", x: 94, y: 24, width: 22, height: 10 },
+      { id: "letra_4", name: "Letra 4", shape: "rect", x: 120, y: 24, width: 22, height: 10 }
+    ],
+    routes: [
+      { id: "route_fondo", name: "Fondo LED string", kind: "led_string", output: 1, zoneId: "fondo", points: [{ x: 44, y: 4, joint: true }, { x: 100, y: 4 }, { x: 100, y: 8 }, { x: 44, y: 8 }, { x: 44, y: 12 }, { x: 100, y: 12 }] },
+      { id: "route_estrella", name: "Estrella LED string", kind: "led_string", output: 2, zoneId: "estrella", points: [{ x: 110, y: 12 }, { x: 124, y: 12 }] },
+      { id: "route_letras", name: "Letras LED string", kind: "led_string", output: 3, zoneId: "letras", points: [{ x: 44, y: 30 }, { x: 64, y: 30 }, { x: 70, y: 30 }, { x: 90, y: 30 }, { x: 96, y: 30 }, { x: 116, y: 30 }, { x: 122, y: 30 }, { x: 142, y: 30 }] },
+      { id: "data_feed_1", name: "Data cable", kind: "data_cable", output: 1, zoneId: "fondo", points: [{ x: 16, y: 8, joint: true }, { x: 32, y: 8 }, { x: 32, y: 4 }, { x: 44, y: 4, joint: true }] }
+    ]
+  };
+}
+
+function normalizeDesigner(designer?: DesignerForm): DesignerForm {
+  const fallback = createDefaultDesigner();
+  if (!designer) return fallback;
+  return {
+    canvasWidthCm: positiveNumber(designer.canvasWidthCm, fallback.canvasWidthCm),
+    canvasHeightCm: positiveNumber(designer.canvasHeightCm, fallback.canvasHeightCm),
+    ledDensityPerMeter: positiveNumber(designer.ledDensityPerMeter, fallback.ledDensityPerMeter),
+    snapCm: positiveNumber(designer.snapCm, fallback.snapCm),
+    rulerUnit: designer.rulerUnit === "in" ? "in" : "cm",
+    rulerVisible: typeof designer.rulerVisible === "boolean" ? designer.rulerVisible : fallback.rulerVisible,
+    sourceSvg: typeof designer.sourceSvg === "string" ? designer.sourceSvg : null,
+    controller: normalizeController(designer.controller, fallback.controller),
+    zones: Array.isArray(designer.zones) && designer.zones.length ? designer.zones : fallback.zones,
+    routes: Array.isArray(designer.routes) && designer.routes.length ? designer.routes.map((route) => ({ ...route, kind: route.kind === "data_cable" ? "data_cable" : "led_string" })) : fallback.routes
+  };
+}
+
+function normalizeController(controller: DesignerControllerForm | undefined, fallback: DesignerControllerForm) {
+  if (!controller) return fallback;
+  return {
+    id: "controller",
+    name: typeof controller.name === "string" && controller.name.trim() ? controller.name : fallback.name,
+    x: typeof controller.x === "number" && Number.isFinite(controller.x) ? controller.x : fallback.x,
+    y: typeof controller.y === "number" && Number.isFinite(controller.y) ? controller.y : fallback.y,
+    width: positiveNumber(controller.width, fallback.width),
+    height: positiveNumber(controller.height, fallback.height),
+    dataOutputs: Math.max(1, Math.round(positiveNumber(controller.dataOutputs, fallback.dataOutputs)))
+  };
+}
+
+function positiveNumber(value: number | undefined, fallback: number) {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
 function applySegmentLayout(

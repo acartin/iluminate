@@ -9,6 +9,7 @@ import {
   ChevronDown,
   ClipboardCheck,
   Cog,
+  DraftingCompass,
   FileText,
   FolderKanban,
   Inbox,
@@ -41,6 +42,7 @@ const icons: Record<string, React.ComponentType<{ className?: string }>> = {
   users: Users,
   roles: Shield,
   "partitura-generator": Sparkles,
+  designer: DraftingCompass,
   audit: KeyRound,
   security: KeyRound
 };
@@ -64,6 +66,7 @@ const bubbleClasses: Record<string, string> = {
   users: "bg-[var(--blue-bg)] text-[var(--blue-text)]",
   roles: "bg-[var(--purple-bg)] text-[var(--purple-text)]",
   "partitura-generator": "bg-[var(--amber-bg)] text-[var(--amber-text)]",
+  designer: "bg-[var(--blue-bg)] text-[var(--blue-text)]",
   audit: "bg-[var(--coral-bg)] text-[var(--coral-text)]"
 };
 

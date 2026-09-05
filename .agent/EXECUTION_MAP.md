@@ -25,6 +25,8 @@ Este archivo define donde validar cambios segun la ruta afectada. En Iluminate, 
 | `services/lighting-core/pixel-map/` | Build core y validar generation/simulation por API si afecta web | `docker compose up -d --build iluminate-web` |
 | `services/lighting-core/domain/effects/` | Build core/web y smoke de `/api/lighting/effects`; si cambia renderer, generar frame de Lab por API | `docker compose up -d --build iluminate-web` |
 | `services/web/iluminate/components/lighting/partitura-workspace.tsx` | Build Next y smoke manual/API de Partitura Workspace y Effect Lab | `docker compose up -d --build iluminate-web` |
+| `services/web/iluminate/components/lighting/partitura-designer-workbench.tsx` | Build Next y smoke manual/API del grid Designer | `docker compose up -d --build iluminate-web` |
+| `services/web/iluminate/lib/lighting/partitura-model.ts` | Build Next/core; si cambia Designer defaults, revisar API/DB porque documentos persistidos pueden ocultar cambios | `docker compose up -d --build iluminate-web` |
 | `services/auth/` | Por ahora docs/estructura; futuro tests/API auth | no aplica hasta tener runtime |
 | `services/simulator/` | Por ahora docs/estructura; futuro tests deterministas | no aplica hasta tener runtime |
 | `services/device-protocol/` | Contratos y fixtures; futuro tests de schema | no aplica hasta tener runtime |
@@ -66,3 +68,29 @@ Cuando cambien efectos, presets de Lab, `pixelMap` o simulacion:
 3. Generar un frame por API para al menos una matriz `20x15` o un template de letras.
 4. Confirmar que el frame contiene coordenadas `x/y`, pixel count esperado y variedad de colores cuando aplique.
 5. Si el cambio no toca firmware, indicarlo explicitamente.
+
+## Smoke recomendado para Designer
+
+Cuando cambien canvas, defaults, rutas, snap/soldadura, controlador o persistencia:
+
+1. Ejecutar `git diff --check`.
+2. Reconstruir `iluminate-web` con `docker compose up -d --build iluminate-web`.
+3. Verificar que `/partituras/designer` liste la partitura activa.
+4. Verificar por API que el documento activo esperado sea visible:
+
+```bash
+curl -s http://localhost:8420/api/lighting/partituras | jq -r '.records[] | "\(.id) \(.partituraKey) \(.name) \(.status) \(.document.designer.canvasWidthCm)cm routes=\(.document.designer.routes|length)"'
+```
+
+Estado local esperado tras el reset actual:
+
+```text
+1 default_installation Default Installation draft 170cm routes=4
+```
+
+5. Probar manualmente en `/partituras/designer/1`:
+   - controller arriba a la izquierda sin encimar Fondo;
+   - puerto rojo + terminal verde de cable suelda solo si comparten snap point;
+   - terminal verde + rojo entre rutas suelda solo si comparten snap point;
+   - arrastrar controller mueve cables conectados;
+   - borrar una ruta limpia cian flotante.

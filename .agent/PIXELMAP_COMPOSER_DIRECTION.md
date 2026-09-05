@@ -1,6 +1,6 @@
 # PixelMap Composer Direction
 
-**Last updated:** 2026-09-02  
+**Last updated:** 2026-09-05
 **Purpose:** preserve the current product/architecture direction for the real sign composer.
 
 ## Current Decision
@@ -12,7 +12,7 @@ The operator should not be forced to understand the hidden mega matrix, firmware
 ```text
 SVG/render of the sign
 -> visual zones
--> continuous LED routes
+-> continuous LED routes plus optional data cables
 -> generated real LED points
 -> pixelMap
 -> effects
@@ -109,6 +109,26 @@ Each generated LED receives:
 - zone memberships;
 - local coordinates per relevant zone.
 
+### Data Cables And Controller
+
+The Designer also models green `Data cable` routes for signal planning. Data cables do not generate LEDs or pixelMap entries.
+
+The controller card is part of the canvas:
+
+- it is movable and persisted;
+- it is not deletable;
+- it starts with 3 red output ports;
+- controller ports connect only to the green/input terminal of a data cable;
+- a connected port and joint render cyan.
+
+Snap/solder behavior is exact-grid based:
+
+- no tolerance-based soldering;
+- no separate solder/cautin tool;
+- route green + route red on the same snap point solders;
+- controller red port + data-cable green terminal on the same snap point solders;
+- floating cyan joints must be cleaned when routes are deleted.
+
 ### pixelMap
 
 `pixelMap` is the generated georeferencing layer:
@@ -173,6 +193,10 @@ Implemented so far:
 - `pixelMap` is generated and validated.
 - `services/lighting-core/pixel-map/` exists as an internal module.
 - Web simulator renders `pixelMap` coordinates.
+- `/partituras/designer` lists partituras using the platform grid pattern.
+- `/partituras/designer/[id]` opens a full-screen Designer studio.
+- The Designer supports selection, copy, paste, delete, zoom, pan, rulers, snap, rectangle/ellipse zones, LED strings, data cables, route point editing, route cutting and exact snap soldering.
+- The controller card supports red output ports, data-cable attachment and moving attached cables when the controller is dragged.
 - `Effect Lab` exists in the partitura workspace with:
   - matrix presets;
   - two-panel preset;
@@ -187,12 +211,11 @@ Implemented so far:
 Not yet implemented:
 
 - SVG upload/composer.
-- Zone drawing tools.
-- LED route drawing.
-- Project-level LED density setting.
-- Route sampling from paths.
+- Polygon/freeform zone drawing.
 - Zone-local coordinate serialization in final generated artifact.
 - Visual electrical validation workflow.
+- Density-change warning/reset workflow.
+- Cutting or separating soldered joints.
 
 ## Important Guidance For Future Agents
 
@@ -202,3 +225,4 @@ Not yet implemented:
 - Do not treat firmware as the priority while effects/composer concepts are still being shaped.
 - Keep `pixelMap` as generated data, not as the normal editing surface.
 - Use the Effect Lab to test effect behavior, not fabrication workflows.
+- Read `.agent/DESIGNER_HANDOFF.md` before changing Designer routing, soldering, controller or defaults.

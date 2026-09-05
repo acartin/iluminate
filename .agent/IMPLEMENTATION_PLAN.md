@@ -32,7 +32,7 @@ Current product direction:
 ```text
 SVG/canvas of real sign
 -> zones such as letters, words, logo and full_sign
--> continuous LED routes drawn by the operator
+-> continuous LED strings drawn by the operator, plus optional green data cables for signal planning
 -> sampled real LED points using one project LED density
 -> generated pixelMap
 -> spatial/linear effects
@@ -40,7 +40,32 @@ SVG/canvas of real sign
 
 The hidden mega matrix is useful as an internal coordinate field for effects, but the operator should not be forced to see or manage it. Matrix presets remain useful only inside `Effect Lab`.
 
-See `.agent/PIXELMAP_COMPOSER_DIRECTION.md` before redesigning the composer, pixelMap model, effect scope, or UI workflow.
+See `.agent/PIXELMAP_COMPOSER_DIRECTION.md` before redesigning the composer, pixelMap model, effect scope, or UI workflow. For current Designer behavior, read `.agent/DESIGNER_HANDOFF.md` first.
+
+UX direction after starting the Designer branch:
+
+- `Partitura Generator` remains the administrative/workbench area for persistence, scenes, technical layout and simulator.
+- `Designer` is now a first-class menu item.
+- `/partituras/designer` lists tenant partituras using the standard grid/action pattern.
+- `/partituras/designer/[id]` opens a full-screen studio without the normal app shell.
+- The studio follows graphics-app conventions: top command bar, contextual top properties bar, left tool rail, dominant central canvas and bottom status bar.
+- The studio now supports first-pass graphics editing: selection, zoom, pan, create zone tools, move, resize, copy, paste, delete, route move and route point editing.
+- The active local default partitura is `id=1`, `partitura_key=default_installation`, reset to a clean `170x40 cm` Designer document. `default_installation_2` is soft-deleted.
+- The right inspector panel was removed. Document/object properties moved to the top system bar to keep the canvas wide.
+- The canvas has intelligent rulers in `cm` or `in`; labels stay screen-readable and automatically promote to `m` or `ft` when the visible span is large. Canonical stored coordinates remain centimeters.
+- Rulers are optional and can be hidden from the top system bar to recover canvas space.
+- Formal import direction is SVG-only for the production model. Raster images may be references later, but SVG is the geometry source.
+- Designer route vocabulary is split into `LED string` and `Data cable`. `LED string` is amber/orange and compiles into LEDs/segments/pixelMap. `Data cable` is always green, is visual-only, and is ignored by layout compilation.
+- LED count is derived from real route length and project density. Example: at `60 LED/m`, a `100 cm` LED string should compile to about 60 LEDs. A 54 LED result means the route is about 90 cm or the canvas scale is off.
+- Every Designer document owns one controller card on the canvas. The controller is movable and persisted, but not deletable. It starts with 3 data connectors; future configuration should support different controller profiles, including 12-output controllers.
+- Route points are fabrication nodes, not LEDs. Double-clicking a route segment inserts a node/bend. Selecting an internal node enables point deletion and route cutting. Cutting splits one continuous route into two continuous routes. LED points are sampled inside each leg with a half-step offset, so cuts/bends sit between LEDs instead of replacing LEDs.
+- Route direction convention: green node = start/input/DIN, red node = end/output/DOUT, arrow = serial flow.
+- Direction must be visible beyond terminal color: route segments render inline flow arrows and controller ports render arrows inside the PCB pointing toward the port.
+- Soldering is automatic only when terminals land on the same grid snap point. Green terminal plus red terminal on the exact same snap point solders, regardless of whether the route is `LED string` or `Data cable`; if they do not share that snap point, nothing solders. The canvas marks the joint in cyan and persists `joint: true`. Same-kind routes are merged and the duplicate terminal disappears. Mixed `Data cable` + `LED string` joints remain separate route types, but dragging the cyan joint or moving a soldered route endpoint keeps connected terminals together as one physical point. Output/zone validation may be added later as warnings, but must not block drawing.
+- Controller ports are red output snap terminals. A `Data cable` green/input terminal on the exact same snap point as a controller port solders to that port, paints the port cyan, assigns the cable output from the port number and moves with the controller card when the card is dragged.
+- Deleting routes must reconcile `joint: true`; cyan may remain only on a real terminal/port connection.
+- The Designer geometry is suitable for a later electrical emulator because controller ports, data cables, LED strings, terminals and cyan joints form a physical connectivity graph. Future validation should derive continuity and warnings from that graph.
+- Layout technical grids remain available for debug/inspection, but the production workflow should keep moving toward the visual studio.
 
 ---
 
@@ -130,28 +155,42 @@ See `.agent/PIXELMAP_COMPOSER_DIRECTION.md` before redesigning the composer, pix
 
 ### Deliverables
 
-- [ ] Align `services/web/iluminate` navigation with Iluminate domain.
+- [x] Align initial Designer navigation with Iluminate domain.
 - [ ] Add Projects placeholder.
-- [ ] Add Project Editor route.
+- [x] Add initial full-screen Designer route.
 - [ ] Add SVG/render/plan upload placeholder.
-- [ ] Add real sign canvas area.
-- [ ] Add scale calibration tool in cm/mm.
-- [ ] Add one project-level LED density setting.
+- [x] Add initial real sign canvas area.
+- [x] Add initial scale model in cm.
+- [x] Add one project-level LED density setting.
 - [ ] Warn and reset routes/cabling when LED density changes.
-- [ ] Add zone drawing tools: rectangle, circle and polygon.
-- [ ] Allow zones such as letters, words, logo, background and full sign.
-- [ ] Store zone geometry and bounds in the editable document.
-- [ ] Add optional rulers/grid/snap guides only as routing aids.
-- [ ] Draw continuous directional LED routes over the canvas.
-- [ ] Assign each route to logical output `1`, `2` or `3`.
-- [ ] Sample route points using project LED density.
-- [ ] Generate serial LED indices from route order.
+- [ ] Add zone drawing tools: rectangle, circle and polygon. Current MVP creates rectangle/ellipse zones from toolbar and edits them on-canvas.
+- [x] Allow zones such as letters, words, logo, background and full sign.
+- [x] Store zone geometry and bounds in the editable document.
+- [x] Add optional rulers/grid/snap guides only as routing aids.
+- [x] Model continuous directional LED strings over the canvas. Current MVP edits route points on-canvas.
+- [x] Model green data cables separately from LED strings. Data cables do not generate LEDs.
+- [x] Add a persistent, movable, non-deletable controller card with 3 default data connectors.
+- [x] Add exact snap connection from controller red output ports to data-cable green input terminal.
+- [x] Keep cables attached when dragging the controller.
+- [x] Assign each route to logical output `1`, `2` or `3`.
+- [x] Sample route points using project LED density.
+- [x] Generate serial LED indices from route order.
 - [ ] Show LED points and indices during route editing.
 - [ ] Represent non-LED jumpers/continuations between route portions.
 - [ ] Calculate zone membership for each sampled LED.
-- [ ] Generate `pixelMap` from routed real LED points.
+- [x] Generate `pixelMap` from routed real LED points through compiled segments.
 - [ ] Keep raw `pixelMap` hidden from normal operators.
 - [ ] Export partitura through `lighting-core`.
+- [x] Add basic canvas zoom and pan.
+- [x] Add basic object selection.
+- [x] Add basic zone move and resize handles.
+- [x] Add basic route move and route point editing.
+- [x] Add route segment double-click insertion for bends/cut points.
+- [x] Add internal route point delete and route cut/split actions.
+- [x] Add toolbox cut tool and automatic snap-solder behavior for route fabrication editing.
+- [x] Add toolbox delete action and floating-joint cleanup after route deletion.
+- [x] Keep fabrication nodes separate from LED dots in both visual route rendering and compiled segment start/step math.
+- [x] Add copy, paste and delete actions for selected designer objects.
 
 ### Exit Criteria
 

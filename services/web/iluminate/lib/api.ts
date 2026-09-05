@@ -44,6 +44,13 @@ export const menuCatalog: MenuSection[] = [
         href: "/partituras/generator",
         description: "Internal generator and validation workbench for partitura.v1.",
         required_permission: "lighting:partituras:manage"
+      },
+      {
+        id: "designer",
+        label: "Designer",
+        href: "/partituras/designer",
+        description: "Full-screen visual composer for signs, zones and LED routing.",
+        required_permission: "lighting:partituras:manage"
       }
     ]
   },
