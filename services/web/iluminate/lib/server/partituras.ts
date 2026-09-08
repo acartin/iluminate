@@ -39,7 +39,7 @@ export function mapPartitura(row: PartituraRow): PersistedPartitura {
     name: row.name,
     clientName: row.client_name,
     status: row.status,
-    document: row.document_json,
+    document: normalizeDefaultSignLayout(row.document_json),
     generatedPartitura: row.generated_json ?? undefined,
     validationReport: row.validation_report ?? undefined,
     createdAt: timestamp(row.created_at),

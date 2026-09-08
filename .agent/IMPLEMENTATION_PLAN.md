@@ -56,7 +56,7 @@ UX direction after starting the Designer branch:
 - Rulers are optional and can be hidden from the top system bar to recover canvas space.
 - Formal import direction is SVG-only for the production model. Raster images may be references later, but SVG is the geometry source.
 - Designer route vocabulary is split into `LED string` and `Data cable`. `LED string` is amber/orange and compiles into LEDs/segments/pixelMap. `Data cable` is always green, is visual-only, and is ignored by layout compilation.
-- LED count is derived from real route length and project density. Example: at `60 LED/m`, a `100 cm` LED string should compile to about 60 LEDs. A 54 LED result means the route is about 90 cm or the canvas scale is off.
+- Addressable pixel count is derived from real route length and `Pixels/m`. Example: at `60 Pixels/m`, a `100 cm` LED string should compile to about 60 addressable pixels. `LEDs/m` is separate and represents physical emitters for preview/simulation, so WS2811 strips can model multiple physical LEDs per addressable pixel.
 - Every Designer document owns one controller card on the canvas. The controller is movable and persisted, but not deletable. It starts with 3 data connectors; future configuration should support different controller profiles, including 12-output controllers.
 - Route points are fabrication nodes, not LEDs. Double-clicking a route segment inserts a node/bend. Selecting an internal node enables point deletion and route cutting. Cutting splits one continuous route into two continuous routes. LED points are sampled inside each leg with a half-step offset, so cuts/bends sit between LEDs instead of replacing LEDs.
 - Route direction convention: green node = start/input/DIN, red node = end/output/DOUT, arrow = serial flow.

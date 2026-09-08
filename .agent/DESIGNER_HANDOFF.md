@@ -55,13 +55,48 @@ New/default documents should start with:
 - A clear left strip for controller/cable work.
 - Default sign zones/routes shifted to the right, starting around `x=42`.
 - Canvas width `170 cm`, height `40 cm`.
-- Density `60 LED/m`.
+- Addressable density `60 Pixels/m`.
+- Physical emitter density `60 LEDs/m`.
+- Derived physical ratio defaults to `1 LED/px`.
 - Snap `2 cm`.
 - Three controller outputs by default.
 
 Do not put default zones/routes underneath the controller. If a screenshot shows the PCB overlapping Fondo or a route, the document is likely old/persisted or the defaults regressed.
 
 ## Visual Vocabulary
+
+### Addressable Pixels vs Physical LEDs
+
+Do not assume one addressable pixel is always one physical LED.
+
+- `Pixels/m` means addressable WS281x pixels per meter. This is the density used to compile segments, chain counts, pixel indices and firmware frames.
+- `LEDs/m` means physical light emitters per meter. This is used by the Designer/simulator to preview how a real 5V, 12V or 24V strip may look.
+- `LEDs/px` is derived from `LEDs/m / Pixels/m`. Examples: WS2812B 5V is normally `1 LED/px`; many WS2811 12V strips are around `3 LEDs/px`; some 24V strips may be around `6 LEDs/px`.
+- The firmware still emits WS281x frames by addressable pixel. Electrical implementation beyond the data output is not part of the partitura contract.
+
+### Canvas Layers
+
+The Designer separates three persisted visual layers:
+
+- `Reference`: art/reference plane. It renders below zones, does not generate LEDs and can later contain SVG, JPG, PNG, BMP or WebP.
+- `Zones`: visual targets such as letters, logos, background and full sign.
+- `Strings`: physical fabrication plane containing LED strings, data cables, terminals, joints and the controller.
+
+Each layer has `visible`, `locked` and `opacity`. Hidden layers do not render or receive selection. Locked layers remain visible but cannot be edited from the canvas/toolbox/top properties.
+
+The right Layers panel is the active-plane selector. Exactly one layer is active at a time, and the active layer must have a clearly different background. Visibility and lock buttons are secondary controls, not the active selection state. Canvas editing only applies to the active layer: build area/reference edits only when `Reference` is active; zones edit only when `Zones` is active; routes/controller edit only when `Strings` is active. Tools must not switch the active layer. The toolbox should show only the tools that apply to the active layer, plus global navigation/actions such as select, pan, zoom and delete.
+
+`Build Areas` are editable reference geometries. They are not containers and do not own/delete zones or strings. Multiple build areas may exist. They currently support rectangle, ellipse and polygon. The overall canvas can be larger to leave room for controller, cables and notes. Reference artwork should be positioned/scaled into a build area, not forced to occupy the whole canvas.
+
+Render order:
+
+```text
+Grid/rulers
+-> Reference artwork / Build Area
+-> Zones
+-> Strings/controller/terminals
+-> selection handles
+```
 
 ### Route Types
 
@@ -73,6 +108,7 @@ Do not put default zones/routes underneath the controller. If a screenshot shows
 - Route green terminal: input/start/DIN.
 - Route red terminal: output/end/DOUT.
 - Controller port: red output terminal.
+- Internal fabrication node/bend/cut point: violet. It is not a LED, terminal or solder joint.
 - Route arrows show flow from green to red.
 - Controller port arrows should be drawn inside the PCB, pointing toward the red port, so they do not look like extra connection points.
 
@@ -117,6 +153,7 @@ Drag behavior:
 - Dragging a cyan solder joint moves all terminals in that joint together.
 - Dragging a route with a soldered endpoint keeps connected route terminals attached.
 - Dragging the controller moves data cables soldered to its ports with it.
+- Dragging a data cable that is soldered to a controller port must keep the cable input terminal anchored to that port; the controller does not move.
 - To avoid detach bugs during controller drag, use a snapshot of the original routes captured at drag start.
 
 ## Current Tools
@@ -126,12 +163,36 @@ Left toolbox:
 - Select.
 - Rectangle zone.
 - Ellipse zone.
-- LED string.
-- Data cable.
+- LED string: click-to-trace tool. First canvas click places the green DIN/start terminal, second click creates the first real segment and red DOUT/end terminal, each later click appends a bend/cut node and moves the red terminal to the new end.
+- Data cable: same click-to-trace behavior as LED string, but green signal-only rendering and no LED generation.
 - Cut route.
 - Delete selected.
 - Pan.
 - Zoom in/out/fit.
+
+Reference tools:
+
+- Rectangle Build Area.
+- Ellipse Build Area.
+- Polygon/Pen Build Area.
+
+Zone tools:
+
+- Rectangle Zone.
+- Ellipse Zone.
+- Polygon/Pen Zone.
+
+Polygon/Pen behavior:
+
+- Click adds points.
+- Clicking the first snap point again closes the polygon.
+- Escape cancels the draft.
+- Selected polygons expose editable node handles.
+- Clicking a polygon node selects that node and shows `Point N` with `PX/PY` in the contextual toolbar.
+- Dragging a selected node reshapes the polygon without moving the full object.
+- Double-clicking a polygon edge inserts a new node on that edge.
+- Delete/Backspace or the `Point` delete action removes the selected node, but polygons must keep at least 3 points.
+- Moving/resizing a polygon moves/scales its nodes.
 
 There is no solder/cautin tool. Do not add it back.
 
@@ -146,8 +207,8 @@ Top command/context bars:
 
 ## Current Limitations
 
-- SVG import is still pending.
-- Polygon/freeform zones are pending.
+- Reference image import is still pending. The product should support SVG plus raster image references such as JPG, PNG, BMP and WebP.
+- Bezier path and freehand trace tools are pending. AI trace is intentionally out of scope for now.
 - Electrical validation is conceptual, not implemented.
 - Cutting welded joints needs a future UX decision.
 - LED density changes do not yet reset/recompute routing with a warning.

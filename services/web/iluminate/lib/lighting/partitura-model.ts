@@ -26,11 +26,15 @@ export type DesignerPoint = {
 export type DesignerZoneForm = {
   id: string;
   name: string;
-  shape: "rect" | "ellipse";
+  shape: "rect" | "ellipse" | "polygon";
   x: number;
   y: number;
   width: number;
   height: number;
+  points?: DesignerPoint[];
+  visible: boolean;
+  locked: boolean;
+  opacity: number;
 };
 
 export type DesignerRouteKind = "led_string" | "data_cable";
@@ -54,14 +58,44 @@ export type DesignerControllerForm = {
   dataOutputs: number;
 };
 
+export type DesignerLayerSettings = {
+  visible: boolean;
+  locked: boolean;
+  opacity: number;
+};
+
+export type DesignerLayersForm = {
+  reference: DesignerLayerSettings;
+  zones: DesignerLayerSettings;
+  strings: DesignerLayerSettings;
+};
+
+export type DesignerBuildAreaForm = {
+  id: string;
+  name: string;
+  shape: "rect" | "ellipse" | "polygon";
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  points?: DesignerPoint[];
+  visible: boolean;
+  locked: boolean;
+  opacity: number;
+};
+
 export type DesignerForm = {
   canvasWidthCm: number;
   canvasHeightCm: number;
+  addressablePixelsPerMeter: number;
+  ledsPerMeter: number;
   ledDensityPerMeter: number;
   snapCm: number;
   rulerUnit: "cm" | "in";
   rulerVisible: boolean;
   sourceSvg: string | null;
+  layers: DesignerLayersForm;
+  buildAreas: DesignerBuildAreaForm[];
   controller: DesignerControllerForm;
   zones: DesignerZoneForm[];
   routes: DesignerRouteForm[];
@@ -257,11 +291,31 @@ export function createDefaultDesigner(): DesignerForm {
   return {
     canvasWidthCm: 170,
     canvasHeightCm: 40,
+    addressablePixelsPerMeter: 60,
+    ledsPerMeter: 60,
     ledDensityPerMeter: 60,
     snapCm: 2,
     rulerUnit: "cm",
     rulerVisible: true,
     sourceSvg: null,
+    layers: defaultDesignerLayers(),
+    buildAreas: [
+      { id: "build_area_main", name: "Main Sign Face", shape: "rect", x: 40, y: 0, width: 120, height: 40, visible: true, locked: false, opacity: 1 },
+      { id: "build_area_logo", name: "Round Logo Reference", shape: "ellipse", x: 108, y: 2, width: 18, height: 18, visible: true, locked: false, opacity: 0.9 },
+      {
+        id: "build_area_tag",
+        name: "Polygon Reference",
+        shape: "polygon",
+        x: 42,
+        y: 22,
+        width: 100,
+        height: 14,
+        points: [{ x: 42, y: 22 }, { x: 142, y: 22 }, { x: 138, y: 36 }, { x: 46, y: 36 }],
+        visible: true,
+        locked: false,
+        opacity: 0.85
+      }
+    ],
     controller: {
       id: "controller",
       name: "Controller",
@@ -272,13 +326,37 @@ export function createDefaultDesigner(): DesignerForm {
       dataOutputs: 3
     },
     zones: [
-      { id: "fondo", name: "Fondo", shape: "rect", x: 42, y: 2, width: 60, height: 16 },
-      { id: "estrella", name: "Estrella", shape: "ellipse", x: 108, y: 2, width: 18, height: 18 },
-      { id: "letras", name: "Letras", shape: "rect", x: 42, y: 22, width: 100, height: 14 },
-      { id: "letra_1", name: "Letra 1", shape: "rect", x: 42, y: 24, width: 22, height: 10 },
-      { id: "letra_2", name: "Letra 2", shape: "rect", x: 68, y: 24, width: 22, height: 10 },
-      { id: "letra_3", name: "Letra 3", shape: "rect", x: 94, y: 24, width: 22, height: 10 },
-      { id: "letra_4", name: "Letra 4", shape: "rect", x: 120, y: 24, width: 22, height: 10 }
+      {
+        id: "fondo",
+        name: "Fondo",
+        shape: "polygon",
+        x: 42,
+        y: 2,
+        width: 60,
+        height: 16,
+        points: [{ x: 42, y: 2 }, { x: 102, y: 2 }, { x: 100, y: 18 }, { x: 44, y: 18 }],
+        visible: true,
+        locked: false,
+        opacity: 1
+      },
+      { id: "estrella", name: "Estrella", shape: "ellipse", x: 108, y: 2, width: 18, height: 18, visible: true, locked: false, opacity: 1 },
+      { id: "letras", name: "Letras", shape: "rect", x: 42, y: 22, width: 100, height: 14, visible: true, locked: false, opacity: 1 },
+      {
+        id: "letra_1",
+        name: "Letra 1",
+        shape: "polygon",
+        x: 42,
+        y: 24,
+        width: 22,
+        height: 10,
+        points: [{ x: 42, y: 34 }, { x: 46, y: 24 }, { x: 64, y: 24 }, { x: 60, y: 34 }],
+        visible: true,
+        locked: false,
+        opacity: 1
+      },
+      { id: "letra_2", name: "Letra 2", shape: "rect", x: 68, y: 24, width: 22, height: 10, visible: true, locked: false, opacity: 1 },
+      { id: "letra_3", name: "Letra 3", shape: "rect", x: 94, y: 24, width: 22, height: 10, visible: true, locked: false, opacity: 1 },
+      { id: "letra_4", name: "Letra 4", shape: "rect", x: 120, y: 24, width: 22, height: 10, visible: true, locked: false, opacity: 1 }
     ],
     routes: [
       { id: "route_fondo", name: "Fondo LED string", kind: "led_string", output: 1, zoneId: "fondo", points: [{ x: 44, y: 4, joint: true }, { x: 100, y: 4 }, { x: 100, y: 8 }, { x: 44, y: 8 }, { x: 44, y: 12 }, { x: 100, y: 12 }] },
@@ -295,15 +373,94 @@ function normalizeDesigner(designer?: DesignerForm): DesignerForm {
   return {
     canvasWidthCm: positiveNumber(designer.canvasWidthCm, fallback.canvasWidthCm),
     canvasHeightCm: positiveNumber(designer.canvasHeightCm, fallback.canvasHeightCm),
-    ledDensityPerMeter: positiveNumber(designer.ledDensityPerMeter, fallback.ledDensityPerMeter),
+    addressablePixelsPerMeter: positiveNumber(designer.addressablePixelsPerMeter ?? designer.ledDensityPerMeter, fallback.addressablePixelsPerMeter),
+    ledsPerMeter: positiveNumber(designer.ledsPerMeter ?? designer.addressablePixelsPerMeter ?? designer.ledDensityPerMeter, fallback.ledsPerMeter),
+    ledDensityPerMeter: positiveNumber(designer.addressablePixelsPerMeter ?? designer.ledDensityPerMeter, fallback.ledDensityPerMeter),
     snapCm: positiveNumber(designer.snapCm, fallback.snapCm),
     rulerUnit: designer.rulerUnit === "in" ? "in" : "cm",
     rulerVisible: typeof designer.rulerVisible === "boolean" ? designer.rulerVisible : fallback.rulerVisible,
     sourceSvg: typeof designer.sourceSvg === "string" ? designer.sourceSvg : null,
+    layers: normalizeDesignerLayers(designer.layers, fallback.layers),
+    buildAreas: normalizeBuildAreas(designer, fallback.buildAreas),
     controller: normalizeController(designer.controller, fallback.controller),
-    zones: Array.isArray(designer.zones) && designer.zones.length ? designer.zones : fallback.zones,
+    zones: Array.isArray(designer.zones) && designer.zones.length ? designer.zones.map(normalizeDesignerZone) : fallback.zones,
     routes: Array.isArray(designer.routes) && designer.routes.length ? designer.routes.map((route) => ({ ...route, kind: route.kind === "data_cable" ? "data_cable" : "led_string" })) : fallback.routes
   };
+}
+
+function normalizeDesignerZone(zone: DesignerZoneForm): DesignerZoneForm {
+  return {
+    ...zone,
+    shape: zone.shape === "ellipse" ? "ellipse" : zone.shape === "polygon" ? "polygon" : "rect",
+    x: typeof zone.x === "number" && Number.isFinite(zone.x) ? zone.x : 0,
+    y: typeof zone.y === "number" && Number.isFinite(zone.y) ? zone.y : 0,
+    width: positiveNumber(zone.width, 10),
+    height: positiveNumber(zone.height, 10),
+    points: normalizeDesignerPoints(zone.points),
+    visible: typeof zone.visible === "boolean" ? zone.visible : true,
+    locked: typeof zone.locked === "boolean" ? zone.locked : false,
+    opacity: clampNumber(typeof zone.opacity === "number" ? zone.opacity : 1, 0.05, 1)
+  };
+}
+
+function defaultDesignerLayers(): DesignerLayersForm {
+  return {
+    reference: { visible: true, locked: false, opacity: 0.75 },
+    zones: { visible: true, locked: false, opacity: 0.35 },
+    strings: { visible: true, locked: false, opacity: 1 }
+  };
+}
+
+function normalizeDesignerLayers(layers: (Partial<DesignerLayersForm> & { svg?: DesignerLayerSettings }) | undefined, fallback: DesignerLayersForm): DesignerLayersForm {
+  const reference = layers?.reference ?? layers?.svg;
+  return {
+    reference: normalizeDesignerLayer(reference, fallback.reference),
+    zones: normalizeDesignerLayer(layers?.zones, fallback.zones),
+    strings: normalizeDesignerLayer(layers?.strings, fallback.strings)
+  };
+}
+
+function normalizeDesignerLayer(layer: DesignerLayerSettings | undefined, fallback: DesignerLayerSettings): DesignerLayerSettings {
+  return {
+    visible: typeof layer?.visible === "boolean" ? layer.visible : fallback.visible,
+    locked: typeof layer?.locked === "boolean" ? layer.locked : fallback.locked,
+    opacity: clampNumber(typeof layer?.opacity === "number" ? layer.opacity : fallback.opacity, 0.05, 1)
+  };
+}
+
+function normalizeBuildAreas(designer: (Partial<DesignerForm> & { buildArea?: Partial<DesignerBuildAreaForm> }) | undefined, fallback: DesignerBuildAreaForm[]): DesignerBuildAreaForm[] {
+  const legacyBuildArea = designer?.buildArea;
+  const source = Array.isArray(designer?.buildAreas) && designer.buildAreas.length ? designer.buildAreas : legacyBuildArea ? [legacyBuildArea] : fallback;
+  return source.map((buildArea, index) => normalizeBuildArea(buildArea, fallback[index] ?? fallback[0], index));
+}
+
+function normalizeBuildArea(buildArea: Partial<DesignerBuildAreaForm> | undefined, fallback: DesignerBuildAreaForm, index: number): DesignerBuildAreaForm {
+  if (!buildArea) return fallback;
+  return {
+    id: typeof buildArea.id === "string" && buildArea.id ? buildArea.id : `build_area_${index + 1}`,
+    name: typeof buildArea.name === "string" && buildArea.name ? buildArea.name : index === 0 ? "Build Area" : `Build Area ${index + 1}`,
+    shape: buildArea.shape === "ellipse" ? "ellipse" : buildArea.shape === "polygon" ? "polygon" : "rect",
+    x: typeof buildArea.x === "number" && Number.isFinite(buildArea.x) ? buildArea.x : fallback.x,
+    y: typeof buildArea.y === "number" && Number.isFinite(buildArea.y) ? buildArea.y : fallback.y,
+    width: positiveNumber(buildArea.width, fallback.width),
+    height: positiveNumber(buildArea.height, fallback.height),
+    points: normalizeDesignerPoints(buildArea.points),
+    visible: typeof buildArea.visible === "boolean" ? buildArea.visible : true,
+    locked: typeof buildArea.locked === "boolean" ? buildArea.locked : false,
+    opacity: clampNumber(typeof buildArea.opacity === "number" ? buildArea.opacity : 1, 0.05, 1)
+  };
+}
+
+function normalizeDesignerPoints(points: DesignerPoint[] | undefined) {
+  if (!Array.isArray(points) || points.length < 3) return undefined;
+  const normalized = points
+    .filter((point) => typeof point.x === "number" && Number.isFinite(point.x) && typeof point.y === "number" && Number.isFinite(point.y))
+    .map((point) => ({ x: point.x, y: point.y }));
+  return normalized.length >= 3 ? normalized : undefined;
+}
+
+function clampNumber(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, Number.isFinite(value) ? value : min));
 }
 
 function normalizeController(controller: DesignerControllerForm | undefined, fallback: DesignerControllerForm) {

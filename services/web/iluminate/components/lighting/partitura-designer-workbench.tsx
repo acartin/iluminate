@@ -12,10 +12,11 @@ type DesignerRecord = Record<string, unknown> & {
   client: string;
   status: string;
   canvas: string;
-  density: number;
+  pixelsPerMeter: number;
+  ledsPerMeter: number;
   zones: number;
   routes: number;
-  leds: number;
+  pixels: number;
   updatedAt: string;
 };
 
@@ -62,10 +63,11 @@ const designerCrudConfig: CrudResourceConfig<DesignerRecord> = {
     },
     { id: "client", header: "Client" },
     { id: "canvas", header: "Canvas", className: "font-mono" },
-    { id: "density", header: "LED/m", className: "text-right font-mono", headerClassName: "text-right" },
+    { id: "pixelsPerMeter", header: "Pixels/m", className: "text-right font-mono", headerClassName: "text-right" },
+    { id: "ledsPerMeter", header: "LEDs/m", className: "text-right font-mono", headerClassName: "text-right" },
     { id: "zones", header: "Zones", className: "text-right font-mono", headerClassName: "text-right" },
     { id: "routes", header: "Routes", className: "text-right font-mono", headerClassName: "text-right" },
-    { id: "leds", header: "LEDs", className: "text-right font-mono", headerClassName: "text-right" },
+    { id: "pixels", header: "Pixels", className: "text-right font-mono", headerClassName: "text-right" },
     {
       id: "status",
       header: "Status",
@@ -86,10 +88,11 @@ function recordFromPartitura(partitura: PersistedPartitura): DesignerRecord {
     client: partitura.clientName,
     status: partitura.status,
     canvas: designer ? `${designer.canvasWidthCm}x${designer.canvasHeightCm} cm` : "Not configured",
-    density: designer?.ledDensityPerMeter ?? 0,
+    pixelsPerMeter: designer?.addressablePixelsPerMeter ?? designer?.ledDensityPerMeter ?? 0,
+    ledsPerMeter: designer?.ledsPerMeter ?? designer?.addressablePixelsPerMeter ?? designer?.ledDensityPerMeter ?? 0,
     zones: designer?.zones.length ?? partitura.document.zones.length,
     routes: designer?.routes.length ?? 0,
-    leds: partitura.document.chain1Pixels + partitura.document.chain2Pixels + partitura.document.chain3Pixels,
+    pixels: partitura.document.chain1Pixels + partitura.document.chain2Pixels + partitura.document.chain3Pixels,
     updatedAt: new Date(partitura.updatedAt).toLocaleString()
   };
 }

@@ -92,7 +92,8 @@ Iluminate does not model partitura revisions. When a user wants a variant, the a
 Current direction for `document_json`:
 
 - project construction settings;
-- one project-level LED density, for example `60 LEDs/m`;
+- one project-level addressable pixel density, for example `60 Pixels/m`;
+- one project-level physical emitter density, for example `60 LEDs/m`;
 - uploaded SVG/render references by asset id or storage URI;
 - zones/geometries such as letters, words, logo, background and full sign;
 - continuous directional LED routes drawn over the sign canvas;

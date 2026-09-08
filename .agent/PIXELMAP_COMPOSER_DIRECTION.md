@@ -10,7 +10,7 @@ Iluminate is moving from matrix-only tests toward a fabrication-oriented compose
 The operator should not be forced to understand the hidden mega matrix, firmware indices or `pixelMap` internals. The operator works on the real sign drawing:
 
 ```text
-SVG/render of the sign
+reference image/SVG fitted into a measured Build Area
 -> visual zones
 -> continuous LED routes plus optional data cables
 -> generated real LED points
@@ -27,9 +27,15 @@ sampled by real georeferenced LEDs
 
 ## Core Concepts
 
-### Canvas
+### Canvas, Build Area And Reference
 
-The uploaded SVG or traced sign establishes a real canvas. The canvas should be scaled in physical units, eventually cm/mm.
+The Designer canvas can be larger than the actual sign so there is room for the controller, cables, notes and fabrication work.
+
+`Build Areas` are measured visual reference geometries inside that canvas, for example a `120x40 cm` rectangle, a circular sign face, or a polygonal sign silhouette. They are not containers and do not own/delete zones or strings.
+
+The operator can later fit a visual reference into the Build Area. The reference can be SVG or a raster image such as JPG, PNG, BMP or WebP. SVG is useful, but the product should not depend on SVG-only workflows because many workshops will work from ordinary images or rough sign artwork.
+
+When refining the Reference/Build Area workflow, add explicit tools to adjust the Build Area size, position and reference fitting. Keep those controls in the Reference plane, not mixed into string routing.
 
 The "mega grid" is only an internal coordinate reference. It is not the primary UI.
 
@@ -45,7 +51,7 @@ Zones are visible business/fabrication objects:
 - `background`
 - `full_sign`
 
-Zones can be drawn as rectangles, circles, polygons or, later, selected SVG contours. A zone defines:
+Zones can be drawn as rectangles, circles and polygons. Later they should support Bezier paths, freehand/smoothed trace and selected SVG contours. A zone defines:
 
 - valid area;
 - bounds;
@@ -69,7 +75,7 @@ Effects may use:
 
 One project uses one LED density.
 
-Default can be `60 LEDs/m`, but it must be configurable when the project starts.
+Default can be `60 Pixels/m` and `60 LEDs/m`, but both must be configurable when the project starts.
 
 Changing density resets existing LED routes/cabling, because it changes physical spacing, generated LED count, indices, power estimates and the final `pixelMap`.
 
@@ -98,7 +104,9 @@ continue to next letter
 The system samples the route using the project LED density:
 
 ```text
-60 LEDs/m -> one LED every 16.67 mm
+60 Pixels/m -> one addressable pixel every 16.67 mm
+60 LEDs/m -> one physical emitter every 16.67 mm
+20 Pixels/m + 60 LEDs/m -> one WS281x addressable pixel visually drives about 3 physical emitters
 ```
 
 Each generated LED receives:
@@ -159,9 +167,9 @@ Matrix presets remain useful for `Effect Lab`.
 
 The production composer should flow like this:
 
-1. Upload SVG or sign drawing.
-2. Set project scale and one LED density.
-3. Define zones over the sign.
+1. Set the physical Build Area and one LED density.
+2. Upload or place a reference image/SVG into that Build Area.
+3. Trace zones over the sign using deterministic drawing tools: rectangle, ellipse, Polygon/Pen, later Bezier path and freehand.
 4. Show optional snap/grid/pitch guides only when routing LEDs.
 5. Draw continuous LED routes.
 6. Validate route continuity, LED count, output capacity, LEDs outside zones and sparse areas.
@@ -210,7 +218,7 @@ Implemented so far:
 
 Not yet implemented:
 
-- SVG upload/composer.
+- Reference image/SVG import and fitting workflow.
 - Polygon/freeform zone drawing.
 - Zone-local coordinate serialization in final generated artifact.
 - Visual electrical validation workflow.

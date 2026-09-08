@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle, ArrowLeft, Cable, Circle, Copy, Hand, Maximize2, MousePointer2, Pause, Play, Plus, Route, RotateCcw, Save, Scissors, Sparkles, Square, Trash2, ZoomIn, ZoomOut } from "lucide-react";
+import { AlertCircle, ArrowLeft, Cable, ChevronDown, ChevronRight, Circle, Copy, Eye, EyeOff, Hand, Layers, Lock, Maximize2, MousePointer2, Pause, PenLine, Play, Plus, Route, RotateCcw, Save, Scissors, Sparkles, Square, Trash2, Unlock, ZoomIn, ZoomOut } from "lucide-react";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -14,8 +14,11 @@ import {
   clonePartituraDocument,
   ClipParams,
   ClipForm,
+  DesignerBuildAreaForm,
   DesignerControllerForm,
   DesignerForm,
+  DesignerLayerSettings,
+  DesignerLayersForm,
   DesignerPoint,
   DesignerRouteKind,
   DesignerRouteForm,
@@ -69,20 +72,28 @@ const tabs = [
   { id: "simulator", label: "Simulator" }
 ];
 
-type DesignerTool = "select" | "zone_rect" | "zone_ellipse" | "led_string" | "data_cable" | "cut" | "pan";
+type DesignerTool = "select" | "build_area_rect" | "build_area_ellipse" | "build_area_polygon" | "zone_rect" | "zone_ellipse" | "zone_polygon" | "led_string" | "data_cable" | "cut" | "pan";
 type DesignerRouteTerminal = { routeId: string; pointIndex: number };
 type DesignerSelection =
-  | { type: "zone"; id: string }
+  | { type: "build_area"; id: string; pointIndex?: number }
+  | { type: "zone"; id: string; pointIndex?: number }
   | { type: "route"; id: string; pointIndex?: number }
   | { type: "controller"; id: string }
   | null;
 type DesignerDrag =
+  | { type: "build-area-move"; buildAreaId: string; start: { x: number; y: number }; original: DesignerBuildAreaForm }
+  | { type: "build-area-resize"; buildAreaId: string; handle: ResizeHandle; start: { x: number; y: number }; original: DesignerBuildAreaForm }
+  | { type: "build-area-point"; buildAreaId: string; pointIndex: number }
   | { type: "controller-move"; start: { x: number; y: number }; original: DesignerControllerForm; originalRoutes: DesignerRouteForm[] }
   | { type: "zone-move"; zoneId: string; start: { x: number; y: number }; original: DesignerZoneForm }
   | { type: "zone-resize"; zoneId: string; handle: ResizeHandle; start: { x: number; y: number }; original: DesignerZoneForm }
+  | { type: "zone-point"; zoneId: string; pointIndex: number }
   | { type: "route-move"; routeId: string; start: { x: number; y: number }; original: DesignerRouteForm }
   | { type: "route-point"; routeId: string; pointIndex: number; jointGroup: DesignerRouteTerminal[] }
   | { type: "pan"; start: { x: number; y: number }; original: DesignerViewport };
+type DesignerRouteDraft = { kind: DesignerRouteKind; points: DesignerPoint[]; routeId?: string };
+type DesignerShapeDraft = { target: "build_area" | "zone"; points: DesignerPoint[] };
+type DesignerActiveLayer = keyof DesignerLayersForm;
 type DesignerViewport = { x: number; y: number; width: number; height: number };
 type ResizeHandle = "nw" | "ne" | "sw" | "se";
 
@@ -91,19 +102,25 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
   const [document, setDocument] = useState(() => normalizeDefaultSignLayout(initialPartitura.document));
   const [saving, setSaving] = useState(false);
   const [tool, setTool] = useState<DesignerTool>("select");
+  const [activeLayer, setActiveLayer] = useState<DesignerActiveLayer>("strings");
   const [selection, setSelection] = useState<DesignerSelection>(null);
   const [clipboard, setClipboard] = useState<DesignerSelection>(null);
   const [fabricationNotice, setFabricationNotice] = useState("Ready");
   const [viewport, setViewport] = useState<DesignerViewport | null>(null);
+  const [layersPanelOpen, setLayersPanelOpen] = useState(true);
   const designerState = document.designer;
   if (!designerState) return null;
   const designer: DesignerForm = designerState;
+  const selectedBuildArea = selection?.type === "build_area" ? designer.buildAreas.find((buildArea) => buildArea.id === selection.id) ?? null : null;
+  const selectedBuildAreaPointIndex = selection?.type === "build_area" ? selection.pointIndex : undefined;
   const selectedZone = selection?.type === "zone" ? designer.zones.find((zone) => zone.id === selection.id) ?? null : null;
+  const selectedZonePointIndex = selection?.type === "zone" ? selection.pointIndex : undefined;
   const selectedRoute = selection?.type === "route" ? designer.routes.find((route) => route.id === selection.id) ?? null : null;
   const selectedRoutePointIndex = selection?.type === "route" ? selection.pointIndex : undefined;
   const selectedController = selection?.type === "controller" ? designer.controller : null;
   const routeSummaries = designer.routes.map((route) => summarizeRoute(route, designer));
-  const totalGeneratedLeds = routeSummaries.reduce((total, route) => total + route.leds, 0);
+  const totalGeneratedPixels = routeSummaries.reduce((total, route) => total + route.pixels, 0);
+  const ledsPerAddressablePixel = designer.ledsPerMeter / Math.max(1, designer.addressablePixelsPerMeter);
   const activeViewport = viewport ?? { x: 0, y: 0, width: designer.canvasWidthCm, height: designer.canvasHeightCm };
 
   useEffect(() => {
@@ -129,11 +146,13 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
       }
       if (event.key.toLowerCase() === "v") setTool("select");
       if (event.key.toLowerCase() === "h") setTool("pan");
-      if (event.key.toLowerCase() === "r") setTool("zone_rect");
-      if (event.key.toLowerCase() === "e") setTool("zone_ellipse");
-      if (event.key.toLowerCase() === "l") setTool("led_string");
-      if (event.key.toLowerCase() === "d") setTool("data_cable");
-      if (event.key.toLowerCase() === "x") setTool("cut");
+      if (activeLayer === "zones" && event.key.toLowerCase() === "r") setTool("zone_rect");
+      if (activeLayer === "zones" && event.key.toLowerCase() === "e") setTool("zone_ellipse");
+      if (activeLayer === "zones" && event.key.toLowerCase() === "p") setTool("zone_polygon");
+      if (activeLayer === "reference" && event.key.toLowerCase() === "p") setTool("build_area_polygon");
+      if (activeLayer === "strings" && event.key.toLowerCase() === "l") setTool("led_string");
+      if (activeLayer === "strings" && event.key.toLowerCase() === "d") setTool("data_cable");
+      if (activeLayer === "strings" && event.key.toLowerCase() === "x") setTool("cut");
     }
 
     window.addEventListener("keydown", handleKeyDown);
@@ -173,16 +192,71 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
     updateDesigner({ ...designer, ...patch });
   }
 
+  function patchDesignerLayer(layer: keyof DesignerLayersForm, patch: Partial<DesignerLayerSettings>) {
+    updateDesigner({
+      ...designer,
+      layers: {
+        ...designer.layers,
+        [layer]: { ...designer.layers[layer], ...patch }
+      }
+    });
+  }
+
+  function patchZoneVisual(zoneId: string, patch: Partial<Pick<DesignerZoneForm, "visible" | "locked" | "opacity">>) {
+    updateDesigner({ ...designer, zones: designer.zones.map((zone) => (zone.id === zoneId ? { ...zone, ...patch } : zone)) });
+  }
+
+  function patchBuildAreaVisual(buildAreaId: string, patch: Partial<Pick<DesignerBuildAreaForm, "visible" | "locked" | "opacity">>) {
+    updateDesigner({ ...designer, buildAreas: designer.buildAreas.map((buildArea) => (buildArea.id === buildAreaId ? { ...buildArea, ...patch } : buildArea)) });
+  }
+
+  function patchBuildArea(buildAreaId: string, patch: Partial<DesignerBuildAreaForm>) {
+    if (designer.layers.reference.locked) return;
+    const currentBuildArea = designer.buildAreas.find((buildArea) => buildArea.id === buildAreaId);
+    if (currentBuildArea?.locked) return;
+    const previousId = buildAreaId;
+    const nextId = patch.id ?? previousId;
+    const nextPatch = patch.shape === "polygon" && currentBuildArea && !currentBuildArea.points
+      ? { ...patch, points: rectanglePoints(currentBuildArea) }
+      : patch.shape && patch.shape !== "polygon"
+        ? { ...patch, points: undefined }
+        : patch;
+    updateDesigner({
+      ...designer,
+      buildAreas: designer.buildAreas.map((buildArea) => (buildArea.id === buildAreaId ? { ...buildArea, ...nextPatch } : buildArea))
+    });
+    if (nextId !== previousId) setSelection({ type: "build_area", id: nextId });
+  }
+
+  function selectDesignerItem(nextSelection: DesignerSelection) {
+    setSelection(nextSelection);
+  }
+
+  function activateDesignerLayer(layer: DesignerActiveLayer) {
+    setActiveLayer(layer);
+    setTool("select");
+    setSelection(null);
+  }
+
   function patchController(patch: Partial<DesignerControllerForm>) {
+    if (designer.layers.strings.locked) return;
     updateDesigner({ ...designer, controller: { ...designer.controller, ...patch, id: "controller" } });
   }
 
   function patchZone(zoneId: string, patch: Partial<DesignerZoneForm>) {
+    if (designer.layers.zones.locked) return;
+    const currentZone = designer.zones.find((zone) => zone.id === zoneId);
+    if (currentZone?.locked) return;
     const previousId = zoneId;
     const nextId = patch.id ?? previousId;
+    const nextPatch = patch.shape === "polygon" && currentZone && !currentZone.points
+      ? { ...patch, points: rectanglePoints(currentZone) }
+      : patch.shape && patch.shape !== "polygon"
+        ? { ...patch, points: undefined }
+        : patch;
     updateDesigner({
       ...designer,
-      zones: designer.zones.map((zone) => (zone.id === zoneId ? { ...zone, ...patch } : zone)),
+      zones: designer.zones.map((zone) => (zone.id === zoneId ? { ...zone, ...nextPatch } : zone)),
       routes: previousId && nextId && previousId !== nextId
         ? designer.routes.map((route) => (route.zoneId === previousId ? { ...route, zoneId: nextId } : route))
         : designer.routes
@@ -191,6 +265,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
   }
 
   function patchRoute(routeId: string, patch: Partial<DesignerRouteForm>) {
+    if (designer.layers.strings.locked) return;
     updateDesigner({
       ...designer,
       routes: designer.routes.map((route) => (route.id === routeId ? { ...route, ...patch } : route))
@@ -209,7 +284,10 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
       x: snapValue(activeViewport.x + activeViewport.width / 2 - width / 2, designer.snapCm),
       y: snapValue(activeViewport.y + activeViewport.height / 2 - height / 2, designer.snapCm),
       width,
-      height
+      height,
+      visible: true,
+      locked: false,
+      opacity: 1
     };
     updateDesigner({
       ...designer,
@@ -219,26 +297,86 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
     setTool("select");
   }
 
-  function addRoute(kind: DesignerRouteKind = "led_string") {
-    const next = designer.routes.length + 1;
-    const routeName = kind === "data_cable" ? `Data cable ${next}` : `LED string ${next}`;
-    const route = {
-      id: `route_${next}`,
-      name: routeName,
-      kind,
-      output: 1,
-      zoneId: designer.zones[0]?.id ?? "",
-      points: [
-        { x: snapValue(activeViewport.x + activeViewport.width * 0.25, designer.snapCm), y: snapValue(activeViewport.y + activeViewport.height * 0.5, designer.snapCm) },
-        { x: snapValue(activeViewport.x + activeViewport.width * 0.65, designer.snapCm), y: snapValue(activeViewport.y + activeViewport.height * 0.5, designer.snapCm) }
-      ]
+  function addBuildArea(shape: DesignerBuildAreaForm["shape"] = "rect") {
+    if (designer.layers.reference.locked) return;
+    const next = designer.buildAreas.length + 1;
+    const width = Math.max(12, Math.round(activeViewport.width * 0.28));
+    const height = Math.max(8, Math.round(activeViewport.height * 0.28));
+    const buildArea: DesignerBuildAreaForm = {
+      id: `build_area_${next}`,
+      name: next === 1 ? "Build Area" : `Build Area ${next}`,
+      shape,
+      x: snapValue(activeViewport.x + activeViewport.width / 2 - width / 2, designer.snapCm),
+      y: snapValue(activeViewport.y + activeViewport.height / 2 - height / 2, designer.snapCm),
+      width,
+      height,
+      visible: true,
+      locked: false,
+      opacity: 1
     };
-    updateDesigner({
-      ...designer,
-      routes: [...designer.routes, route]
-    });
-    setSelection({ type: "route", id: route.id });
+    updateDesigner({ ...designer, buildAreas: [...designer.buildAreas, buildArea] });
+    setSelection({ type: "build_area", id: buildArea.id });
     setTool("select");
+  }
+
+  function updateBuildAreaPoint(buildAreaId: string, pointIndex: number, patch: Partial<DesignerPoint>) {
+    const buildArea = designer.buildAreas.find((entry) => entry.id === buildAreaId);
+    const point = buildArea?.points?.[pointIndex];
+    if (!buildArea || !point) return;
+    patchBuildArea(buildAreaId, updatePolygonPoint(buildArea, pointIndex, { ...point, ...patch }, designer.snapCm));
+    setSelection({ type: "build_area", id: buildAreaId, pointIndex });
+  }
+
+  function updateZonePoint(zoneId: string, pointIndex: number, patch: Partial<DesignerPoint>) {
+    const zone = designer.zones.find((entry) => entry.id === zoneId);
+    const point = zone?.points?.[pointIndex];
+    if (!zone || !point) return;
+    patchZone(zoneId, updatePolygonPoint(zone, pointIndex, { ...point, ...patch }, designer.snapCm));
+    setSelection({ type: "zone", id: zoneId, pointIndex });
+  }
+
+  function insertBuildAreaPoint(buildAreaId: string, insertIndex: number, point: DesignerPoint) {
+    const buildArea = designer.buildAreas.find((entry) => entry.id === buildAreaId);
+    if (!buildArea || designer.layers.reference.locked || buildArea.locked) return;
+    patchBuildArea(buildAreaId, insertPolygonPoint(buildArea, insertIndex, point, designer.snapCm));
+    setSelection({ type: "build_area", id: buildAreaId, pointIndex: insertIndex });
+    setFabricationNotice("Reference polygon point inserted.");
+  }
+
+  function insertZonePoint(zoneId: string, insertIndex: number, point: DesignerPoint) {
+    const zone = designer.zones.find((entry) => entry.id === zoneId);
+    if (!zone || designer.layers.zones.locked || zone.locked) return;
+    patchZone(zoneId, insertPolygonPoint(zone, insertIndex, point, designer.snapCm));
+    setSelection({ type: "zone", id: zoneId, pointIndex: insertIndex });
+    setFabricationNotice("Zone polygon point inserted.");
+  }
+
+  function deleteBuildAreaPoint(buildAreaId: string, pointIndex: number) {
+    const buildArea = designer.buildAreas.find((entry) => entry.id === buildAreaId);
+    if (!buildArea || designer.layers.reference.locked || buildArea.locked) return;
+    if (!buildArea.points || buildArea.points.length <= 3) {
+      setFabricationNotice("Polygon needs at least 3 points.");
+      return;
+    }
+    const nextBuildArea = deletePolygonPoint(buildArea, pointIndex);
+    patchBuildArea(buildAreaId, nextBuildArea);
+    const nextIndex = Math.min(pointIndex, Math.max(0, (nextBuildArea.points?.length ?? 1) - 1));
+    setSelection({ type: "build_area", id: buildAreaId, pointIndex: nextIndex });
+    setFabricationNotice("Reference polygon point deleted.");
+  }
+
+  function deleteZonePoint(zoneId: string, pointIndex: number) {
+    const zone = designer.zones.find((entry) => entry.id === zoneId);
+    if (!zone || designer.layers.zones.locked || zone.locked) return;
+    if (!zone.points || zone.points.length <= 3) {
+      setFabricationNotice("Polygon needs at least 3 points.");
+      return;
+    }
+    const nextZone = deletePolygonPoint(zone, pointIndex);
+    patchZone(zoneId, nextZone);
+    const nextIndex = Math.min(pointIndex, Math.max(0, (nextZone.points?.length ?? 1) - 1));
+    setSelection({ type: "zone", id: zoneId, pointIndex: nextIndex });
+    setFabricationNotice("Zone polygon point deleted.");
   }
 
   function updateRoutePoint(routeId: string, pointIndex: number, patch: Partial<{ x: number; y: number }>) {
@@ -386,6 +524,22 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
 
   function deleteSelection() {
     if (!selection) return;
+    if (selection.type === "build_area") {
+      if (designer.layers.reference.locked || designer.buildAreas.find((buildArea) => buildArea.id === selection.id)?.locked) return;
+      if (typeof selection.pointIndex === "number") {
+        deleteBuildAreaPoint(selection.id, selection.pointIndex);
+        return;
+      }
+      updateDesigner({ ...designer, buildAreas: designer.buildAreas.filter((buildArea) => buildArea.id !== selection.id) });
+      setSelection(null);
+      return;
+    }
+    if (selection.type === "zone" && designer.layers.zones.locked) return;
+    if (selection.type === "route" && designer.layers.strings.locked) return;
+    if (selection.type === "zone" && typeof selection.pointIndex === "number") {
+      deleteZonePoint(selection.id, selection.pointIndex);
+      return;
+    }
     if (selection.type === "zone" && designer.zones.length > 1) {
       const zones = designer.zones.filter((zone) => zone.id !== selection.id);
       const fallbackZoneId = zones[0]?.id ?? "";
@@ -412,12 +566,11 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
   }
 
   function copySelection() {
-    if (selection && selection.type !== "controller") setClipboard(selection);
+    if (selection && (selection.type === "zone" || selection.type === "route")) setClipboard(selection);
   }
 
   function pasteSelection() {
     if (!clipboard) return;
-    if (clipboard.type === "controller") return;
     if (clipboard.type === "zone") {
       const source = designer.zones.find((zone) => zone.id === clipboard.id);
       if (!source) return;
@@ -464,7 +617,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-slate-100 text-slate-950">
-      <header className="flex h-14 shrink-0 items-center justify-between border-b border-slate-300 bg-white px-4">
+      <header className="flex shrink-0 flex-wrap items-center gap-3 border-b border-slate-300 bg-white px-4 py-2">
         <div className="flex min-w-0 items-center gap-3">
           <Button asChild variant="outline" type="button">
             <Link href={`/partituras/generator/${encodeURIComponent(partitura.id)}`}>
@@ -477,31 +630,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
             <div className="font-mono text-[10px] uppercase text-slate-500">{partitura.partituraKey}</div>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <Badge>{designer.canvasWidthCm}x{designer.canvasHeightCm} cm</Badge>
-          <Badge>{designer.ledDensityPerMeter} LED/m</Badge>
-          <Badge>{totalGeneratedLeds} LEDs</Badge>
-          <Button type="button" variant="outline" title="Copy" className="h-9 w-9 px-0" disabled={!selection || selection.type === "controller"} onClick={copySelection}>
-            <Copy className="h-4 w-4" />
-          </Button>
-          <Button type="button" variant="outline" title="Paste" className="h-9 px-2" disabled={!clipboard} onClick={pasteSelection}>
-            Paste
-          </Button>
-          <Button type="button" variant="outline" title="Delete" className="h-9 w-9 px-0" disabled={!selection || selection.type === "controller"} onClick={deleteSelection}>
-            <Trash2 className="h-4 w-4" />
-          </Button>
-          <Button type="button" variant="outline" onClick={() => void save()} disabled={saving}>
-            <Save className="h-4 w-4" />
-            {saving ? "Saving" : "Save"}
-          </Button>
-          <Button type="button" onClick={compileLayout} disabled={saving}>
-            <Cable className="h-4 w-4" />
-            Compile
-          </Button>
-        </div>
-      </header>
-
-      <div className="flex min-h-[52px] shrink-0 flex-wrap items-center gap-3 border-b border-slate-300 bg-white px-4 py-2">
+        <div className="h-8 w-px bg-slate-200" />
         <ToolbarField label="Ruler">
           <select className="h-8 rounded-md border bg-white px-2 text-body-sm" value={designer.rulerUnit} onChange={(event) => patchDesigner({ rulerUnit: event.target.value as DesignerForm["rulerUnit"] })}>
             <option value="cm">cm</option>
@@ -510,22 +639,75 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
         </ToolbarField>
         <label className="flex h-8 items-center gap-2 rounded-md border bg-white px-2 text-body-sm">
           <input type="checkbox" checked={designer.rulerVisible} onChange={(event) => patchDesigner({ rulerVisible: event.target.checked })} />
-          Show ruler
+          Ruler
         </label>
         <ToolbarNumber label="W" value={designer.canvasWidthCm} suffix="cm" onChange={(canvasWidthCm) => patchDesigner({ canvasWidthCm })} />
         <ToolbarNumber label="H" value={designer.canvasHeightCm} suffix="cm" onChange={(canvasHeightCm) => patchDesigner({ canvasHeightCm })} />
-        <ToolbarNumber label="LED/m" value={designer.ledDensityPerMeter} onChange={(ledDensityPerMeter) => patchDesigner({ ledDensityPerMeter })} />
+        <ToolbarNumber label="Pixels/m" value={designer.addressablePixelsPerMeter} onChange={(addressablePixelsPerMeter) => patchDesigner({ addressablePixelsPerMeter, ledDensityPerMeter: addressablePixelsPerMeter })} />
+        <ToolbarNumber label="LEDs/m" value={designer.ledsPerMeter} onChange={(ledsPerMeter) => patchDesigner({ ledsPerMeter })} />
         <ToolbarNumber label="Snap" value={designer.snapCm} suffix="cm" onChange={(snapCm) => patchDesigner({ snapCm })} />
-        <Badge>{designer.sourceSvg ? "SVG loaded" : "SVG source pending"}</Badge>
+        <Badge>{totalGeneratedPixels} px</Badge>
+        <Badge>{formatDecimal(ledsPerAddressablePixel)} LEDs/px</Badge>
+        <Badge>{designer.sourceSvg ? "Reference loaded" : "Reference pending"}</Badge>
         <Badge>{fabricationNotice}</Badge>
         <div className="h-8 w-px bg-slate-200" />
-        {selectedZone ? (
+        {selectedBuildArea ? (
+          <>
+            <ToolbarText label="Name" value={selectedBuildArea.name} onChange={(name) => patchBuildArea(selectedBuildArea.id, { name })} />
+            <ToolbarField label="Shape">
+              <select className="h-8 rounded-md border bg-white px-2 text-body-sm" value={selectedBuildArea.shape} onChange={(event) => patchBuildArea(selectedBuildArea.id, { shape: event.target.value as DesignerBuildAreaForm["shape"] })}>
+                <option value="rect">Rectangle</option>
+                <option value="ellipse">Ellipse</option>
+                <option value="polygon">Polygon</option>
+              </select>
+            </ToolbarField>
+            {typeof selectedBuildAreaPointIndex === "number" && selectedBuildArea.points?.[selectedBuildAreaPointIndex] ? (
+              <>
+                <Badge>Point {selectedBuildAreaPointIndex + 1}</Badge>
+                <ToolbarNumber label="PX" value={selectedBuildArea.points[selectedBuildAreaPointIndex].x} suffix="cm" onChange={(x) => updateBuildAreaPoint(selectedBuildArea.id, selectedBuildAreaPointIndex, { x })} />
+                <ToolbarNumber label="PY" value={selectedBuildArea.points[selectedBuildAreaPointIndex].y} suffix="cm" onChange={(y) => updateBuildAreaPoint(selectedBuildArea.id, selectedBuildAreaPointIndex, { y })} />
+                <Button type="button" variant="outline" disabled={(selectedBuildArea.points?.length ?? 0) <= 3} onClick={() => deleteBuildAreaPoint(selectedBuildArea.id, selectedBuildAreaPointIndex)}>
+                  <Trash2 className="h-4 w-4" />
+                  Point
+                </Button>
+              </>
+            ) : (
+              <>
+                <ToolbarNumber label="X" value={selectedBuildArea.x} suffix="cm" onChange={(x) => patchBuildArea(selectedBuildArea.id, { x })} />
+                <ToolbarNumber label="Y" value={selectedBuildArea.y} suffix="cm" onChange={(y) => patchBuildArea(selectedBuildArea.id, { y })} />
+                <ToolbarNumber label="W" value={selectedBuildArea.width} suffix="cm" onChange={(width) => patchBuildArea(selectedBuildArea.id, { width })} />
+                <ToolbarNumber label="H" value={selectedBuildArea.height} suffix="cm" onChange={(height) => patchBuildArea(selectedBuildArea.id, { height })} />
+              </>
+            )}
+          </>
+        ) : selectedZone ? (
           <>
             <ToolbarText label="Name" value={selectedZone.name} onChange={(name) => patchZone(selectedZone.id, { name })} />
-            <ToolbarNumber label="X" value={selectedZone.x} onChange={(x) => patchZone(selectedZone.id, { x })} />
-            <ToolbarNumber label="Y" value={selectedZone.y} onChange={(y) => patchZone(selectedZone.id, { y })} />
-            <ToolbarNumber label="W" value={selectedZone.width} onChange={(width) => patchZone(selectedZone.id, { width })} />
-            <ToolbarNumber label="H" value={selectedZone.height} onChange={(height) => patchZone(selectedZone.id, { height })} />
+            <ToolbarField label="Shape">
+              <select className="h-8 rounded-md border bg-white px-2 text-body-sm" value={selectedZone.shape} onChange={(event) => patchZone(selectedZone.id, { shape: event.target.value as DesignerZoneForm["shape"] })}>
+                <option value="rect">Rectangle</option>
+                <option value="ellipse">Ellipse</option>
+                <option value="polygon">Polygon</option>
+              </select>
+            </ToolbarField>
+            {typeof selectedZonePointIndex === "number" && selectedZone.points?.[selectedZonePointIndex] ? (
+              <>
+                <Badge>Point {selectedZonePointIndex + 1}</Badge>
+                <ToolbarNumber label="PX" value={selectedZone.points[selectedZonePointIndex].x} suffix="cm" onChange={(x) => updateZonePoint(selectedZone.id, selectedZonePointIndex, { x })} />
+                <ToolbarNumber label="PY" value={selectedZone.points[selectedZonePointIndex].y} suffix="cm" onChange={(y) => updateZonePoint(selectedZone.id, selectedZonePointIndex, { y })} />
+                <Button type="button" variant="outline" disabled={(selectedZone.points?.length ?? 0) <= 3} onClick={() => deleteZonePoint(selectedZone.id, selectedZonePointIndex)}>
+                  <Trash2 className="h-4 w-4" />
+                  Point
+                </Button>
+              </>
+            ) : (
+              <>
+                <ToolbarNumber label="X" value={selectedZone.x} onChange={(x) => patchZone(selectedZone.id, { x })} />
+                <ToolbarNumber label="Y" value={selectedZone.y} onChange={(y) => patchZone(selectedZone.id, { y })} />
+                <ToolbarNumber label="W" value={selectedZone.width} onChange={(width) => patchZone(selectedZone.id, { width })} />
+                <ToolbarNumber label="H" value={selectedZone.height} onChange={(height) => patchZone(selectedZone.id, { height })} />
+              </>
+            )}
           </>
         ) : selectedController ? (
           <>
@@ -553,16 +735,16 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
             </ToolbarField>
             {selectedRoute.kind === "led_string" ? (
               <ToolbarField label="Zone">
-                <select className="h-8 max-w-[180px] rounded-md border bg-white px-2 text-body-sm" value={selectedRoute.zoneId} onChange={(event) => patchRoute(selectedRoute.id, { zoneId: event.target.value })}>
+                <select className="h-8 max-w-[160px] rounded-md border bg-white px-2 text-body-sm" value={selectedRoute.zoneId} onChange={(event) => patchRoute(selectedRoute.id, { zoneId: event.target.value })}>
                   {designer.zones.map((zone) => <option key={zone.id} value={zone.id}>{zone.name}</option>)}
                 </select>
               </ToolbarField>
             ) : null}
             <Badge>{formatMeasure(selectedRouteSummary?.lengthCm ?? 0, designer.rulerUnit)}</Badge>
-            <Badge>{selectedRoute.kind === "data_cable" ? "Signal only" : `${selectedRouteSummary?.leds ?? 0} LEDs @ ${designer.ledDensityPerMeter}/m`}</Badge>
+            <Badge>{selectedRoute.kind === "data_cable" ? "Signal only" : `${selectedRouteSummary?.pixels ?? 0} px · ${selectedRouteSummary?.leds ?? 0} LEDs`}</Badge>
             <Button type="button" variant="outline" onClick={() => addRoutePoint(selectedRoute.id)}>
               <Plus className="h-4 w-4" />
-              End Point
+              End
             </Button>
             <Button type="button" variant="outline" disabled={typeof selectedRoutePointIndex !== "number" || selectedRoutePointIndex <= 0 || selectedRoutePointIndex >= selectedRoute.points.length - 1} onClick={() => deleteRoutePoint(selectedRoute.id, selectedRoutePointIndex ?? -1)}>
               <Trash2 className="h-4 w-4" />
@@ -576,17 +758,56 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
         ) : (
           <span className="text-body-sm text-slate-500">Select an object to edit its properties.</span>
         )}
-      </div>
+        <div className="ml-auto flex items-center gap-2">
+          <Button type="button" variant={layersPanelOpen ? "default" : "outline"} title="Layers" className="h-9 px-3" onClick={() => setLayersPanelOpen((open) => !open)}>
+            <Layers className="h-4 w-4" />
+            Layers
+          </Button>
+          <Button type="button" variant="outline" title="Copy" className="h-9 w-9 px-0" disabled={!selection || selection.type === "controller" || selection.type === "build_area"} onClick={copySelection}>
+            <Copy className="h-4 w-4" />
+          </Button>
+          <Button type="button" variant="outline" title="Paste" className="h-9 px-2" disabled={!clipboard} onClick={pasteSelection}>
+            Paste
+          </Button>
+          <Button type="button" variant="outline" title="Delete" className="h-9 w-9 px-0" disabled={!selection || selection.type === "controller" || (selection.type === "build_area" && (designer.layers.reference.locked || Boolean(selectedBuildArea?.locked))) || (selection.type === "zone" && designer.layers.zones.locked) || (selection.type === "route" && designer.layers.strings.locked)} onClick={deleteSelection}>
+            <Trash2 className="h-4 w-4" />
+          </Button>
+          <Button type="button" variant="outline" onClick={() => void save()} disabled={saving}>
+            <Save className="h-4 w-4" />
+            {saving ? "Saving" : "Save"}
+          </Button>
+          <Button type="button" onClick={compileLayout} disabled={saving}>
+            <Cable className="h-4 w-4" />
+            Compile
+          </Button>
+        </div>
+      </header>
 
-      <div className="grid min-h-0 flex-1 grid-cols-[56px_minmax(0,1fr)]">
+      <div className={`grid min-h-0 flex-1 ${layersPanelOpen ? "grid-cols-[56px_minmax(0,1fr)_320px]" : "grid-cols-[56px_minmax(0,1fr)]"}`}>
         <aside className="flex flex-col items-center gap-2 border-r border-slate-300 bg-white py-3">
           <ToolButton active={tool === "select"} label="Select" icon={MousePointer2} onClick={() => setTool("select")} />
-          <ToolButton active={tool === "zone_rect"} label="Rectangle Zone" icon={Square} onClick={() => addZone("rect")} />
-          <ToolButton active={tool === "zone_ellipse"} label="Ellipse Zone" icon={Circle} onClick={() => addZone("ellipse")} />
-          <ToolButton active={tool === "led_string"} label="LED string" icon={Route} tone="amber" onClick={() => addRoute("led_string")} />
-          <ToolButton active={tool === "data_cable"} label="Data cable" icon={Cable} tone="green" onClick={() => addRoute("data_cable")} />
-          <ToolButton active={tool === "cut"} label="Cut route" icon={Scissors} onClick={() => setTool("cut")} />
-          <ToolButton label="Delete selected" icon={Trash2} disabled={!selection || selection.type === "controller"} onClick={deleteSelection} />
+          {activeLayer === "reference" ? (
+            <>
+              <ToolButton active={tool === "build_area_rect"} label="Rectangle Build Area" icon={Square} disabled={designer.layers.reference.locked || !designer.layers.reference.visible} onClick={() => addBuildArea("rect")} />
+              <ToolButton active={tool === "build_area_ellipse"} label="Ellipse Build Area" icon={Circle} disabled={designer.layers.reference.locked || !designer.layers.reference.visible} onClick={() => addBuildArea("ellipse")} />
+              <ToolButton active={tool === "build_area_polygon"} label="Polygon Build Area" icon={PenLine} disabled={designer.layers.reference.locked || !designer.layers.reference.visible} onClick={() => setTool("build_area_polygon")} />
+            </>
+          ) : null}
+          {activeLayer === "zones" ? (
+            <>
+              <ToolButton active={tool === "zone_rect"} label="Rectangle Zone" icon={Square} disabled={designer.layers.zones.locked || !designer.layers.zones.visible} onClick={() => addZone("rect")} />
+              <ToolButton active={tool === "zone_ellipse"} label="Ellipse Zone" icon={Circle} disabled={designer.layers.zones.locked || !designer.layers.zones.visible} onClick={() => addZone("ellipse")} />
+              <ToolButton active={tool === "zone_polygon"} label="Polygon Zone" icon={PenLine} disabled={designer.layers.zones.locked || !designer.layers.zones.visible} onClick={() => setTool("zone_polygon")} />
+            </>
+          ) : null}
+          {activeLayer === "strings" ? (
+            <>
+              <ToolButton active={tool === "led_string"} label="LED string" icon={Route} tone="amber" disabled={designer.layers.strings.locked || !designer.layers.strings.visible} onClick={() => setTool("led_string")} />
+              <ToolButton active={tool === "data_cable"} label="Data cable" icon={Cable} tone="green" disabled={designer.layers.strings.locked || !designer.layers.strings.visible} onClick={() => setTool("data_cable")} />
+              <ToolButton active={tool === "cut"} label="Cut route" icon={Scissors} disabled={designer.layers.strings.locked || !designer.layers.strings.visible} onClick={() => setTool("cut")} />
+            </>
+          ) : null}
+          <ToolButton label="Delete selected" icon={Trash2} disabled={!selection || selection.type === "controller" || (selection.type === "build_area" && (designer.layers.reference.locked || Boolean(selectedBuildArea?.locked))) || (selection.type === "zone" && designer.layers.zones.locked) || (selection.type === "route" && designer.layers.strings.locked)} onClick={deleteSelection} />
           <ToolButton active={tool === "pan"} label="Pan" icon={Hand} onClick={() => setTool("pan")} />
           <div className="my-2 h-px w-8 bg-slate-200" />
           <ToolButton label="Zoom In" icon={ZoomIn} onClick={() => zoom(0.78)} />
@@ -597,27 +818,43 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
         <main className="min-w-0 overflow-hidden bg-slate-900 p-4">
           <DesignerStudioCanvas
             designer={designer}
+            activeLayer={activeLayer}
             tool={tool}
+            onToolChange={setTool}
             viewport={activeViewport}
+            selectedBuildAreaId={selectedBuildArea?.id}
+            selectedBuildAreaPointIndex={selectedBuildAreaPointIndex}
             selectedZoneId={selectedZone?.id}
+            selectedZonePointIndex={selectedZonePointIndex}
             selectedRouteId={selectedRoute?.id}
             selectedRoutePointIndex={selectedRoutePointIndex}
             selectedController={Boolean(selectedController)}
             onViewportChange={setViewport}
             onChange={updateDesigner}
-            onSelect={setSelection}
+            onSelect={selectDesignerItem}
+            onInsertBuildAreaPoint={insertBuildAreaPoint}
+            onInsertZonePoint={insertZonePoint}
             onInsertRoutePoint={insertRoutePoint}
             onCutRoutePoint={handleCutRoutePoint}
             onRoutePointDragEnd={autoSolderRoutePoint}
             onSolderedTerminalsDragEnd={moveSolderedTerminals}
           />
         </main>
+        {layersPanelOpen ? (
+          <DesignerLayersPanel
+            designer={designer}
+            activeLayer={activeLayer}
+            selection={selection}
+            routeSummaries={routeSummaries}
+            onActivateLayer={activateDesignerLayer}
+            onPatchLayer={patchDesignerLayer}
+            onPatchBuildArea={patchBuildAreaVisual}
+            onPatchZone={patchZoneVisual}
+            onSelect={selectDesignerItem}
+            onClose={() => setLayersPanelOpen(false)}
+          />
+        ) : null}
       </div>
-
-      <footer className="flex h-8 shrink-0 items-center justify-between border-t border-slate-300 bg-white px-4 font-mono text-[11px] text-slate-500">
-        <span>Canvas {formatMeasure(designer.canvasWidthCm, designer.rulerUnit)} x {formatMeasure(designer.canvasHeightCm, designer.rulerUnit)} · Snap {formatMeasure(designer.snapCm, designer.rulerUnit)}</span>
-        <span>{designer.zones.length} zones · {designer.routes.filter((route) => route.kind === "led_string").length} LED strings · {designer.routes.filter((route) => route.kind === "data_cable").length} data cables · {totalGeneratedLeds} estimated LEDs</span>
-      </footer>
     </div>
   );
 }
@@ -1470,30 +1707,44 @@ function MapRow({ label, value }: { label: string; value: string }) {
 
 function DesignerStudioCanvas({
   designer,
+  activeLayer,
   tool,
+  onToolChange,
   viewport,
+  selectedBuildAreaId,
+  selectedBuildAreaPointIndex,
   selectedZoneId,
+  selectedZonePointIndex,
   selectedRouteId,
   selectedRoutePointIndex,
   selectedController,
   onViewportChange,
   onChange,
   onSelect,
+  onInsertBuildAreaPoint,
+  onInsertZonePoint,
   onInsertRoutePoint,
   onCutRoutePoint,
   onRoutePointDragEnd,
   onSolderedTerminalsDragEnd
 }: {
   designer: DesignerForm;
+  activeLayer: DesignerActiveLayer;
   tool: DesignerTool;
+  onToolChange: (tool: DesignerTool) => void;
   viewport: DesignerViewport;
+  selectedBuildAreaId?: string;
+  selectedBuildAreaPointIndex?: number;
   selectedZoneId?: string;
+  selectedZonePointIndex?: number;
   selectedRouteId?: string;
   selectedRoutePointIndex?: number;
   selectedController?: boolean;
   onViewportChange: (viewport: DesignerViewport) => void;
   onChange: (designer: DesignerForm) => void;
   onSelect: (selection: DesignerSelection) => void;
+  onInsertBuildAreaPoint: (buildAreaId: string, insertIndex: number, point: DesignerPoint) => void;
+  onInsertZonePoint: (zoneId: string, insertIndex: number, point: DesignerPoint) => void;
   onInsertRoutePoint: (routeId: string, point: DesignerPoint) => void;
   onCutRoutePoint: (routeId: string, pointIndex: number) => void;
   onRoutePointDragEnd: (routeId: string, pointIndex: number, finalPoint: DesignerPoint) => void;
@@ -1501,8 +1752,32 @@ function DesignerStudioCanvas({
 }) {
   const svgRef = useRef<SVGSVGElement | null>(null);
   const [drag, setDrag] = useState<DesignerDrag | null>(null);
+  const [routeDraft, setRouteDraft] = useState<DesignerRouteDraft | null>(null);
+  const [shapeDraft, setShapeDraft] = useState<DesignerShapeDraft | null>(null);
   const viewBox = `${viewport.x} ${viewport.y} ${viewport.width} ${viewport.height}`;
   const rulerGrid = designer.rulerVisible ? "grid-cols-[48px_minmax(0,1fr)] grid-rows-[28px_minmax(0,1fr)]" : "grid-cols-[0_minmax(0,1fr)] grid-rows-[0_minmax(0,1fr)]";
+
+  useEffect(() => {
+    if (activeLayer !== "strings" || (tool !== "led_string" && tool !== "data_cable")) setRouteDraft(null);
+  }, [activeLayer, tool]);
+
+  useEffect(() => {
+    const drawingReferencePolygon = activeLayer === "reference" && tool === "build_area_polygon";
+    const drawingZonePolygon = activeLayer === "zones" && tool === "zone_polygon";
+    if (!drawingReferencePolygon && !drawingZonePolygon) setShapeDraft(null);
+  }, [activeLayer, tool]);
+
+  useEffect(() => {
+    function handleEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setRouteDraft(null);
+        setShapeDraft(null);
+      }
+    }
+
+    window.addEventListener("keydown", handleEscape);
+    return () => window.removeEventListener("keydown", handleEscape);
+  }, []);
 
   function eventPoint(event: React.PointerEvent<SVGElement> | React.MouseEvent<SVGElement>) {
     const svg = svgRef.current;
@@ -1524,6 +1799,97 @@ function DesignerStudioCanvas({
     onChange({ ...designer, routes: designer.routes.map((route) => (route.id === routeId ? { ...route, ...patch } : route)) });
   }
 
+  function handleRouteDrawClick(event: React.PointerEvent<SVGSVGElement>, kind: DesignerRouteKind) {
+    if (activeLayer !== "strings" || designer.layers.strings.locked || !designer.layers.strings.visible) return;
+    const rawPoint = eventPoint(event);
+    const point = { x: snapValue(rawPoint.x, designer.snapCm), y: snapValue(rawPoint.y, designer.snapCm) };
+    const activeDraft = routeDraft?.kind === kind ? routeDraft : null;
+
+    if (!activeDraft) {
+      setRouteDraft({ kind, points: [point] });
+      onSelect(null);
+      return;
+    }
+
+    if (activeDraft.points.length === 1) {
+      if (sameSnapPoint(activeDraft.points[0], point, designer.snapCm)) return;
+      const route = createRouteFromDraft(kind, activeDraft.points[0], point, designer);
+      onChange({ ...designer, routes: [...designer.routes, route] });
+      setRouteDraft({ kind, routeId: route.id, points: route.points });
+      onSelect({ type: "route", id: route.id, pointIndex: route.points.length - 1 });
+      return;
+    }
+
+    const route = designer.routes.find((entry) => entry.id === activeDraft.routeId);
+    if (!route || sameSnapPoint(route.points[route.points.length - 1], point, designer.snapCm)) return;
+    const points = [...route.points, point];
+    onChange({
+      ...designer,
+      routes: designer.routes.map((entry) => (entry.id === route.id ? { ...entry, points } : entry))
+    });
+    setRouteDraft({ kind, routeId: route.id, points });
+    onSelect({ type: "route", id: route.id, pointIndex: points.length - 1 });
+  }
+
+  function handleShapeDrawClick(event: React.PointerEvent<SVGSVGElement>) {
+    const target = tool === "build_area_polygon" ? "build_area" : tool === "zone_polygon" ? "zone" : null;
+    if (!target) return;
+    if (target === "build_area" && (activeLayer !== "reference" || designer.layers.reference.locked || !designer.layers.reference.visible)) return;
+    if (target === "zone" && (activeLayer !== "zones" || designer.layers.zones.locked || !designer.layers.zones.visible)) return;
+
+    const rawPoint = eventPoint(event);
+    const point = { x: snapValue(rawPoint.x, designer.snapCm), y: snapValue(rawPoint.y, designer.snapCm) };
+    const activeDraft = shapeDraft?.target === target ? shapeDraft : null;
+    const points = activeDraft?.points ?? [];
+
+    if (points.length >= 3 && sameSnapPoint(points[0], point, designer.snapCm)) {
+      const polygonPoints = points.map((entry) => ({ x: entry.x, y: entry.y }));
+      const bounds = pointsBounds(polygonPoints);
+      if (!bounds) return;
+      if (target === "build_area") {
+        const next = designer.buildAreas.length + 1;
+        const buildArea: DesignerBuildAreaForm = {
+          id: `build_area_${next}`,
+          name: next === 1 ? "Build Area" : `Build Area ${next}`,
+          shape: "polygon",
+          x: bounds.x,
+          y: bounds.y,
+          width: bounds.width,
+          height: bounds.height,
+          points: polygonPoints,
+          visible: true,
+          locked: false,
+          opacity: 1
+        };
+        onChange({ ...designer, buildAreas: [...designer.buildAreas, buildArea] });
+        onSelect({ type: "build_area", id: buildArea.id });
+      } else {
+        const next = designer.zones.length + 1;
+        const zone: DesignerZoneForm = {
+          id: `zone_${next}`,
+          name: `Zone ${next}`,
+          shape: "polygon",
+          x: bounds.x,
+          y: bounds.y,
+          width: bounds.width,
+          height: bounds.height,
+          points: polygonPoints,
+          visible: true,
+          locked: false,
+          opacity: 1
+        };
+        onChange({ ...designer, zones: [...designer.zones, zone] });
+        onSelect({ type: "zone", id: zone.id });
+      }
+      setShapeDraft(null);
+      onToolChange("select");
+      return;
+    }
+
+    setShapeDraft({ target, points: [...points, point] });
+    onSelect(null);
+  }
+
   function handlePointerMove(event: React.PointerEvent<SVGSVGElement>) {
     if (!drag) return;
     const point = eventPoint(event);
@@ -1537,6 +1903,27 @@ function DesignerStudioCanvas({
       }, designer));
       return;
     }
+    if (drag.type === "build-area-move") {
+      onChange({
+        ...designer,
+        buildAreas: designer.buildAreas.map((buildArea) => (buildArea.id === drag.buildAreaId ? movedShape(drag.original, point.x - drag.start.x, point.y - drag.start.y, designer.snapCm) : buildArea))
+      });
+      return;
+    }
+    if (drag.type === "build-area-resize") {
+      onChange({
+        ...designer,
+        buildAreas: designer.buildAreas.map((buildArea) => (buildArea.id === drag.buildAreaId ? resizedBuildArea(drag.original, drag.handle, point.x - drag.start.x, point.y - drag.start.y, designer.snapCm) : buildArea))
+      });
+      return;
+    }
+    if (drag.type === "build-area-point") {
+      onChange({
+        ...designer,
+        buildAreas: designer.buildAreas.map((buildArea) => (buildArea.id === drag.buildAreaId ? updatePolygonPoint(buildArea, drag.pointIndex, point, designer.snapCm) : buildArea))
+      });
+      return;
+    }
     if (drag.type === "controller-move") {
       const nextController = {
         ...designer.controller,
@@ -1547,20 +1934,22 @@ function DesignerStudioCanvas({
       return;
     }
     if (drag.type === "zone-move") {
-      patchZone(drag.zoneId, {
-        x: snapValue(drag.original.x + point.x - drag.start.x, designer.snapCm),
-        y: snapValue(drag.original.y + point.y - drag.start.y, designer.snapCm)
-      });
+      patchZone(drag.zoneId, movedShape(drag.original, point.x - drag.start.x, point.y - drag.start.y, designer.snapCm));
       return;
     }
     if (drag.type === "zone-resize") {
       patchZone(drag.zoneId, resizedZone(drag.original, drag.handle, point.x - drag.start.x, point.y - drag.start.y, designer.snapCm));
       return;
     }
+    if (drag.type === "zone-point") {
+      const zone = designer.zones.find((entry) => entry.id === drag.zoneId);
+      if (zone) patchZone(drag.zoneId, updatePolygonPoint(zone, drag.pointIndex, point, designer.snapCm));
+      return;
+    }
     if (drag.type === "route-move") {
       onChange({
         ...designer,
-        routes: moveRouteWithSolderedTerminals(designer.routes, drag.routeId, drag.original, point.x - drag.start.x, point.y - drag.start.y, designer.snapCm)
+        routes: moveRouteWithSolderedTerminals(designer, drag.routeId, drag.original, point.x - drag.start.x, point.y - drag.start.y, designer.snapCm)
       });
       return;
     }
@@ -1574,22 +1963,36 @@ function DesignerStudioCanvas({
     }
   }
 
+  function startPanDrag(event: React.PointerEvent<SVGElement>) {
+    event.stopPropagation();
+    svgRef.current?.setPointerCapture(event.pointerId);
+    setDrag({ type: "pan", start: { x: event.clientX, y: event.clientY }, original: viewport });
+  }
+
   return (
     <div className={`grid h-full w-full ${rulerGrid} overflow-hidden rounded-md border border-slate-700 bg-slate-950`}>
       <div className={designer.rulerVisible ? "border-b border-r border-slate-700 bg-slate-900" : "overflow-hidden"} />
       {designer.rulerVisible ? <HorizontalRuler viewport={viewport} unit={designer.rulerUnit} /> : <div className="overflow-hidden" />}
       {designer.rulerVisible ? <VerticalRuler viewport={viewport} unit={designer.rulerUnit} /> : <div className="overflow-hidden" />}
-      <div className="min-h-0 min-w-0 overflow-auto bg-slate-950">
+      <div className="min-h-0 min-w-0 overflow-hidden bg-slate-950">
       <svg
         ref={svgRef}
         viewBox={viewBox}
-        className={`block h-full min-h-[620px] min-w-[1100px] bg-slate-950 ${tool === "pan" ? "cursor-grab" : "cursor-default"}`}
+        className={`block h-full w-full bg-slate-950 ${drag?.type === "pan" ? "cursor-grabbing" : tool === "pan" ? "cursor-grab" : tool === "led_string" || tool === "data_cable" || tool === "build_area_polygon" || tool === "zone_polygon" ? "cursor-crosshair" : "cursor-default"}`}
         role="img"
         aria-label="Designer studio canvas"
         onPointerDown={(event) => {
-          if (tool === "pan") {
-            (event.currentTarget as SVGSVGElement).setPointerCapture(event.pointerId);
-            setDrag({ type: "pan", start: { x: event.clientX, y: event.clientY }, original: viewport });
+          if (tool === "build_area_polygon" || tool === "zone_polygon") {
+            handleShapeDrawClick(event);
+            return;
+          }
+          if (tool === "led_string" || tool === "data_cable") {
+            handleRouteDrawClick(event, tool);
+            return;
+          }
+          if (tool === "pan" || tool === "select") {
+            onSelect(null);
+            startPanDrag(event);
             return;
           }
           onSelect(null);
@@ -1615,67 +2018,176 @@ function DesignerStudioCanvas({
         </defs>
         <rect x="0" y="0" width={designer.canvasWidthCm} height={designer.canvasHeightCm} fill="#020617" />
         <GridLines width={designer.canvasWidthCm} height={designer.canvasHeightCm} snapCm={designer.snapCm} />
-        {designer.zones.map((zone, index) => (
-          <ZoneShape
-            key={`${zone.id}:${index}`}
-            zone={zone}
-            selected={zone.id === selectedZoneId}
-            onPointerDown={(event) => {
-              event.stopPropagation();
-              const point = eventPoint(event);
-              onSelect({ type: "zone", id: zone.id });
-              setDrag({ type: "zone-move", zoneId: zone.id, start: point, original: zone });
-            }}
-            onResizePointerDown={(event, handle) => {
-              event.stopPropagation();
-              const point = eventPoint(event);
-              onSelect({ type: "zone", id: zone.id });
-              setDrag({ type: "zone-resize", zoneId: zone.id, handle, start: point, original: zone });
-            }}
-          />
-        ))}
-        {designer.routes.map((route, index) => (
-          <RouteShape
-            key={`${route.id}:${index}`}
-            route={route}
-            ledDensityPerMeter={designer.ledDensityPerMeter}
-            selected={route.id === selectedRouteId}
-            selectedPointIndex={route.id === selectedRouteId ? selectedRoutePointIndex : undefined}
-            onPointerDown={(event) => {
-              event.stopPropagation();
-              const point = eventPoint(event);
-              onSelect({ type: "route", id: route.id });
-              setDrag({ type: "route-move", routeId: route.id, start: point, original: route });
-            }}
-            onDoubleClick={(event) => {
-              event.stopPropagation();
-              onInsertRoutePoint(route.id, eventPoint(event));
-            }}
-            onPointPointerDown={(event, pointIndex) => {
-              event.stopPropagation();
-              if (tool === "cut") {
-                onCutRoutePoint(route.id, pointIndex);
-                return;
-              }
-              const routePoint = route.points[pointIndex];
-              const jointGroup = routePoint?.joint ? findJointGroup(designer.routes, route.id, pointIndex, designer.snapCm) : [{ routeId: route.id, pointIndex }];
-              onSelect({ type: "route", id: route.id, pointIndex });
-              setDrag({ type: "route-point", routeId: route.id, pointIndex, jointGroup });
-            }}
-          />
-        ))}
-        <ControllerShape
-          controller={designer.controller}
-          snapCm={designer.snapCm}
-          connectedPorts={controllerConnectedPorts(designer.controller, designer.routes, designer.snapCm)}
-          selected={Boolean(selectedController)}
-          onPointerDown={(event) => {
-            event.stopPropagation();
-            const point = eventPoint(event);
-            onSelect({ type: "controller", id: designer.controller.id });
-            setDrag({ type: "controller-move", start: point, original: designer.controller, originalRoutes: designer.routes });
-          }}
-        />
+        {shapeDraft ? <ShapeDraftPreview draft={shapeDraft} /> : null}
+        {designer.layers.reference.visible ? (
+          <g opacity={designer.layers.reference.opacity} pointerEvents={activeLayer === "reference" && !designer.layers.reference.locked ? "auto" : "none"}>
+            {designer.buildAreas.map((buildArea) => (
+              buildArea.visible ? (
+                <g key={buildArea.id} opacity={buildArea.opacity} pointerEvents={buildArea.locked ? "none" : "auto"}>
+                  <BuildAreaShape
+                    buildArea={buildArea}
+                    selected={selectedBuildAreaId === buildArea.id}
+                    selectedPointIndex={selectedBuildAreaId === buildArea.id ? selectedBuildAreaPointIndex : undefined}
+                    onPointerDown={(event) => {
+                      if (tool === "pan") {
+                        startPanDrag(event);
+                        return;
+                      }
+                      if (activeLayer !== "reference") return;
+                      event.stopPropagation();
+                      const point = eventPoint(event);
+                      onSelect({ type: "build_area", id: buildArea.id });
+                      setDrag({ type: "build-area-move", buildAreaId: buildArea.id, start: point, original: buildArea });
+                    }}
+                    onResizePointerDown={(event, handle) => {
+                      if (tool === "pan") {
+                        startPanDrag(event);
+                        return;
+                      }
+                      if (activeLayer !== "reference") return;
+                      event.stopPropagation();
+                      const point = eventPoint(event);
+                      onSelect({ type: "build_area", id: buildArea.id });
+                      setDrag({ type: "build-area-resize", buildAreaId: buildArea.id, handle, start: point, original: buildArea });
+                    }}
+                    onPointPointerDown={(event, pointIndex) => {
+                      if (tool === "pan") {
+                        startPanDrag(event);
+                        return;
+                      }
+                      if (activeLayer !== "reference") return;
+                      event.stopPropagation();
+                      onSelect({ type: "build_area", id: buildArea.id, pointIndex });
+                      setDrag({ type: "build-area-point", buildAreaId: buildArea.id, pointIndex });
+                    }}
+                    onSegmentDoubleClick={(event, insertIndex) => {
+                      if (activeLayer !== "reference") return;
+                      event.stopPropagation();
+                      onInsertBuildAreaPoint(buildArea.id, insertIndex, eventPoint(event));
+                    }}
+                  />
+                </g>
+              ) : null
+            ))}
+            {designer.sourceSvg && designer.buildAreas[0] ? <SvgReference sourceSvg={designer.sourceSvg} buildArea={designer.buildAreas[0]} opacity={0.85} /> : null}
+          </g>
+        ) : null}
+        {designer.layers.zones.visible ? (
+          <g opacity={designer.layers.zones.opacity} pointerEvents={activeLayer === "zones" && !designer.layers.zones.locked ? "auto" : "none"}>
+            {designer.zones.map((zone, index) => (
+              zone.visible ? (
+                <g key={`${zone.id}:${index}`} opacity={zone.opacity} pointerEvents={zone.locked ? "none" : "auto"}>
+                  <ZoneShape
+                  zone={zone}
+                  selected={zone.id === selectedZoneId}
+                  selectedPointIndex={zone.id === selectedZoneId ? selectedZonePointIndex : undefined}
+                  onPointerDown={(event) => {
+	                    if (tool === "pan") {
+	                      startPanDrag(event);
+	                      return;
+	                    }
+                    if (activeLayer !== "zones") return;
+	                    event.stopPropagation();
+                    const point = eventPoint(event);
+                    onSelect({ type: "zone", id: zone.id });
+                      setDrag({ type: "zone-move", zoneId: zone.id, start: point, original: zone });
+                    }}
+                   onResizePointerDown={(event, handle) => {
+	                      if (tool === "pan") {
+	                        startPanDrag(event);
+	                        return;
+	                      }
+                      if (activeLayer !== "zones") return;
+	                      event.stopPropagation();
+                      const point = eventPoint(event);
+                      onSelect({ type: "zone", id: zone.id });
+                      setDrag({ type: "zone-resize", zoneId: zone.id, handle, start: point, original: zone });
+                    }}
+                    onPointPointerDown={(event, pointIndex) => {
+                      if (tool === "pan") {
+                        startPanDrag(event);
+                        return;
+                      }
+                      if (activeLayer !== "zones") return;
+                      event.stopPropagation();
+                      onSelect({ type: "zone", id: zone.id, pointIndex });
+                      setDrag({ type: "zone-point", zoneId: zone.id, pointIndex });
+                    }}
+                    onSegmentDoubleClick={(event, insertIndex) => {
+                      if (activeLayer !== "zones") return;
+                      event.stopPropagation();
+                      onInsertZonePoint(zone.id, insertIndex, eventPoint(event));
+                    }}
+                  />
+                </g>
+              ) : null
+            ))}
+          </g>
+        ) : null}
+        {designer.layers.strings.visible ? (
+          <g opacity={designer.layers.strings.opacity} pointerEvents={activeLayer === "strings" && !designer.layers.strings.locked ? "auto" : "none"}>
+            {designer.routes.map((route, index) => (
+              <RouteShape
+                key={`${route.id}:${index}`}
+                route={route}
+                addressablePixelsPerMeter={designer.addressablePixelsPerMeter}
+                ledsPerMeter={designer.ledsPerMeter}
+                selected={route.id === selectedRouteId}
+                selectedPointIndex={route.id === selectedRouteId ? selectedRoutePointIndex : undefined}
+                onPointerDown={(event) => {
+	                  if (tool === "pan") {
+	                    startPanDrag(event);
+	                    return;
+	                  }
+                  if (activeLayer !== "strings") return;
+	                  event.stopPropagation();
+                  const point = eventPoint(event);
+                  onSelect({ type: "route", id: route.id });
+                  setDrag({ type: "route-move", routeId: route.id, start: point, original: route });
+                }}
+	                onDoubleClick={(event) => {
+                  if (activeLayer !== "strings") return;
+	                  event.stopPropagation();
+                  onInsertRoutePoint(route.id, eventPoint(event));
+                }}
+                onPointPointerDown={(event, pointIndex) => {
+	                  if (tool === "pan") {
+	                    startPanDrag(event);
+	                    return;
+	                  }
+                  if (activeLayer !== "strings") return;
+	                  event.stopPropagation();
+                  if (tool === "cut") {
+                    onCutRoutePoint(route.id, pointIndex);
+                    return;
+                  }
+                  const routePoint = route.points[pointIndex];
+                  const jointGroup = routePoint?.joint ? findJointGroup(designer.routes, route.id, pointIndex, designer.snapCm) : [{ routeId: route.id, pointIndex }];
+                  onSelect({ type: "route", id: route.id, pointIndex });
+                  setDrag({ type: "route-point", routeId: route.id, pointIndex, jointGroup });
+                }}
+              />
+            ))}
+            {routeDraft?.points.length === 1 ? <RouteDraftStart point={routeDraft.points[0]} kind={routeDraft.kind} /> : null}
+            <ControllerShape
+              controller={designer.controller}
+              snapCm={designer.snapCm}
+              connectedPorts={controllerConnectedPorts(designer.controller, designer.routes, designer.snapCm)}
+              selected={Boolean(selectedController)}
+              onPointerDown={(event) => {
+	                if (tool === "pan") {
+	                  startPanDrag(event);
+	                  return;
+	                }
+                if (activeLayer !== "strings") return;
+	                event.stopPropagation();
+                const point = eventPoint(event);
+                onSelect({ type: "controller", id: designer.controller.id });
+                setDrag({ type: "controller-move", start: point, original: designer.controller, originalRoutes: designer.routes });
+              }}
+            />
+          </g>
+        ) : null}
       </svg>
       </div>
     </div>
@@ -1698,21 +2210,367 @@ function ToolButton({
   onClick?: () => void;
 }) {
   const activeClass = {
-    blue: "border-blue-500 bg-blue-50 text-blue-700",
-    amber: "border-amber-500 bg-amber-50 text-amber-700",
-    green: "border-emerald-500 bg-emerald-50 text-emerald-700"
+    blue: "border-blue-600 bg-blue-600 text-white shadow-sm ring-2 ring-blue-200",
+    amber: "border-amber-500 bg-amber-500 text-slate-950 shadow-sm ring-2 ring-amber-200",
+    green: "border-emerald-500 bg-emerald-500 text-white shadow-sm ring-2 ring-emerald-200"
   }[tone];
   return (
     <button
       type="button"
       title={label}
+      aria-pressed={active}
       disabled={disabled}
       onClick={onClick}
-      className={`relative flex h-10 w-10 items-center justify-center rounded-md border text-slate-700 transition hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-40 ${active ? activeClass : "border-transparent bg-white"}`}
+      className={`relative flex h-10 w-10 items-center justify-center rounded-md border transition disabled:cursor-not-allowed disabled:opacity-40 ${active ? activeClass : "border-transparent bg-white text-slate-700 hover:bg-slate-100"}`}
     >
-      {(tone === "amber" || tone === "green") ? <span className={`absolute bottom-1 h-1.5 w-5 rounded-full ${tone === "amber" ? "bg-amber-500" : "bg-emerald-500"}`} /> : null}
+      {active ? <span className="absolute -right-1.5 top-1/2 h-2.5 w-2.5 -translate-y-1/2 rounded-full bg-current ring-2 ring-white" /> : null}
+      {(tone === "amber" || tone === "green") && !active ? <span className={`absolute bottom-1 h-1.5 w-5 rounded-full ${tone === "amber" ? "bg-amber-500" : "bg-emerald-500"}`} /> : null}
       <Icon className="h-5 w-5" />
     </button>
+  );
+}
+
+function DesignerLayersPanel({
+  designer,
+  activeLayer,
+  selection,
+  routeSummaries,
+  onActivateLayer,
+  onPatchLayer,
+  onPatchBuildArea,
+  onPatchZone,
+  onSelect,
+  onClose
+}: {
+  designer: DesignerForm;
+  activeLayer: DesignerActiveLayer;
+  selection: DesignerSelection;
+  routeSummaries: Array<ReturnType<typeof summarizeRoute>>;
+  onActivateLayer: (layer: DesignerActiveLayer) => void;
+  onPatchLayer: (layer: keyof DesignerLayersForm, patch: Partial<DesignerLayerSettings>) => void;
+  onPatchBuildArea: (buildAreaId: string, patch: Partial<Pick<DesignerBuildAreaForm, "visible" | "locked" | "opacity">>) => void;
+  onPatchZone: (zoneId: string, patch: Partial<Pick<DesignerZoneForm, "visible" | "locked" | "opacity">>) => void;
+  onSelect: (selection: DesignerSelection) => void;
+  onClose: () => void;
+}) {
+  const [expandedLayers, setExpandedLayers] = useState<Record<DesignerActiveLayer, boolean>>({
+    reference: activeLayer === "reference",
+    zones: activeLayer === "zones",
+    strings: activeLayer === "strings"
+  });
+
+  function activateLayer(layer: DesignerActiveLayer) {
+    setExpandedLayers((current) => ({ ...current, [layer]: true }));
+    onActivateLayer(layer);
+  }
+
+  function toggleLayer(layer: DesignerActiveLayer) {
+    setExpandedLayers((current) => ({ ...current, [layer]: !current[layer] }));
+  }
+
+  return (
+    <aside className="flex min-h-0 flex-col border-l border-slate-300 bg-white">
+      <div className="flex h-12 shrink-0 items-center justify-between border-b border-slate-200 px-3">
+        <div className="flex items-center gap-2 text-body-sm font-semibold">
+          <Layers className="h-4 w-4 text-blue-700" />
+          Layers
+        </div>
+        <button type="button" title="Close layers" className="flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-600 hover:bg-slate-50" onClick={onClose}>
+          <EyeOff className="h-4 w-4" />
+        </button>
+      </div>
+      <div className="min-h-0 flex-1 space-y-2 overflow-auto p-3">
+        <LayerPanelSection
+          label="Reference"
+          active={activeLayer === "reference"}
+          expanded={expandedLayers.reference}
+          layer={designer.layers.reference}
+          onActivate={() => activateLayer("reference")}
+          onToggle={() => toggleLayer("reference")}
+          onChange={(patch) => onPatchLayer("reference", patch)}
+        >
+          {designer.buildAreas.map((buildArea) => (
+            <LayerChildRow
+              key={buildArea.id}
+              label={buildArea.name}
+              detail={`${buildArea.shape} · ${formatDecimal(buildArea.width)}x${formatDecimal(buildArea.height)} cm`}
+              selected={selection?.type === "build_area" && selection.id === buildArea.id}
+              muted={!buildArea.visible}
+              locked={buildArea.locked}
+              visible={buildArea.visible}
+              opacity={buildArea.opacity}
+              onClick={() => {
+                activateLayer("reference");
+                onSelect({ type: "build_area", id: buildArea.id });
+              }}
+              onVisibleChange={(visible) => onPatchBuildArea(buildArea.id, { visible })}
+              onLockedChange={(locked) => onPatchBuildArea(buildArea.id, { locked })}
+              onOpacityChange={(opacity) => onPatchBuildArea(buildArea.id, { opacity })}
+            />
+          ))}
+          <LayerChildRow
+            label="Reference Art"
+            detail={designer.sourceSvg ? "Loaded" : "Pending"}
+            muted={!designer.sourceSvg}
+            onClick={() => activateLayer("reference")}
+          />
+        </LayerPanelSection>
+
+        <LayerPanelSection
+          label="Zones"
+          active={activeLayer === "zones"}
+          expanded={expandedLayers.zones}
+          layer={designer.layers.zones}
+          onActivate={() => activateLayer("zones")}
+          onToggle={() => toggleLayer("zones")}
+          onChange={(patch) => onPatchLayer("zones", patch)}
+        >
+          {designer.zones.map((zone) => (
+            <LayerChildRow
+              key={zone.id}
+              label={zone.name}
+              detail={`${zone.shape} · ${formatDecimal(zone.width)}x${formatDecimal(zone.height)} cm`}
+              selected={selection?.type === "zone" && selection.id === zone.id}
+              muted={!zone.visible}
+              locked={zone.locked}
+              visible={zone.visible}
+              opacity={zone.opacity}
+              onClick={() => {
+                activateLayer("zones");
+                onSelect({ type: "zone", id: zone.id });
+              }}
+              onVisibleChange={(visible) => onPatchZone(zone.id, { visible })}
+              onLockedChange={(locked) => onPatchZone(zone.id, { locked })}
+              onOpacityChange={(opacity) => onPatchZone(zone.id, { opacity })}
+            />
+          ))}
+        </LayerPanelSection>
+
+        <LayerPanelSection
+          label="Strings"
+          active={activeLayer === "strings"}
+          expanded={expandedLayers.strings}
+          layer={designer.layers.strings}
+          onActivate={() => activateLayer("strings")}
+          onToggle={() => toggleLayer("strings")}
+          onChange={(patch) => onPatchLayer("strings", patch)}
+        >
+          <LayerChildRow
+            label={designer.controller.name}
+            detail={`${designer.controller.dataOutputs} outputs`}
+            selected={selection?.type === "controller"}
+            onClick={() => {
+              activateLayer("strings");
+              onSelect({ type: "controller", id: designer.controller.id });
+            }}
+          />
+          {designer.routes.map((route, index) => (
+            <LayerChildRow
+              key={route.id}
+              label={route.name}
+              detail={route.kind === "data_cable" ? `Out ${route.output} · data cable` : `Out ${route.output} · ${routeSummaries[index]?.pixels ?? 0} px · ${routeSummaries[index]?.leds ?? 0} LEDs`}
+              selected={selection?.type === "route" && selection.id === route.id}
+              color={route.kind === "data_cable" ? "green" : "amber"}
+              onClick={() => {
+                activateLayer("strings");
+                onSelect({ type: "route", id: route.id });
+              }}
+            />
+          ))}
+        </LayerPanelSection>
+      </div>
+    </aside>
+  );
+}
+
+function LayerPanelSection({
+  label,
+  active,
+  expanded,
+  layer,
+  children,
+  onActivate,
+  onToggle,
+  onChange
+}: {
+  label: string;
+  active: boolean;
+  expanded: boolean;
+  layer: DesignerLayerSettings;
+  children: React.ReactNode;
+  onActivate: () => void;
+  onToggle: () => void;
+  onChange: (patch: Partial<DesignerLayerSettings>) => void;
+}) {
+  return (
+    <section className={`overflow-hidden rounded-md border ${active ? "border-blue-500 bg-blue-50" : "border-slate-200 bg-slate-50"}`}>
+      <div className="flex items-center gap-1.5 border-b border-slate-200 p-2">
+        <button type="button" title={expanded ? `Collapse ${label}` : `Expand ${label}`} className="flex h-7 w-7 items-center justify-center rounded border border-slate-200 bg-white text-slate-600 hover:bg-slate-100" onClick={onToggle}>
+          {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+        </button>
+        <button type="button" className={`min-w-0 flex-1 rounded px-2 py-1 text-left text-body-sm font-semibold ${active ? "bg-blue-600 text-white" : "text-slate-800 hover:bg-white"}`} onClick={onActivate}>
+          {label}
+        </button>
+        <IconToggle active={layer.visible} label={layer.visible ? `Hide ${label}` : `Show ${label}`} onClick={() => onChange({ visible: !layer.visible })}>
+          {layer.visible ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
+        </IconToggle>
+        <IconToggle active={layer.locked} label={layer.locked ? `Unlock ${label}` : `Lock ${label}`} onClick={() => onChange({ locked: !layer.locked })}>
+          {layer.locked ? <Lock className="h-3.5 w-3.5" /> : <Unlock className="h-3.5 w-3.5" />}
+        </IconToggle>
+      </div>
+      {expanded ? (
+        <>
+          <div className="flex items-center gap-2 px-3 py-2">
+            <span className="text-[10px] font-medium uppercase text-slate-500">Opacity</span>
+            <input className="h-5 flex-1 accent-blue-600" type="range" min="10" max="100" step="5" value={Math.round(layer.opacity * 100)} onChange={(event) => onChange({ opacity: Number(event.target.value) / 100 })} />
+            <span className="w-8 text-right font-mono text-[11px] text-slate-500">{Math.round(layer.opacity * 100)}%</span>
+          </div>
+          <div className="space-y-1 p-2 pt-0">{children}</div>
+        </>
+      ) : null}
+    </section>
+  );
+}
+
+function LayerChildRow({
+  label,
+  detail,
+  selected,
+  muted,
+  locked,
+  visible,
+  opacity,
+  color = "slate",
+  onClick,
+  onVisibleChange,
+  onLockedChange,
+  onOpacityChange
+}: {
+  label: string;
+  detail: string;
+  selected?: boolean;
+  muted?: boolean;
+  locked?: boolean;
+  visible?: boolean;
+  opacity?: number;
+  color?: "slate" | "green" | "amber";
+  onClick: () => void;
+  onVisibleChange?: (visible: boolean) => void;
+  onLockedChange?: (locked: boolean) => void;
+  onOpacityChange?: (opacity: number) => void;
+}) {
+  const colorClass = color === "green" ? "bg-emerald-500" : color === "amber" ? "bg-amber-400" : "bg-slate-400";
+  return (
+    <div className={`rounded-md border ${selected ? "border-blue-500 bg-white shadow-sm" : "border-transparent bg-white/60 hover:bg-white"} ${muted ? "opacity-55" : ""}`}>
+      <button type="button" className="flex w-full items-center gap-2 px-2 py-1.5 text-left" onClick={onClick}>
+        <span className={`h-2.5 w-2.5 shrink-0 rounded-full ${colorClass}`} />
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-body-sm font-medium text-slate-800">{label}</span>
+          <span className="block truncate font-mono text-[10px] uppercase text-slate-500">{detail}</span>
+        </span>
+      </button>
+      {(onVisibleChange || onLockedChange || onOpacityChange) ? (
+        <div className="flex items-center gap-1.5 border-t border-slate-100 px-2 py-1">
+          {onVisibleChange ? (
+            <IconToggle active={visible !== false} label={visible !== false ? `Hide ${label}` : `Show ${label}`} onClick={() => onVisibleChange(!(visible !== false))}>
+              {visible !== false ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
+            </IconToggle>
+          ) : null}
+          {onLockedChange ? (
+            <IconToggle active={Boolean(locked)} label={locked ? `Unlock ${label}` : `Lock ${label}`} onClick={() => onLockedChange(!locked)}>
+              {locked ? <Lock className="h-3.5 w-3.5" /> : <Unlock className="h-3.5 w-3.5" />}
+            </IconToggle>
+          ) : null}
+          {onOpacityChange ? (
+            <>
+              <input className="h-5 min-w-0 flex-1 accent-blue-600" type="range" min="10" max="100" step="5" value={Math.round((opacity ?? 1) * 100)} onChange={(event) => onOpacityChange(Number(event.target.value) / 100)} />
+              <span className="w-8 text-right font-mono text-[10px] text-slate-500">{Math.round((opacity ?? 1) * 100)}%</span>
+            </>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function IconToggle({ active, label, children, onClick }: { active: boolean; label: string; children: React.ReactNode; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-pressed={active}
+      className={`flex h-7 w-7 items-center justify-center rounded border transition ${active ? "border-blue-300 bg-white text-blue-700" : "border-slate-200 bg-slate-100 text-slate-400 hover:bg-white"}`}
+      onClick={onClick}
+    >
+      {children}
+    </button>
+  );
+}
+
+function LayerToggle({
+  label,
+  active,
+  layer,
+  onActivate,
+  onChange
+}: {
+  label: string;
+  active: boolean;
+  layer: DesignerLayerSettings;
+  onActivate: () => void;
+  onChange: (patch: Partial<DesignerLayerSettings>) => void;
+}) {
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      aria-pressed={active}
+      className={`flex h-8 cursor-pointer items-center gap-1 rounded-md border px-1.5 text-body-sm transition ${active ? "border-blue-600 bg-blue-600 text-white shadow-sm ring-2 ring-blue-200" : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"}`}
+      onClick={onActivate}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onActivate();
+        }
+      }}
+    >
+      <span className={`px-1 text-[11px] font-semibold uppercase ${active ? "text-white" : "text-slate-500"}`}>{label}</span>
+      <button
+        type="button"
+        title={layer.visible ? `Hide ${label}` : `Show ${label}`}
+        aria-pressed={layer.visible}
+        className={`flex h-6 w-6 items-center justify-center rounded border transition ${layer.visible ? active ? "border-white/60 bg-white/20 text-white" : "border-blue-500 bg-blue-50 text-blue-700" : "border-slate-200 bg-slate-100 text-slate-400"}`}
+        onClick={(event) => {
+          event.stopPropagation();
+          onChange({ visible: !layer.visible });
+        }}
+      >
+        {layer.visible ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
+      </button>
+      <button
+        type="button"
+        title={layer.locked ? `Unlock ${label}` : `Lock ${label}`}
+        aria-pressed={layer.locked}
+        className={`flex h-6 w-6 items-center justify-center rounded border transition ${layer.locked ? "border-amber-500 bg-amber-100 text-amber-800" : active ? "border-white/50 bg-white/10 text-white" : "border-slate-200 bg-white text-slate-500 hover:bg-slate-100"}`}
+        onClick={(event) => {
+          event.stopPropagation();
+          onChange({ locked: !layer.locked });
+        }}
+      >
+        {layer.locked ? <Lock className="h-3.5 w-3.5" /> : <Unlock className="h-3.5 w-3.5" />}
+      </button>
+      <input
+        type="range"
+        title={`${label} opacity`}
+        min="10"
+        max="100"
+        step="5"
+        value={Math.round(layer.opacity * 100)}
+        className="h-6 w-14 accent-blue-600"
+        onClick={(event) => event.stopPropagation()}
+        onChange={(event) => onChange({ opacity: Number(event.target.value) / 100 })}
+      />
+    </div>
   );
 }
 
@@ -1788,16 +2646,126 @@ function GridLines({ width, height, snapCm }: { width: number; height: number; s
   );
 }
 
+function ShapeDraftPreview({ draft }: { draft: DesignerShapeDraft }) {
+  const stroke = draft.target === "build_area" ? "#93c5fd" : "#38bdf8";
+  return (
+    <g pointerEvents="none">
+      <polyline
+        points={shapePointsString(draft.points)}
+        fill="none"
+        stroke={stroke}
+        strokeDasharray="1.4 1"
+        strokeWidth="0.34"
+      />
+      {draft.points.length > 2 ? <line x1={draft.points[draft.points.length - 1].x} y1={draft.points[draft.points.length - 1].y} x2={draft.points[0].x} y2={draft.points[0].y} stroke={stroke} strokeDasharray="0.8 1.2" strokeWidth="0.18" /> : null}
+      {draft.points.map((point, index) => (
+        <circle key={`${draft.target}-draft-${index}`} cx={point.x} cy={point.y} r={index === 0 ? "0.85" : "0.65"} fill={index === 0 ? "#22c55e" : "#f8fafc"} stroke={stroke} strokeWidth="0.2" />
+      ))}
+    </g>
+  );
+}
+
+function BuildAreaShape({
+  buildArea,
+  selected,
+  selectedPointIndex,
+  onPointerDown,
+  onResizePointerDown,
+  onPointPointerDown,
+  onSegmentDoubleClick
+}: {
+  buildArea: DesignerBuildAreaForm;
+  selected: boolean;
+  selectedPointIndex?: number;
+  onPointerDown: (event: React.PointerEvent<SVGElement>) => void;
+  onResizePointerDown: (event: React.PointerEvent<SVGCircleElement>, handle: ResizeHandle) => void;
+  onPointPointerDown: (event: React.PointerEvent<SVGCircleElement>, pointIndex: number) => void;
+  onSegmentDoubleClick: (event: React.MouseEvent<SVGLineElement>, insertIndex: number) => void;
+}) {
+  const handles: Array<{ handle: ResizeHandle; x: number; y: number }> = [
+    { handle: "nw", x: buildArea.x, y: buildArea.y },
+    { handle: "ne", x: buildArea.x + buildArea.width, y: buildArea.y },
+    { handle: "sw", x: buildArea.x, y: buildArea.y + buildArea.height },
+    { handle: "se", x: buildArea.x + buildArea.width, y: buildArea.y + buildArea.height }
+  ];
+  const common = {
+    fill: "rgba(59,130,246,0.06)",
+    stroke: selected ? "#60a5fa" : "#93c5fd",
+    strokeDasharray: "1.4 0.9",
+    strokeWidth: selected ? 0.42 : 0.24,
+    onPointerDown
+  };
+  return (
+    <g>
+      {buildArea.shape === "polygon" && buildArea.points ? (
+        <polygon points={shapePointsString(buildArea.points)} {...common} />
+      ) : buildArea.shape === "ellipse" ? (
+        <ellipse cx={buildArea.x + buildArea.width / 2} cy={buildArea.y + buildArea.height / 2} rx={buildArea.width / 2} ry={buildArea.height / 2} {...common} />
+      ) : (
+        <rect x={buildArea.x} y={buildArea.y} width={buildArea.width} height={buildArea.height} {...common} />
+      )}
+      <text x={buildArea.x + 1.2} y={buildArea.y + 2.5} fill="#bfdbfe" fontSize="1.7" fontFamily="monospace" pointerEvents="none">
+        {buildArea.name} {formatDecimal(buildArea.width)}x{formatDecimal(buildArea.height)} cm
+      </text>
+      {selected && buildArea.shape === "polygon" && buildArea.points ? polygonSegments(buildArea.points).map((segment) => (
+        <line
+          key={`${buildArea.id}-segment-hit-${segment.insertIndex}`}
+          x1={segment.start.x}
+          y1={segment.start.y}
+          x2={segment.end.x}
+          y2={segment.end.y}
+          stroke="transparent"
+          strokeWidth="2.2"
+          pointerEvents="stroke"
+          onDoubleClick={(event) => onSegmentDoubleClick(event, segment.insertIndex)}
+        />
+      )) : null}
+      {selected ? handles.map((handle) => (
+        <circle
+          key={handle.handle}
+          cx={handle.x}
+          cy={handle.y}
+          r="0.85"
+          className="cursor-nwse-resize"
+          fill="#eff6ff"
+          stroke="#2563eb"
+          strokeWidth="0.25"
+          onPointerDown={(event) => onResizePointerDown(event, handle.handle)}
+        />
+      )) : null}
+      {selected && buildArea.shape === "polygon" && buildArea.points ? buildArea.points.map((point, index) => (
+        <circle
+          key={`${buildArea.id}-point-${index}`}
+          cx={point.x}
+          cy={point.y}
+          r={selectedPointIndex === index ? "1" : "0.75"}
+          className="cursor-move"
+          fill={selectedPointIndex === index ? "#facc15" : "#f8fafc"}
+          stroke={selectedPointIndex === index ? "#0f172a" : "#2563eb"}
+          strokeWidth="0.25"
+          onPointerDown={(event) => onPointPointerDown(event, index)}
+        />
+      )) : null}
+    </g>
+  );
+}
+
 function ZoneShape({
   zone,
   selected,
+  selectedPointIndex,
   onPointerDown,
-  onResizePointerDown
+  onResizePointerDown,
+  onPointPointerDown,
+  onSegmentDoubleClick
 }: {
   zone: DesignerZoneForm;
   selected: boolean;
+  selectedPointIndex?: number;
   onPointerDown: (event: React.PointerEvent<SVGElement>) => void;
   onResizePointerDown: (event: React.PointerEvent<SVGCircleElement>, handle: ResizeHandle) => void;
+  onPointPointerDown: (event: React.PointerEvent<SVGCircleElement>, pointIndex: number) => void;
+  onSegmentDoubleClick: (event: React.MouseEvent<SVGLineElement>, insertIndex: number) => void;
 }) {
   const common = {
     fill: selected ? "rgba(14,165,233,0.24)" : "rgba(148,163,184,0.12)",
@@ -1811,12 +2779,27 @@ function ZoneShape({
     { handle: "sw", x: zone.x, y: zone.y + zone.height },
     { handle: "se", x: zone.x + zone.width, y: zone.y + zone.height }
   ];
-  const shape = zone.shape === "ellipse"
+  const shape = zone.shape === "polygon" && zone.points
+    ? <polygon points={shapePointsString(zone.points)} {...common} />
+    : zone.shape === "ellipse"
     ? <ellipse cx={zone.x + zone.width / 2} cy={zone.y + zone.height / 2} rx={zone.width / 2} ry={zone.height / 2} {...common} />
     : <rect x={zone.x} y={zone.y} width={zone.width} height={zone.height} rx="0.8" {...common} />;
   return (
     <g>
       {shape}
+      {selected && zone.shape === "polygon" && zone.points ? polygonSegments(zone.points).map((segment) => (
+        <line
+          key={`${zone.id}-segment-hit-${segment.insertIndex}`}
+          x1={segment.start.x}
+          y1={segment.start.y}
+          x2={segment.end.x}
+          y2={segment.end.y}
+          stroke="transparent"
+          strokeWidth="2.2"
+          pointerEvents="stroke"
+          onDoubleClick={(event) => onSegmentDoubleClick(event, segment.insertIndex)}
+        />
+      )) : null}
       {selected ? handles.map((handle) => (
         <circle
           key={handle.handle}
@@ -1828,6 +2811,19 @@ function ZoneShape({
           stroke="#2563eb"
           strokeWidth="0.25"
           onPointerDown={(event) => onResizePointerDown(event, handle.handle)}
+        />
+      )) : null}
+      {selected && zone.shape === "polygon" && zone.points ? zone.points.map((point, index) => (
+        <circle
+          key={`${zone.id}-point-${index}`}
+          cx={point.x}
+          cy={point.y}
+          r={selectedPointIndex === index ? "1" : "0.75"}
+          className="cursor-move"
+          fill={selectedPointIndex === index ? "#facc15" : "#f8fafc"}
+          stroke={selectedPointIndex === index ? "#0f172a" : "#2563eb"}
+          strokeWidth="0.25"
+          onPointerDown={(event) => onPointPointerDown(event, index)}
         />
       )) : null}
     </g>
@@ -1901,9 +2897,28 @@ function ControllerShape({
   );
 }
 
+function SvgReference({ sourceSvg, buildArea, opacity }: { sourceSvg: string; buildArea: DesignerBuildAreaForm; opacity: number }) {
+  return (
+    <foreignObject x={buildArea.x} y={buildArea.y} width={buildArea.width} height={buildArea.height} opacity={opacity} pointerEvents="none">
+      <div className="h-full w-full" dangerouslySetInnerHTML={{ __html: sourceSvg }} />
+    </foreignObject>
+  );
+}
+
+function RouteDraftStart({ point, kind }: { point: DesignerPoint; kind: DesignerRouteKind }) {
+  const stroke = kind === "data_cable" ? "#86efac" : "#fde68a";
+  return (
+    <g pointerEvents="none">
+      <circle cx={point.x} cy={point.y} r="0.78" fill="none" stroke={stroke} strokeDasharray="0.45 0.32" strokeWidth="0.18" />
+      <circle cx={point.x} cy={point.y} r="0.36" fill="#22c55e" stroke="#020617" strokeWidth="0.12" />
+    </g>
+  );
+}
+
 function RouteShape({
   route,
-  ledDensityPerMeter,
+  addressablePixelsPerMeter,
+  ledsPerMeter,
   selected,
   selectedPointIndex,
   onPointerDown,
@@ -1911,7 +2926,8 @@ function RouteShape({
   onPointPointerDown
 }: {
   route: DesignerRouteForm;
-  ledDensityPerMeter: number;
+  addressablePixelsPerMeter: number;
+  ledsPerMeter: number;
   selected: boolean;
   selectedPointIndex?: number;
   onPointerDown: (event: React.PointerEvent<SVGPolylineElement>) => void;
@@ -1919,7 +2935,7 @@ function RouteShape({
   onPointPointerDown: (event: React.PointerEvent<SVGCircleElement>, pointIndex: number) => void;
 }) {
   const points = route.points.map((point) => `${point.x},${point.y}`).join(" ");
-  const ledDots = route.kind === "led_string" ? sampleRouteLedDots(route, ledDensityPerMeter) : [];
+  const ledDots = route.kind === "led_string" ? sampleRouteLedDots(route, ledsPerMeter, addressablePixelsPerMeter) : [];
   const directionMarkers = routeDirectionMarkers(route);
   return (
     <g>
@@ -1951,7 +2967,8 @@ function RouteShape({
           cy={dot.y}
           r={selected ? 0.48 : 0.4}
           fill={selected ? "#facc15" : "#f59e0b"}
-          stroke="#020617"
+          opacity={dot.addressableIndex % 2 === 0 ? 1 : 0.82}
+          stroke={dot.addressableIndex % 2 === 0 ? "#020617" : "#78350f"}
           strokeWidth="0.1"
           pointerEvents="none"
         />
@@ -1992,7 +3009,7 @@ function RouteShape({
             cy={point.y}
             r={point.joint ? 0.5 : selectedPointIndex === index ? 0.42 : selected ? 0.32 : 0.24}
             pointerEvents="none"
-            fill={point.joint ? "#22d3ee" : selectedPointIndex === index ? "#facc15" : index === 0 ? "#22c55e" : index === route.points.length - 1 ? "#ef4444" : "#e2e8f0"}
+            fill={routePointFill(route, index, point, selectedPointIndex === index)}
             stroke="#020617"
             strokeWidth={point.joint ? "0.22" : selectedPointIndex === index ? "0.18" : "0.1"}
           />
@@ -2020,17 +3037,108 @@ function resizedZone(zone: DesignerZoneForm, handle: ResizeHandle, deltaX: numbe
   }
   if (handle.includes("s")) height = zone.height + deltaY;
 
-  return {
+  const next = {
     x,
     y,
     width: Math.max(minSize, snapValue(width, snapCm)),
     height: Math.max(minSize, snapValue(height, snapCm))
+  };
+  return zone.shape === "polygon" && zone.points ? { ...next, points: scaleShapePoints(zone, next) } : next;
+}
+
+function resizedBuildArea(buildArea: DesignerBuildAreaForm, handle: ResizeHandle, deltaX: number, deltaY: number, snapCm: number): DesignerBuildAreaForm {
+  const next = resizedZone(buildArea, handle, deltaX, deltaY, snapCm);
+  return {
+    ...buildArea,
+    x: next.x ?? buildArea.x,
+    y: next.y ?? buildArea.y,
+    width: next.width ?? buildArea.width,
+    height: next.height ?? buildArea.height
   };
 }
 
 function snapValue(value: number, snapCm: number) {
   const step = Math.max(0.1, snapCm);
   return Math.round(value / step) * step;
+}
+
+function movedShape<T extends { x: number; y: number; points?: DesignerPoint[] }>(shape: T, deltaX: number, deltaY: number, snapCm: number): T {
+  const x = snapValue(shape.x + deltaX, snapCm);
+  const y = snapValue(shape.y + deltaY, snapCm);
+  const pointDeltaX = x - shape.x;
+  const pointDeltaY = y - shape.y;
+  return {
+    ...shape,
+    x,
+    y,
+    points: shape.points?.map((point) => ({ x: point.x + pointDeltaX, y: point.y + pointDeltaY }))
+  };
+}
+
+function updatePolygonPoint<T extends { x: number; y: number; width: number; height: number; points?: DesignerPoint[] }>(shape: T, pointIndex: number, point: DesignerPoint, snapCm: number): T {
+  if (!shape.points?.[pointIndex]) return shape;
+  const points = shape.points.map((entry, index) => (index === pointIndex ? { x: snapValue(point.x, snapCm), y: snapValue(point.y, snapCm) } : entry));
+  const bounds = pointsBounds(points);
+  if (!bounds) return { ...shape, points };
+  return { ...shape, ...bounds, points };
+}
+
+function insertPolygonPoint<T extends { x: number; y: number; width: number; height: number; points?: DesignerPoint[] }>(shape: T, insertIndex: number, point: DesignerPoint, snapCm: number): T {
+  if (!shape.points || shape.points.length < 3) return shape;
+  const nextPoint = { x: snapValue(point.x, snapCm), y: snapValue(point.y, snapCm) };
+  const clampedIndex = clamp(Math.round(insertIndex), 0, shape.points.length);
+  const points = [...shape.points.slice(0, clampedIndex), nextPoint, ...shape.points.slice(clampedIndex)];
+  const bounds = pointsBounds(points);
+  if (!bounds) return { ...shape, points };
+  return { ...shape, ...bounds, points };
+}
+
+function deletePolygonPoint<T extends { x: number; y: number; width: number; height: number; points?: DesignerPoint[] }>(shape: T, pointIndex: number): T {
+  if (!shape.points || shape.points.length <= 3 || !shape.points[pointIndex]) return shape;
+  const points = shape.points.filter((_, index) => index !== pointIndex);
+  const bounds = pointsBounds(points);
+  if (!bounds) return { ...shape, points };
+  return { ...shape, ...bounds, points };
+}
+
+function scaleShapePoints(shape: { x: number; y: number; width: number; height: number; points?: DesignerPoint[] }, next: { x: number; y: number; width: number; height: number }) {
+  if (!shape.points) return undefined;
+  const scaleX = next.width / Math.max(0.001, shape.width);
+  const scaleY = next.height / Math.max(0.001, shape.height);
+  return shape.points.map((point) => ({
+    x: next.x + (point.x - shape.x) * scaleX,
+    y: next.y + (point.y - shape.y) * scaleY
+  }));
+}
+
+function pointsBounds(points: DesignerPoint[]) {
+  if (!points.length) return null;
+  const minX = Math.min(...points.map((point) => point.x));
+  const minY = Math.min(...points.map((point) => point.y));
+  const maxX = Math.max(...points.map((point) => point.x));
+  const maxY = Math.max(...points.map((point) => point.y));
+  return { x: minX, y: minY, width: Math.max(0.1, maxX - minX), height: Math.max(0.1, maxY - minY) };
+}
+
+function rectanglePoints(shape: { x: number; y: number; width: number; height: number }) {
+  return [
+    { x: shape.x, y: shape.y },
+    { x: shape.x + shape.width, y: shape.y },
+    { x: shape.x + shape.width, y: shape.y + shape.height },
+    { x: shape.x, y: shape.y + shape.height }
+  ];
+}
+
+function shapePointsString(points: DesignerPoint[]) {
+  return points.map((point) => `${point.x},${point.y}`).join(" ");
+}
+
+function polygonSegments(points: DesignerPoint[]) {
+  return points.map((start, index) => ({
+    start,
+    end: points[(index + 1) % points.length],
+    insertIndex: index + 1
+  }));
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -2091,8 +3199,12 @@ function formatRulerLabel(valueCm: number, unit: DesignerForm["rulerUnit"]) {
 }
 
 function formatMeasure(valueCm: number, unit: DesignerForm["rulerUnit"]) {
-  if (unit === "in") return `${(valueCm / 2.54).toFixed(1)} in`;
-  return `${valueCm} cm`;
+  if (unit === "in") return `${formatDecimal(valueCm / 2.54)} in`;
+  return `${formatDecimal(valueCm)} cm`;
+}
+
+function formatDecimal(value: number) {
+  return Number.isInteger(value) ? `${value}` : value.toFixed(1);
 }
 
 function routeColor(route: DesignerRouteForm) {
@@ -2104,11 +3216,41 @@ function routeSelectedColor(kind: DesignerRouteKind) {
   return kind === "data_cable" ? "#86efac" : "#facc15";
 }
 
+function createRouteFromDraft(kind: DesignerRouteKind, start: DesignerPoint, end: DesignerPoint, designer: DesignerForm): DesignerRouteForm {
+  const next = nextRouteNumber(designer.routes);
+  return {
+    id: `route_${next}`,
+    name: kind === "data_cable" ? `Data cable ${next}` : `LED string ${next}`,
+    kind,
+    output: 1,
+    zoneId: designer.zones[0]?.id ?? "",
+    points: [start, end]
+  };
+}
+
+function nextRouteNumber(routes: DesignerRouteForm[]) {
+  const used = new Set(routes.map((route) => route.id));
+  for (let index = routes.length + 1; index < routes.length + 1000; index += 1) {
+    if (!used.has(`route_${index}`)) return index;
+  }
+  return Date.now();
+}
+
+function routePointFill(route: DesignerRouteForm, pointIndex: number, point: DesignerPoint, selected: boolean) {
+  if (point.joint) return "#22d3ee";
+  if (pointIndex === 0) return "#22c55e";
+  if (pointIndex === route.points.length - 1) return "#ef4444";
+  return selected ? "#c084fc" : "#a78bfa";
+}
+
 function summarizeRoute(route: DesignerRouteForm, designer: DesignerForm) {
   const lengthCm = routeLengthCm(route);
+  const pixels = route.kind === "led_string" ? Math.max(0, Math.round(lengthCm * designer.addressablePixelsPerMeter / 100)) : 0;
+  const leds = route.kind === "led_string" ? Math.max(0, Math.round(lengthCm * designer.ledsPerMeter / 100)) : 0;
   return {
     lengthCm,
-    leds: route.kind === "led_string" ? Math.max(0, Math.round(lengthCm * designer.ledDensityPerMeter / 100)) : 0
+    pixels,
+    leds
   };
 }
 
@@ -2163,12 +3305,20 @@ function moveRouteTerminals(routes: DesignerRouteForm[], terminals: DesignerRout
   }));
 }
 
-function moveRouteWithSolderedTerminals(routes: DesignerRouteForm[], routeId: string, originalRoute: DesignerRouteForm, deltaX: number, deltaY: number, snapCm: number) {
+function moveRouteWithSolderedTerminals(designer: DesignerForm, routeId: string, originalRoute: DesignerRouteForm, deltaX: number, deltaY: number, snapCm: number) {
+  const routes = designer.routes;
+  const controllerPortIndex = originalRoute.kind === "data_cable" && originalRoute.points[0]?.joint
+    ? findControllerPortAtPoint(designer.controller, originalRoute.points[0], snapCm)
+    : null;
+  const controllerAnchor = controllerPortIndex !== null ? controllerPortPoint(designer.controller, controllerPortIndex, snapCm) : null;
   const movedPoints = originalRoute.points.map((routePoint) => ({
     ...routePoint,
     x: snapValue(routePoint.x + deltaX, snapCm),
     y: snapValue(routePoint.y + deltaY, snapCm)
   }));
+  if (controllerAnchor) {
+    movedPoints[0] = { ...movedPoints[0], ...controllerAnchor, joint: true };
+  }
   const solderedTerminals = [0, originalRoute.points.length - 1].flatMap((pointIndex) => {
     if (!originalRoute.points[pointIndex]?.joint) return [];
     return findJointGroup(routes, routeId, pointIndex, snapCm)
@@ -2344,21 +3494,29 @@ function routeBounds(routes: DesignerRouteForm[]) {
 
 function designerBounds(designer: DesignerForm) {
   const routeBox = routeBounds(designer.routes);
+  const buildAreaBox = designer.buildAreas.length ? {
+    minX: Math.min(...designer.buildAreas.map((buildArea) => buildArea.x)),
+    minY: Math.min(...designer.buildAreas.map((buildArea) => buildArea.y)),
+    maxX: Math.max(...designer.buildAreas.map((buildArea) => buildArea.x + buildArea.width)),
+    maxY: Math.max(...designer.buildAreas.map((buildArea) => buildArea.y + buildArea.height))
+  } : null;
   const padding = Math.max(20, designer.snapCm * 8);
   return {
-    minX: Math.min(0, routeBox?.minX ?? 0, designer.controller.x) - padding,
-    minY: Math.min(0, routeBox?.minY ?? 0, designer.controller.y) - padding,
-    maxX: Math.max(designer.canvasWidthCm, routeBox?.maxX ?? designer.canvasWidthCm, designer.controller.x + designer.controller.width) + padding,
-    maxY: Math.max(designer.canvasHeightCm, routeBox?.maxY ?? designer.canvasHeightCm, designer.controller.y + designer.controller.height) + padding
+    minX: Math.min(0, routeBox?.minX ?? 0, buildAreaBox?.minX ?? 0, designer.controller.x) - padding,
+    minY: Math.min(0, routeBox?.minY ?? 0, buildAreaBox?.minY ?? 0, designer.controller.y) - padding,
+    maxX: Math.max(designer.canvasWidthCm, routeBox?.maxX ?? designer.canvasWidthCm, buildAreaBox?.maxX ?? designer.canvasWidthCm, designer.controller.x + designer.controller.width) + padding,
+    maxY: Math.max(designer.canvasHeightCm, routeBox?.maxY ?? designer.canvasHeightCm, buildAreaBox?.maxY ?? designer.canvasHeightCm, designer.controller.y + designer.controller.height) + padding
   };
 }
 
 function clampViewport(viewport: DesignerViewport, designer: DesignerForm) {
   const bounds = designerBounds(designer);
-  const minX = bounds.minX;
-  const minY = bounds.minY;
-  const maxX = Math.max(bounds.maxX - viewport.width, minX);
-  const maxY = Math.max(bounds.maxY - viewport.height, minY);
+  const slackX = viewport.width * 0.45;
+  const slackY = viewport.height * 0.45;
+  const minX = bounds.minX - slackX;
+  const minY = bounds.minY - slackY;
+  const maxX = Math.max(bounds.maxX - viewport.width + slackX, minX);
+  const maxY = Math.max(bounds.maxY - viewport.height + slackY, minY);
   return {
     ...viewport,
     x: clamp(viewport.x, minX, maxX),
@@ -2402,20 +3560,25 @@ function pointToSegmentDistance(point: DesignerPoint, start: DesignerPoint, end:
   return Math.hypot(point.x - projection.x, point.y - projection.y);
 }
 
-function sampleRouteLedDots(route: DesignerRouteForm, ledDensityPerMeter: number) {
-  const pitchCm = 100 / Math.max(1, ledDensityPerMeter);
-  const dots: DesignerPoint[] = [];
+function sampleRouteLedDots(route: DesignerRouteForm, ledsPerMeter: number, addressablePixelsPerMeter: number) {
+  const pitchCm = 100 / Math.max(1, ledsPerMeter);
+  const addressablePitchCm = 100 / Math.max(1, addressablePixelsPerMeter);
+  const dots: Array<DesignerPoint & { addressableIndex: number }> = [];
+  let addressableOffset = 0;
   route.points.slice(1).forEach((point, pointIndex) => {
     const previous = route.points[pointIndex];
     const lengthCm = Math.hypot(point.x - previous.x, point.y - previous.y);
     const ledCount = Math.max(1, Math.round(lengthCm / pitchCm));
     for (let index = 0; index < ledCount; index += 1) {
       const ratio = (index + 0.5) / ledCount;
+      const distanceCm = ratio * lengthCm;
       dots.push({
         x: previous.x + (point.x - previous.x) * ratio,
-        y: previous.y + (point.y - previous.y) * ratio
+        y: previous.y + (point.y - previous.y) * ratio,
+        addressableIndex: addressableOffset + Math.floor(distanceCm / addressablePitchCm)
       });
     }
+    addressableOffset += Math.max(1, Math.round(lengthCm / addressablePitchCm));
   });
   return dots;
 }
@@ -2433,7 +3596,7 @@ function buildDocumentFromDesigner(document: PartituraDocument): PartituraDocume
     route.points.slice(1).forEach((point, pointIndex) => {
       const previous = route.points[pointIndex];
       const lengthCm = Math.hypot(point.x - previous.x, point.y - previous.y);
-      const ledCount = Math.max(1, Math.round(lengthCm * designer.ledDensityPerMeter / 100));
+      const ledCount = Math.max(1, Math.round(lengthCm * designer.addressablePixelsPerMeter / 100));
       const segmentId = `${route.id}_leg_${pointIndex + 1}`;
       const stepX = (point.x - previous.x) / ledCount;
       const stepY = (point.y - previous.y) / ledCount;
