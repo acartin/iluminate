@@ -32,6 +32,13 @@ export function slugify(value: string) {
 }
 
 export function mapPartitura(row: PartituraRow): PersistedPartitura {
+  // `project_id` is the relational source of truth. Older designer documents
+  // used a human-readable key here, which breaks project-scoped resources.
+  const document = normalizeDefaultSignLayout({
+    ...row.document_json,
+    projectId: String(row.project_id)
+  });
+
   return {
     id: String(row.id),
     projectId: String(row.project_id),
@@ -39,7 +46,7 @@ export function mapPartitura(row: PartituraRow): PersistedPartitura {
     name: row.name,
     clientName: row.client_name,
     status: row.status,
-    document: normalizeDefaultSignLayout(row.document_json),
+    document,
     generatedPartitura: row.generated_json ?? undefined,
     validationReport: row.validation_report ?? undefined,
     createdAt: timestamp(row.created_at),
@@ -74,6 +81,16 @@ export async function listPartituras() {
        join public.auth_clients c on c.id = p.client_id
       where p.deleted_at is null
       order by p.updated_at desc, p.id desc`
+  );
+  return rows.rows.map(mapPartitura);
+}
+
+export async function listProjectPartituras(projectId: string) {
+  const rows = await getPool().query<PartituraRow>(
+    `select p.id, p.project_id, p.partitura_key, p.name, c.name as client_name, p.status, p.document_json, p.generated_json, p.validation_report, p.created_at, p.updated_at
+       from iluminate.partituras p join public.auth_clients c on c.id = p.client_id
+      where p.project_id = $1 and p.deleted_at is null order by p.updated_at desc, p.id desc`,
+    [projectId]
   );
   return rows.rows.map(mapPartitura);
 }
@@ -146,9 +163,11 @@ async function uniquePartituraKey(client: PoolClient, clientId: number, baseKey:
 }
 
 export async function createPartitura({
+  projectId,
   name,
   duplicateOf
 }: {
+  projectId: string;
   name?: string;
   duplicateOf?: string;
 }) {
@@ -156,21 +175,18 @@ export async function createPartitura({
   const client = await pool.connect();
   try {
     await client.query("begin");
-    const defaultClient = await getDefaultClient(client);
-    const source = duplicateOf ? await getPartitura(duplicateOf) : null;
-    const partituraName = name?.trim() || (source ? `${source.name} copy` : "Default installation");
-    const partituraKey = await uniquePartituraKey(client, defaultClient.id, slugify(partituraName));
-    const document = source
-      ? normalizeDefaultSignLayout({ ...source.document, projectId: partituraKey })
-      : createDefaultPartituraDocument(partituraKey);
-
-    const project = await client.query<{ id: string | number }>(
-      `insert into iluminate.projects (client_id, name, description, status)
-       values ($1, $2, $3, 'draft')
-       returning id`,
-      [defaultClient.id, partituraName, "Partitura project created from the Iluminate workspace."]
+    const projectResult = await client.query<{ id: string | number; client_id: string | number }>(
+      "select id, client_id from iluminate.projects where id = $1 and deleted_at is null limit 1", [projectId]
     );
-    const projectId = Number(project.rows[0].id);
+    const project = projectResult.rows[0];
+    if (!project) throw new Error("Project not found.");
+    const source = duplicateOf ? await getPartitura(duplicateOf) : null;
+    if (source && source.projectId !== String(project.id)) throw new Error("Partitura belongs to a different project.");
+    const partituraName = name?.trim() || (source ? `${source.name} copy` : "Default installation");
+    const partituraKey = await uniquePartituraKey(client, Number(project.client_id), slugify(partituraName));
+    const document = source
+      ? normalizeDefaultSignLayout({ ...source.document, projectId: String(project.id) })
+      : createDefaultPartituraDocument(String(project.id));
 
     const created = await client.query<PartituraRow>(
       `insert into iluminate.partituras (client_id, project_id, partitura_key, name, status, document_json)
@@ -186,7 +202,7 @@ export async function createPartitura({
                  validation_report,
                  created_at,
                  updated_at`,
-      [defaultClient.id, projectId, partituraKey, partituraName, JSON.stringify(document)]
+      [Number(project.client_id), Number(project.id), partituraKey, partituraName, JSON.stringify(document)]
     );
     await client.query("commit");
     return mapPartitura(created.rows[0]);
@@ -238,13 +254,50 @@ export async function updatePartitura(
                 validation_report,
                 created_at,
                 updated_at`,
-    [id, name, status, JSON.stringify(document), JSON.stringify(generated), JSON.stringify(validation)]
+    [id, name, status, JSON.stringify(document), generated === null ? null : JSON.stringify(generated), JSON.stringify(validation)]
   );
-  await getPool().query("update iluminate.projects set name = $2, updated_at = now() where id = $1", [current.projectId, name]);
   return rows.rows[0] ? mapPartitura(rows.rows[0]) : null;
 }
 
 export async function deletePartitura(id: string) {
-  const result = await getPool().query("update iluminate.partituras set deleted_at = now(), updated_at = now() where id = $1 and deleted_at is null", [id]);
-  return (result.rowCount ?? 0) > 0;
+  const client = await getPool().connect();
+  try {
+    await client.query("begin");
+    const result = await client.query<{ project_id: string | number }>(
+      "update iluminate.partituras set deleted_at = now(), updated_at = now() where id = $1 and deleted_at is null returning project_id", [id]
+    );
+    if (!result.rows[0]) { await client.query("rollback"); return false; }
+    await client.query("update iluminate.projects set active_partitura_id = null, updated_at = now() where id = $1 and active_partitura_id = $2", [result.rows[0].project_id, id]);
+    await client.query("commit");
+    return true;
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
+export async function activatePartitura(projectId: string, partituraId: string) {
+  const client = await getPool().connect();
+  try {
+    await client.query("begin");
+    const target = await client.query<{ id: string | number }>(
+      "select id from iluminate.partituras where id = $1 and project_id = $2 and deleted_at is null limit 1", [partituraId, projectId]
+    );
+    if (!target.rows[0]) {
+      await client.query("rollback");
+      return false;
+    }
+    await client.query("update iluminate.partituras set status = 'validated', updated_at = now() where project_id = $1 and status = 'active' and deleted_at is null", [projectId]);
+    await client.query("update iluminate.partituras set status = 'active', updated_at = now() where id = $1", [partituraId]);
+    await client.query("update iluminate.projects set active_partitura_id = $2, updated_at = now() where id = $1", [projectId, partituraId]);
+    await client.query("commit");
+    return true;
+  } catch (error) {
+    await client.query("rollback");
+    throw error;
+  } finally {
+    client.release();
+  }
 }

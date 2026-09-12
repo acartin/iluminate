@@ -1,4 +1,4 @@
-import { Clip, Partitura, PartituraTarget, Segment, SpatialPixel } from "../domain/partituras/types.js";
+import { Clip, EffectCoordinateSpace, Partitura, PartituraTarget, SpatialPixel } from "../domain/partituras/types.js";
 import { validatePartitura } from "../validators/partitura-validator.js";
 
 export type Rgb = {
@@ -8,13 +8,12 @@ export type Rgb = {
 };
 
 export type PixelAddress = {
-  chainId: string;
   output: number;
-  index: number;
-  segmentId?: string;
+  serialIndex: number;
+  stringId: string;
   x: number;
   y: number;
-  order: number;
+  tangentDeg: number;
   normalizedX: number;
   normalizedY: number;
 };
@@ -56,7 +55,7 @@ export function renderSceneFrame(partitura: Partitura, sceneId: string, timeMs: 
     .sort((left, right) => left.clip.layer - right.clip.layer);
 
   for (const { clip, target } of activeClips) {
-    const addresses = resolveTarget(partitura, target);
+    const addresses = resolveTarget(partitura, target, clip.coordinateSpace);
     const localTimeMs = sceneTime - clip.startMs;
     const progress = clamp(localTimeMs / clip.durationMs, 0, 1);
 
@@ -74,48 +73,33 @@ export function renderSceneFrame(partitura: Partitura, sceneId: string, timeMs: 
   return {
     sceneId: scene.id,
     timeMs: sceneTime,
-    pixels: Array.from(buffer.values()).sort((left, right) => left.output - right.output || left.index - right.index)
+    pixels: Array.from(buffer.values()).sort((left, right) => left.output - right.output || left.serialIndex - right.serialIndex)
   };
 }
 
-export function resolveTarget(partitura: Partitura, target: PartituraTarget): PixelAddress[] {
+export function resolveTarget(partitura: Partitura, target: PartituraTarget, coordinateSpace: EffectCoordinateSpace = "local"): PixelAddress[] {
   const pixelMap = normalizePixelMap(partitura);
 
   if (target.type === "installation") {
-    return withNormalizedCoordinates(pixelMap);
+    return withNormalizedCoordinates(pixelMap, coordinateSpace === "global" ? pixelMap : pixelMap);
   }
-
-  if (target.type === "chain") {
-    return withNormalizedCoordinates(pixelMap.filter((pixel) => pixel.chainId === target.id));
-  }
-
-  if (target.type === "segment") {
-    return withNormalizedCoordinates(pixelMap.filter((pixel) => pixel.segmentId === target.id));
-  }
-
-  const zone = partitura.zones.find((entry) => entry.id === target.id);
-  if (!zone) return [];
-
-  const ownPixels = zone.segments.flatMap((segmentId) => pixelMap.filter((pixel) => pixel.segmentId === segmentId));
-  const childPixels = (zone.zones ?? []).flatMap((zoneId) => resolveTarget(partitura, { type: "zone", id: zoneId }));
-  return withNormalizedCoordinates([...ownPixels, ...childPixels]);
+  const ids = target.type === "zone"
+    ? new Set(partitura.zones.find((zone) => zone.id === target.id)?.pixelIds ?? [])
+    : resolveGroupPixelIds(partitura, target.id);
+  const selected = pixelMap.filter((pixel) => ids.has(pixel.id));
+  return withNormalizedCoordinates(selected, coordinateSpace === "global" ? pixelMap : selected);
 }
 
-function resolveSegment(partitura: Partitura, segment: Segment): PixelAddress[] {
-  const chain = partitura.chains.find((entry) => entry.id === segment.chainId);
-  if (!chain) return [];
-  const indexes = range(segment.length).map((offset) => segment.start + offset);
-  const directed = segment.reverse ? indexes.reverse() : indexes;
-  return withNormalizedCoordinates(directed.map((index, offset) => ({
-    id: `${segment.id}_${offset}`,
-    chainId: chain.id,
-    output: chain.output,
-    index,
-    segmentId: segment.id,
-    x: (segment.x ?? segment.start) + offset * (segment.stepX ?? 1),
-    y: (segment.y ?? 0) + offset * (segment.stepY ?? 0),
-    order: offset
-  })));
+function resolveGroupPixelIds(partitura: Partitura, groupId: string, visited = new Set<string>()): Set<string> {
+  if (visited.has(groupId)) return new Set();
+  visited.add(groupId);
+  const group = partitura.groups.find((entry) => entry.id === groupId);
+  const ids = new Set<string>();
+  group?.members.forEach((member) => {
+    if (member.type === "zone") partitura.zones.find((zone) => zone.id === member.id)?.pixelIds.forEach((id) => ids.add(id));
+    else resolveGroupPixelIds(partitura, member.id, visited).forEach((id) => ids.add(id));
+  });
+  return ids;
 }
 
 function clipIsActive(clip: Clip, timeMs: number) {
@@ -300,41 +284,24 @@ function range(length: number) {
 }
 
 function pixelKey(address: PixelAddress) {
-  return `${address.chainId}:${address.index}`;
+  return `${address.output}:${address.serialIndex}`;
 }
 
 function normalizePixelMap(partitura: Partitura): SpatialPixel[] {
-  if (partitura.pixelMap?.length) return partitura.pixelMap.slice().sort((left, right) => left.order - right.order);
-  let order = 0;
-  return partitura.segments.flatMap((segment) => {
-    const chain = partitura.chains.find((entry) => entry.id === segment.chainId);
-    if (!chain) return [];
-    const indexes = range(segment.length).map((offset) => segment.start + offset);
-    const directed = segment.reverse ? indexes.reverse() : indexes;
-    return directed.map((index, offset) => ({
-      id: `${segment.id}_${offset}`,
-      chainId: chain.id,
-      output: chain.output,
-      index,
-      segmentId: segment.id,
-      x: (segment.x ?? segment.start) + offset * (segment.stepX ?? 1),
-      y: (segment.y ?? 0) + offset * (segment.stepY ?? 0),
-      order: order++
-    }));
-  });
+  return partitura.pixelMap.slice().sort((left, right) => left.output - right.output || left.serialIndex - right.serialIndex);
 }
 
-function withNormalizedCoordinates(pixels: Array<SpatialPixel | PixelAddress>): PixelAddress[] {
+function withNormalizedCoordinates(pixels: Array<SpatialPixel | PixelAddress>, coordinateBounds = pixels): PixelAddress[] {
   if (!pixels.length) return [];
-  const minX = Math.min(...pixels.map((pixel) => pixel.x));
-  const maxX = Math.max(...pixels.map((pixel) => pixel.x));
-  const minY = Math.min(...pixels.map((pixel) => pixel.y));
-  const maxY = Math.max(...pixels.map((pixel) => pixel.y));
+  const minX = Math.min(...coordinateBounds.map((pixel) => pixel.x));
+  const maxX = Math.max(...coordinateBounds.map((pixel) => pixel.x));
+  const minY = Math.min(...coordinateBounds.map((pixel) => pixel.y));
+  const maxY = Math.max(...coordinateBounds.map((pixel) => pixel.y));
   const width = Math.max(1, maxX - minX);
   const height = Math.max(1, maxY - minY);
   return pixels
     .slice()
-    .sort((left, right) => left.order - right.order)
+    .sort((left, right) => left.output - right.output || left.serialIndex - right.serialIndex)
     .map((pixel) => ({
       ...pixel,
       normalizedX: (pixel.x - minX) / width,

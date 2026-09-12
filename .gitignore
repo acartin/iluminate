@@ -31,3 +31,5 @@ Thumbs.db
 # docker/local runtime
 *.pid
 .cache/
+data/r2/
+data/r2/

@@ -1,9 +1,9 @@
 # AI Context Pack
 
-- Generated UTC: `2026-08-29T22:16:03Z`
+- Generated UTC: `2026-09-10T23:02:17Z`
 - Repo root: `/srv/iluminate`
-- Git branch: `HETZNER-DEV-2026-Agosto-23`
-- Git commit: `7f7c4a2`
+- Git branch: `HETZNER-DEV-2026-Setiembre-8`
+- Git commit: `8061f3d`
 - Policy: high-signal only; enfocado en Iluminate.
 
 ## Contexto Maestro
@@ -13,10 +13,10 @@
 ```
 # BRAIN_MAP
 
-- Generated UTC: `2026-08-29T22:16:03Z`
+- Generated UTC: `2026-09-10T23:02:17Z`
 - Repo root: `/srv/iluminate`
-- Git branch: `HETZNER-DEV-2026-Agosto-23`
-- Git commit: `7f7c4a2`
+- Git branch: `HETZNER-DEV-2026-Setiembre-8`
+- Git commit: `8061f3d`
 
 ## 1. MAPA DE INTENCIONES (ILUMINATE)
 
@@ -24,7 +24,7 @@
 |---|---|---:|
 | `compose.yml` | Compose local actual; validar antes de tocar infraestructura. | 4 |
 | `services/web/iluminate` | Next.js UI, portal, editor/simulador inicial y adaptadores temporales. | 5 |
-| `services/lighting-core` | Dominio LED: chains, segments, zones, partitura, scenes, validation y deployments. | 5 |
+| `services/lighting-core` | Dominio LED: rutas fisicas, pixelMap, zones, groups, partitura, scenes, validation y deployments. | 5 |
 | `services/auth` | Identidad, organizaciones, roles, permisos, sesiones y auth API. | 4 |
 | `services/simulator` | Simulacion reusable cuando salga del prototipo web. | 4 |
 | `services/device-protocol` | Contratos cloud/controlador y estado deseado/reportado. | 4 |
@@ -42,7 +42,8 @@
 - El hardware se modela aqui solo como tres salidas logicas: `chain.output` 1, 2 y 3.
 - El sistema es multitenant por diseno; toda tabla persistente de negocio debe contemplar `client_id`.
 - PostgreSQL es la base de datos objetivo.
-- Mantener separados chains/segments fisicos y zones visuales.
+- Mantener separados el cableado fisico (controller, data cables, LED strings y nodos) y los objetivos visuales (zones y groups). Los segmentos/rangos logicos no son flujo normal de autoria; el pixelMap los deriva cuando haga falta.
+- Leer `.agent/EFFECT_TARGETING_MODEL.md` antes de cambiar compilacion, pixelMap, zonas, grupos, efectos o simulador.
 
 ## 3. SERVICIOS DOCKER ACTUALES
 
@@ -83,6 +84,7 @@ services/lighting-core/domain/zones
 services/lighting-core/fixtures
 services/lighting-core/generators
 services/lighting-core/migrations
+services/lighting-core/pixel-map
 services/lighting-core/player
 services/lighting-core/schemas
 services/lighting-core/storage
@@ -98,6 +100,7 @@ services/web/iluminate/app/console
 services/web/iluminate/app/forgot-password
 services/web/iluminate/app/login
 services/web/iluminate/app/partituras
+services/web/iluminate/app/projects
 services/web/iluminate/app/reset-password
 services/web/iluminate/app/settings
 services/web/iluminate/components
@@ -111,6 +114,7 @@ services/web/iluminate/lib
 services/web/iluminate/lib/lighting
 services/web/iluminate/lib/server
 services/web/iluminate/public
+services/web/iluminate/public/vendor
 ```
 
 ## 5. ARCHIVOS RELEVANTES
@@ -156,8 +160,11 @@ services/lighting-core/migrations/.gitkeep
 services/lighting-core/migrations/2026-08-19_create_iluminate_operational_tables.sql
 services/lighting-core/migrations/2026-08-22_create_iluminate_partituras.sql
 services/lighting-core/migrations/2026-08-22_remove_partitura_revisions.sql
+services/lighting-core/migrations/2026-09-09_projects_many_partituras.sql
 services/lighting-core/package-lock.json
 services/lighting-core/package.json
+services/lighting-core/pixel-map/builders.ts
+services/lighting-core/pixel-map/create-pixel-map.ts
 services/lighting-core/player/scene-player.ts
 services/lighting-core/player/ws2812b-simulator.ts
 services/lighting-core/schemas/README.md
@@ -184,13 +191,6 @@ services/web/iluminate/lib/request-url.ts
 services/web/iluminate/lib/types.ts
 services/web/iluminate/lib/utils.ts
 services/web/iluminate/next-env.d.ts
-services/web/iluminate/next.config.mjs
-services/web/iluminate/package-lock.json
-services/web/iluminate/package.json
-services/web/iluminate/postcss.config.mjs
-services/web/iluminate/tailwind.config.ts
-services/web/iluminate/tsconfig.json
-.agent/AI_CONTEXT_LED_ORCHESTRATION_PLATFORM.md
 ```
 ### `.agent/AI_CONTEXT_LED_ORCHESTRATION_PLATFORM.md`
 
@@ -212,11 +212,14 @@ Este documento es la referencia conceptual principal del proyecto. Antes de prop
 2. No convertir el producto en un editor vectorial general, una copia de WLED ni un sistema de video.
 3. No generar un firmware diferente para cada instalación.
 4. Mantener separados el **core compilado** y la **partitura actualizable**.
-5. Mantener separados el modelo físico —cadenas y segmentos— y el modelo visual —zonas—.
+5. Mantener separados el modelo físico de cableado —controlador, cables de datos, strings LED y nodos de fabricación— y el modelo visual —zonas y grupos—. Los segmentos/rangos lógicos no son un flujo normal del operador.
 6. Diseñar para profesionales de rótulos, stands y mobiliario comercial; no para consumidores sin conocimientos técnicos.
 7. No introducir complejidad futura dentro del MVP, pero evitar decisiones que cierren las extensiones previstas.
 8. Cuando se proponga cambiar un concepto establecido, explicar primero qué problema concreto resuelve el cambio.
 9. Tratar el firmware ESP32 como un ambiente externo a este repo. Este repo produce, valida, simula y publica partituras; no contiene el proyecto Arduino/PlatformIO/ESP-IDF.
+10. Para el composer real, no iniciar desde una matriz visible. El operador debe trabajar sobre SVG/canvas, zonas y rutas LED continuas; el sistema genera el `pixelMap`.
+11. Mantener una sola densidad LED por proyecto. Si cambia, se resetea el cableado/rutas existentes.
+12. Usar `.agent/PIXELMAP_COMPOSER_DIRECTION.md` y `.agent/EFFECT_TARGETING_MODEL.md` como referencia actual antes de redisenar composer, efectos espaciales o flujos de mapeo.
 
 ---
 
@@ -229,8 +232,8 @@ La solución completa tendrá:
 - Un controlador propio basado en ESP32.
 - Tres salidas físicas de datos para tiras WS2812B.
 - Un firmware universal externo con un motor de iluminación y una biblioteca de efectos.
-- Una partitura declarativa, separada del firmware, que define cadenas, segmentos, zonas, escenas, pistas, clips, efectos seleccionados y temporización.
-- Un editor web visual con canvas, reglas, escala, herramientas para dibujar cadenas y segmentos, zonas y una timeline estilo CapCut.
+- Una partitura declarativa, separada del firmware, que define cableado físico, pixelMap generado, zonas, grupos, escenas, pistas, clips, efectos seleccionados y temporización.
+- Un editor web visual con canvas, reglas, escala, herramientas para dibujar cableado, zonas y grupos, y una timeline estilo CapCut.
 - Un simulador que reproduce la partitura sobre una fotografía, render o plano de la instalación.
 - Publicación y cambio remoto de partituras y escenas sin recompilar el firmware.
 - Administración en la nube de proyectos, controladores, revisiones, despliegues y escena activa.
@@ -372,9 +375,6 @@ Proyecto o instalación
 │   │   └── Segmentos
 │   └── Cadena 3
 │       └── Segmentos
-├── Zonas visuales
-├── Partituras
-│   └── Escenas
 ```
 ### `.agent/FILESYSTEM_GUARDRAILS.md`
 
@@ -577,6 +577,7 @@ Precondicion recomendada al iniciar cada nueva sesion:
    - Leer `.agent/EXECUTION_MAP.md`.
    - Leer `.agent/FILESYSTEM_GUARDRAILS.md`.
    - Leer `.agent/IMPLEMENTATION_PLAN.md` cuando la tarea afecte roadmap, fases o priorizacion.
+   - Leer `.agent/EFFECT_TARGETING_MODEL.md` antes de cambiar el compilador, pixelMap, zonas, grupos, efectos o simulador.
    - Leer `.agent/ILUMINATE_UI_STANDARDS.md` si se toca `services/web/iluminate`.
    - Leer `.agent/AI_CONTEXT_LED_ORCHESTRATION_PLATFORM.md` para decisiones de producto/dominio.
 2. Determinar si se requiere regeneracion de contexto:
@@ -622,7 +623,7 @@ Servicios principales:
 - En este repo solo se modelan tres salidas logicas del controlador: `chain.output` 1, 2 y 3.
 - El sistema es multitenant por diseno. La notacion canonica de tenant en PostgreSQL/backend es `client_id`, alineada con el auth copiado desde `datasyncsa`.
 - PostgreSQL es la base de datos objetivo para persistencia de auth, proyectos, controladores, revisiones de partitura, despliegues y estado.
-- Mantener separados modelo fisico (`chain`, `segment`) y modelo visual (`zone`).
+- Mantener separados el modelo fisico de cableado (`controller`, data cables, LED strings y nodos de fabricacion) y el modelo visual (`zone`, `group`). Los segmentos/rangos logicos no forman parte del flujo normal del operador; el pixelMap los deriva cuando haga falta.
 - Preferir contratos claros entre servicios: API, schemas, DTOs y fixtures versionados.
 
 ## 4. Seguridad y entorno
@@ -733,6 +734,11 @@ Este archivo define donde validar cambios segun la ruta afectada. En Iluminate, 
 | `.agent/*.sh` | Sintaxis shell | `bash -n .agent/<script>.sh` |
 | `services/web/iluminate/` | Build/smoke de Next via Docker | `docker compose build iluminate-web` y `curl -I http://localhost:${ILUMINATE_WEB_PORT:-8420}` si esta levantado |
 | `services/lighting-core/` | Build y fixtures del dominio | `docker run --rm -v "$PWD/services/lighting-core:/work" -w /work node:22-alpine sh -c "npm ci && npm test"` |
+| `services/lighting-core/pixel-map/` | Build core y validar generation/simulation por API si afecta web | `docker compose up -d --build iluminate-web` |
+| `services/lighting-core/domain/effects/` | Build core/web y smoke de `/api/lighting/effects`; si cambia renderer, generar frame de Lab por API | `docker compose up -d --build iluminate-web` |
+| `services/web/iluminate/components/lighting/partitura-workspace.tsx` | Build Next y smoke manual/API de Partitura Workspace y Effect Lab | `docker compose up -d --build iluminate-web` |
+| `services/web/iluminate/components/lighting/partitura-designer-workbench.tsx` | Build Next y smoke manual/API del grid Designer | `docker compose up -d --build iluminate-web` |
+| `services/web/iluminate/lib/lighting/partitura-model.ts` | Build Next/core; si cambia Designer defaults, revisar API/DB porque documentos persistidos pueden ocultar cambios | `docker compose up -d --build iluminate-web` |
 | `services/auth/` | Por ahora docs/estructura; futuro tests/API auth | no aplica hasta tener runtime |
 | `services/simulator/` | Por ahora docs/estructura; futuro tests deterministas | no aplica hasta tener runtime |
 | `services/device-protocol/` | Contratos y fixtures; futuro tests de schema | no aplica hasta tener runtime |
@@ -764,6 +770,42 @@ Variables previstas:
 3. Ejecutar validacion minima aplicable.
 4. Si cambia compose/env/docs, mantenerlos alineados.
 5. Reportar validacion ejecutada o limitacion concreta.
+
+## Smoke recomendado para Effect Lab
+
+Cuando cambien efectos, presets de Lab, `pixelMap` o simulacion:
+
+1. Reconstruir `iluminate-web`.
+2. Verificar `/api/lighting/effects`.
+3. Generar un frame por API para al menos una matriz `20x15` o un template de letras.
+4. Confirmar que el frame contiene coordenadas `x/y`, pixel count esperado y variedad de colores cuando aplique.
+5. Si el cambio no toca firmware, indicarlo explicitamente.
+
+## Smoke recomendado para Designer
+
+Cuando cambien canvas, defaults, rutas, snap/soldadura, controlador o persistencia:
+
+1. Ejecutar `git diff --check`.
+2. Reconstruir `iluminate-web` con `docker compose up -d --build iluminate-web`.
+3. Verificar que `/partituras/designer` liste la partitura activa.
+4. Verificar por API que el documento activo esperado sea visible:
+
+```bash
+curl -s http://localhost:8420/api/lighting/partituras | jq -r '.records[] | "\(.id) \(.partituraKey) \(.name) \(.status) \(.document.designer.canvasWidthCm)cm routes=\(.document.designer.routes|length)"'
+```
+
+Estado local esperado tras el reset actual:
+
+```text
+1 default_installation Default Installation draft 170cm routes=4
+```
+
+5. Probar manualmente en `/partituras/designer/1`:
+   - controller arriba a la izquierda sin encimar Fondo;
+   - puerto rojo + terminal verde de cable suelda solo si comparten snap point;
+   - terminal verde + rojo entre rutas suelda solo si comparten snap point;
+   - arrastrar controller mueve cables conectados;
+   - borrar una ruta limpia cian flotante.
 ```
 ### `.agent/IMPLEMENTATION_PLAN.md`
 
@@ -792,6 +834,52 @@ physical installation model
 → reported status
 → rollback or scene change
 ```
+
+## Current Product Direction Snapshot
+
+The near-term focus is no longer firmware parity or over-polishing individual effects. The priority is to make the web simulator and composer concepts convincing.
+
+Current product direction:
+
+```text
+SVG/canvas of real sign
+-> zones such as letters, words, logo and full_sign
+-> continuous LED strings drawn by the operator, plus optional green data cables for signal planning
+-> sampled real LED points using one project LED density
+-> generated pixelMap
+-> zones/groups resolve effect targets
+-> spatial/linear effects
+```
+
+The hidden mega matrix is useful as an internal coordinate field for effects, but the operator should not be forced to see or manage it. Matrix presets remain useful only inside `Effect Lab`.
+
+See `.agent/PIXELMAP_COMPOSER_DIRECTION.md` before redesigning the composer, pixelMap model, effect scope, or UI workflow. For current Designer behavior, read `.agent/DESIGNER_HANDOFF.md` first.
+
+UX direction after starting the Designer branch:
+
+- `Partitura Generator` remains the administrative/workbench area for persistence, scenes, technical layout and simulator.
+- `Designer` is now a first-class menu item.
+- `/partituras/designer` lists tenant partituras using the standard grid/action pattern.
+- `/partituras/designer/[id]` opens a full-screen studio without the normal app shell.
+- The studio follows graphics-app conventions: top command bar, contextual top properties bar, left tool rail, dominant central canvas and bottom status bar.
+- The studio now supports first-pass graphics editing: selection, zoom, pan, create zone tools, move, resize, copy, paste, delete, route move and route point editing.
+- The active local default partitura is `id=1`, `partitura_key=default_installation`, reset to a clean `170x40 cm` Designer document. `default_installation_2` is soft-deleted.
+- The right inspector panel was removed. Document/object properties moved to the top system bar to keep the canvas wide.
+- The canvas has intelligent rulers in `cm` or `in`; labels stay screen-readable and automatically promote to `m` or `ft` when the visible span is large. Canonical stored coordinates remain centimeters.
+- Rulers are optional and can be hidden from the top system bar to recover canvas space.
+- Formal import direction is SVG-only for the production model. Raster images may be references later, but SVG is the geometry source.
+- Designer route vocabulary is split into `LED string` and `Data cable`. `LED string` is amber/orange and compiles into LEDs/segments/pixelMap. `Data cable` is always green, is visual-only, and is ignored by layout compilation.
+- Addressable pixel count is derived from real route length and `Pixels/m`. Example: at `60 Pixels/m`, a `100 cm` LED string should compile to about 60 addressable pixels. `LEDs/m` is separate and represents physical emitters for preview/simulation, so WS2811 strips can model multiple physical LEDs per addressable pixel.
+- Every Designer document owns one controller card on the canvas. The controller is movable and persisted, but not deletable. It starts with 3 data connectors; future configuration should support different controller profiles, including 12-output controllers.
+- Route points are fabrication nodes, not LEDs. Double-clicking a route segment inserts a node/bend. Selecting an internal node enables point deletion and route cutting. Cutting splits one continuous route into two continuous routes. LED points are sampled inside each leg with a half-step offset, so cuts/bends sit between LEDs instead of replacing LEDs.
+- Route direction convention: green node = start/input/DIN, red node = end/output/DOUT, arrow = serial flow.
+- Direction must be visible beyond terminal color: route segments render inline flow arrows and controller ports render arrows inside the PCB pointing toward the port.
+- Soldering is automatic only when terminals land on the same grid snap point. Green terminal plus red terminal on the exact same snap point solders, regardless of whether the route is `LED string` or `Data cable`; if they do not share that snap point, nothing solders. The canvas marks the joint in cyan and persists `joint: true`. Same-kind routes are merged and the duplicate terminal disappears. Mixed `Data cable` + `LED string` joints remain separate route types, but dragging the cyan joint or moving a soldered route endpoint keeps connected terminals together as one physical point. Output/zone validation may be added later as warnings, but must not block drawing.
+- Controller ports are red output snap terminals. A `Data cable` green/input terminal on the exact same snap point as a controller port solders to that port, paints the port cyan, assigns the cable output from the port number and moves with the controller card when the card is dragged.
+- Deleting routes must reconcile `joint: true`; cyan may remain only on a real terminal/port connection.
+- The Designer geometry is suitable for a later electrical emulator because controller ports, data cables, LED strings, terminals and cyan joints form a physical connectivity graph. Future validation should derive continuity and warnings from that graph.
+- Effects are authored against visual `zones` and named `groups`, not manually created logical segments. The physical wiring graph produces output/serial order; pixelMap connects it to `x/y`; effects choose `serial`, `local`, or `global` evaluation. Read `.agent/EFFECT_TARGETING_MODEL.md` for the canonical model.
+- Layout technical grids remain available for debug/inspection, but the production workflow should keep moving toward the visual studio.
 
 ---
 
@@ -877,77 +965,31 @@ physical installation model
 
 ## Phase 3: Technical Web Editor
 
-**Objective:** let a professional model a physical LED installation from the browser.
+**Objective:** let a professional model a real sign from SVG/canvas, zones and continuous LED routes.
 
 ### Deliverables
 
-- [ ] Align `services/web/iluminate` navigation with Iluminate domain.
+- [x] Align initial Designer navigation with Iluminate domain.
 - [ ] Add Projects placeholder.
-- [ ] Add Project Editor route.
-- [ ] Add image/render/plan upload placeholder.
-- [ ] Add canvas area.
-- [ ] Add scale calibration tool.
-- [ ] Add rulers/grid.
-- [ ] Draw up to three chains.
-- [ ] Show data direction.
-- [ ] Represent wire jumps without LEDs.
-- [ ] Calculate LED points by density/length.
-- [ ] Show LED indices.
-- [ ] Create segments from ranges.
-- [ ] Create zones from segments.
-- [ ] Export partitura through `lighting-core`.
-
-### Exit Criteria
-
-- [ ] A user can model a small sign with chains, segments and zones.
-- [ ] The web editor stores domain data outside any private Konva format.
-- [ ] Exported partitura passes `lighting-core` validation.
-
----
-
-## Phase 4: Timeline and Simulator
-
-**Objective:** let the user author, preview and approve a coordinated lighting narrative.
-
-### Deliverables
-
-- [ ] Add scenes.
-- [ ] Add tracks targeting zones.
-- [ ] Add clips to tracks.
-- [ ] Move clips in time.
-- [ ] Resize clip duration.
-- [ ] Edit effect parameters.
-- [ ] Add scene loop.
-- [ ] Add playback head.
-- [ ] Simulate LEDs over the uploaded image.
-- [ ] Support layers minimally.
-- [ ] Support at least `replace` blend.
-- [ ] Add deterministic simulator fixtures.
-- [ ] Compare web simulator output against expected effect cases.
-
-### Exit Criteria
-
-- [ ] A user can create a short scene and preview it.
-- [ ] Simulation uses the same partitura semantics as firmware.
-- [ ] At least the initial five effects have deterministic reference cases.
-
----
-
-## Phase 5: Deployment and Device Protocol
-
-**Objective:** publish partituras and scene changes remotely while the device remains autonomous.
-
-### Deliverables
-
-- [ ] Define device identity contract.
-- [ ] Define provisioning placeholder.
-- [ ] Define desired partitura id/checksum.
-- [ ] Define desired scene command.
-- [ ] Define reported device status.
-- [ ] Implement controller polling contract.
-- [ ] Store active and previous partitura on device.
-- [ ] Validate checksum before activation.
-- [ ] Apply partitura artifact.
+- [x] Add initial full-screen Designer route.
+- [ ] Add SVG/render/plan upload placeholder.
+- [x] Add initial real sign canvas area.
+- [x] Add initial scale model in cm.
+- [x] Add one project-level LED density setting.
+- [ ] Warn and reset routes/cabling when LED density changes.
+- [ ] Add zone drawing tools: rectangle, circle and polygon. Current MVP creates rectangle/ellipse zones from toolbar and edits them on-canvas.
+- [x] Allow zones such as letters, words, logo, background and full sign.
+- [x] Store zone geometry and bounds in the editable document.
+- [x] Add optional rulers/grid/snap guides only as routing aids.
+- [x] Model continuous directional LED strings over the canvas. Current MVP edits route points on-canvas.
+- [x] Model green data cables separately from LED strings. Data cables do not generate LEDs.
+- [x] Add a persistent, movable, non-deletable controller card with 3 default data connectors.
+- [x] Add exact snap connection from controller red output ports to data-cable green input terminal.
+- [x] Keep cables attached when dragging the controller.
+- [x] Draw controller/data-cable/LED-string topology; output assignment is derived from physical connections rather than edited on a route.
+- [x] Sample route points using project LED density.
+- [ ] Generate serial LED indices by traversing the validated electrical graph, not document/route array order.
+- [ ] Show LED points and indices during route editing.
 ```
 ### `.agent/ILUMINATE_UI_STANDARDS.md`
 
@@ -980,7 +1022,8 @@ Estructura esperada:
 - `components/ui`: primitivos reutilizables sin conocimiento de dominio.
 - `components/portal`: shell, navegacion, topbar, sidebar y composicion general.
 - `components/lighting`: componentes especificos del dominio LED, cuando se creen.
-- `components/editor`: canvas, herramientas de cadena, segmento y zona, cuando se creen.
+- `components/lighting/designer`: editor grafico de partituras; debe mantenerse modular por tipos, canvas, renderer, geometria/wiring, compiler y UI.
+- `components/editor`: canvas, herramientas de rutas fisicas, zonas y grupos, cuando se creen.
 - `components/timeline`: escenas, pistas y clips, cuando se creen.
 - `lib`: clientes API, helpers, tipos de UI y mocks temporales explicitamente marcados.
 
@@ -994,7 +1037,7 @@ Reglas:
 Idioma de UI:
 
 - Usar ingles por defecto para copy visible del producto, salvo que se pida una variante localizada.
-- Mantener terminos de dominio estables: chain, segment, zone, partitura, scene, track, clip, effect, controller, deployment.
+- Mantener terminos de dominio estables: string, zone, group, pixelMap, partitura, scene, track, clip, effect, controller, deployment. Los segmentos/rangos logicos no son una herramienta normal de autoria.
 - `partitura` es el termino oficial del dominio. No usar `score` como sinonimo en UI, API, JSON, codigo ni documentacion.
 
 ## 3. Componentes existentes a preservar
@@ -1065,8 +1108,8 @@ Herramientas esperadas:
 - Mostrar direccion de datos.
 - Marcar saltos sin LEDs.
 - Calcular puntos LED e indices.
-- Crear segments desde rangos.
-- Crear zones que agrupen segments.
+- Crear zonas geometricas que seleccionen pixeles por posicion.
+- Crear grupos nombrados que combinen zonas, sin alterar cableado ni duplicar pixeles.
 
 El formato principal no debe ser JSON privado de Konva ni de una libreria de timeline.
 
@@ -1122,7 +1165,7 @@ No instalar librerias visuales grandes sin justificar.
 
 Permitido con criterio:
 
-- React Konva para canvas de autoria.
+- Paper.js para el canvas de autoria vectorial avanzada. El Designer debe renderizar sobre HTML canvas + Paper.js; no reconstruir un motor SVG paralelo para strings, zonas o controlador.
 - PixiJS si el simulador lo requiere.
 - Librerias funcionales pequenas.
 - Iconos de la libreria ya presente.
@@ -1131,7 +1174,6 @@ No permitido:
 
 - Templates UI externos.
 - Kits completos que reemplacen el sistema actual.
-- Dependencias que impongan una estetica ajena.
 ```
 ### `.agent/ILUMINATE_BOOTSTRAP.md`
 
@@ -1164,6 +1206,102 @@ El sistema es multitenant por diseno. La notacion canonica de tenant en PostgreS
 - No crear firmware distinto por instalacion.
 - No hacer que el web sea fuente de verdad de la partitura.
 - No meter login/sesiones dentro de `lighting-core`.
+```
+### `.agent/EFFECT_TARGETING_MODEL.md`
+
+```
+# Effect Targeting Model
+
+**Status:** canonical product decision
+**Last updated:** 2026-09-10
+
+## Decision
+
+The physical wiring model and the visual effect model are deliberately separate.
+
+```text
+controller + data cables + LED strings
+-> electrical topology and serial order
+-> generated pixelMap
+-> zones and groups select pixels
+-> clips/effects render those selected pixels
+```
+
+The operator does **not** create, name, or assign logical LED segments as part of
+the normal Designer workflow.
+
+## Physical Model
+
+- A `Data cable` and an `LED string` are directed physical routes.
+- A route has a green DIN/start terminal, a red DOUT/end terminal, fabrication
+  nodes, and exact snap solder joints.
+- The controller plus route joints form the electrical graph.
+- That graph determines the output and serial sequence for every addressable
+  pixel. For a pixel at `output + serialIndex`, its predecessor and successor
+  are inferred from adjacent indices on that same output; explicit pointers are
+  unnecessary.
+- A fabrication leg is the portion of a route between two route nodes. It is a
+  construction detail, not a normal effect target.
+
+## pixelMap
+
+The generated `pixelMap` is the bridge between both worlds. Every addressable
+pixel must be resolvable to at least:
+
+```text
+output, serialIndex, LED-string route, x/y in cm, route tangent/direction
+```
+
+It may also carry generated zone memberships and local coordinates. It is never
+the normal editing surface for an operator.
+
+## Visual Targets
+
+Effects target only these normal authoring concepts:
+
+- **Zone:** a named visual geometry, such as `L vertical`, `L base`, `star`,
+  `background`, or `full sign`. It selects all pixelMap pixels inside that
+  geometry. A pixel may belong to more than one zone.
+- **Group:** a named collection of zones and/or other groups, for example
+  `Letter L`, `word CARIBE`, or `full sign`. Groups create no pixels and do not
+  alter wiring. They may nest, but cycles are invalid.
+
+The UI should use zones and groups as the normal selectable targets for clips.
+A string remains visible as physical fabrication information, not the ordinary
+effect-authoring language.
+
+## Effect Ordering And Coordinates
+
+For the same selected pixels, an effect states how it interprets them:
+
+- `serial`: order selected pixels by physical `output + serialIndex`. Used by
+  chase, comet, serial fill, and comparable linear effects.
+- `local`: normalize coordinates inside the selected zone/group. Used by an
+  effect that should restart independently in each letter or element.
+- `global`: use the common canvas/sign coordinate system. Used by a wave, fire,
+  or gradient that crosses several letters as one composition.
+
+Examples:
+
+- A chase on `L vertical` follows only that zone's pixels in serial order.
+- Fire on `full sign` samples all selected pixels in global coordinates.
+- A yellow fill on group `CARIBE` can activate each child letter sequentially
+  while using each child's local coordinates.
+
+## Advanced Exception
+
+A future advanced tool may expose an exact named range within a string when a
+geometry cannot express the desired selection. It is an exception, not a
+primary entity, UI workflow, or required partitura target type.
+
+## Consequences For Implementation
+
+1. Compile the electrical graph before compiling effects.
+2. Generate the canonical physical pixelMap from the connected routes.
+3. Resolve zone membership geometrically from pixel positions.
+4. Resolve groups recursively and deduplicate their pixels.
+5. Make simulator and firmware-facing artifacts consume the same resolved pixel
+   targets. Do not maintain a separate manual `zone -> segment` assignment.
 ```
 
 ## Documentacion de Arquitectura
@@ -1209,6 +1347,21 @@ iluminate.partituras.generated_json
 `generated_json` is produced from `document_json` through `lighting-core` generation and validation. It is the JSON shape that the simulator and firmware interpreter should consume.
 
 The generated artifact must remain declarative. It must not include ESP32 pins, FastLED array names, WiFi credentials, per-device secrets, or firmware code.
+
+The device download endpoint exposes this artifact as raw JSON:
+
+```text
+GET /api/device/partituras/{partituraKey}
+```
+
+For the current default partitura:
+
+```text
+/api/device/partituras/default_installation
+```
+
+The ESP32 setup screen stores only the API base URL, for example `http://host:8420`.
+The firmware appends the fixed path above when it downloads the partitura.
 
 ### Default Template
 
@@ -1278,6 +1431,7 @@ The partitura owns:
 
 - chains and logical outputs;
 - segment ranges;
+- spatial pixel coordinates generated as `pixelMap`;
 - zones;
 - scenes;
 - tracks and clips;
@@ -1317,25 +1471,23 @@ This makes the controller shape stable while allowing a project to use only one 
 
 Concrete pin mapping remains firmware-owned.
 
-## Current Hardware Validation State
+## Spatial Pixel Model
 
-The first hardware proof has validated:
+Iluminate uses one spatial model for linear strips and surface-like areas.
 
-- PlatformIO local build on Windows;
-- PlatformIO upload to ESP32 over COM3;
-- serial monitor at 115200;
-- embedded `partitura.v1` parsing;
-- WS2812B output on `output 1`;
-- one 100 LED strip;
-- four 25 LED segments;
-- `solid`, `chase`, `pulse`, `toggle`;
-- calibration scene playback.
-
-The next architectural milestone is a local web loader:
+Physical outputs and segments describe wiring:
 
 ```text
-ESP32 downloads generated_json from Iluminate web/API
+output -> chain -> segment range
 ```
+
+The generated partitura expands those ranges into:
+
+```text
+pixelMap[]
+```
+
+Each pixel carries:
 
 ```
 
@@ -1379,6 +1531,12 @@ services:
       ILUMINATE_DATABASE_URL: ${ILUMINATE_DATABASE_URL:-postgresql://${DB_USER}:${DB_PASS}@postgres:5432/${DB_NAME}}
       ILUMINATE_PLACEHOLDER_AUTH: ${ILUMINATE_PLACEHOLDER_AUTH:-true}
       ILUMINATE_SECURE_COOKIES: ${ILUMINATE_SECURE_COOKIES:-false}
+      CLOUDFLARE_R2_ACCOUNT_ID: ${CLOUDFLARE_R2_ACCOUNT_ID:-}
+      CLOUDFLARE_R2_BUCKET: ${CLOUDFLARE_R2_BUCKET:-}
+      CLOUDFLARE_R2_ENDPOINT: ${CLOUDFLARE_R2_ENDPOINT:-}
+      CLOUDFLARE_R2_REGION: ${CLOUDFLARE_R2_REGION:-auto}
+      CLOUDFLARE_R2_ACCESS_KEY_ID: ${CLOUDFLARE_R2_ACCESS_KEY_ID:-}
+      CLOUDFLARE_R2_SECRET_ACCESS_KEY: ${CLOUDFLARE_R2_SECRET_ACCESS_KEY:-}
     ports:
       - "${ILUMINATE_WEB_PORT:-8420}:3000"
     restart: unless-stopped
@@ -1414,6 +1572,14 @@ ILUMINATE_DATABASE_URL=postgresql://acartin:change-me@postgres:5432/iluminate
 ILUMINATE_REDIS_URL=
 ILUMINATE_SECRET_KEY=change-me
 ILUMINATE_INTERNAL_TOKEN=change-me
+
+# Cloudflare R2 private artwork storage
+CLOUDFLARE_R2_ACCOUNT_ID=
+CLOUDFLARE_R2_BUCKET=iluminate-assets
+CLOUDFLARE_R2_ENDPOINT=
+CLOUDFLARE_R2_REGION=auto
+CLOUDFLARE_R2_ACCESS_KEY_ID=
+CLOUDFLARE_R2_SECRET_ACCESS_KEY=
 ```
 
 ## Topologia
@@ -1448,6 +1614,7 @@ services/lighting-core/domain/zones
 services/lighting-core/fixtures
 services/lighting-core/generators
 services/lighting-core/migrations
+services/lighting-core/pixel-map
 services/lighting-core/player
 services/lighting-core/schemas
 services/lighting-core/storage
@@ -1463,6 +1630,7 @@ services/web/iluminate/app/console
 services/web/iluminate/app/forgot-password
 services/web/iluminate/app/login
 services/web/iluminate/app/partituras
+services/web/iluminate/app/projects
 services/web/iluminate/app/reset-password
 services/web/iluminate/app/settings
 services/web/iluminate/components
@@ -1476,6 +1644,7 @@ services/web/iluminate/lib
 services/web/iluminate/lib/lighting
 services/web/iluminate/lib/server
 services/web/iluminate/public
+services/web/iluminate/public/vendor
 ```
 
 ## Archivos
@@ -1521,8 +1690,11 @@ services/lighting-core/migrations/.gitkeep
 services/lighting-core/migrations/2026-08-19_create_iluminate_operational_tables.sql
 services/lighting-core/migrations/2026-08-22_create_iluminate_partituras.sql
 services/lighting-core/migrations/2026-08-22_remove_partitura_revisions.sql
+services/lighting-core/migrations/2026-09-09_projects_many_partituras.sql
 services/lighting-core/package-lock.json
 services/lighting-core/package.json
+services/lighting-core/pixel-map/builders.ts
+services/lighting-core/pixel-map/create-pixel-map.ts
 services/lighting-core/player/scene-player.ts
 services/lighting-core/player/ws2812b-simulator.ts
 services/lighting-core/schemas/README.md
@@ -1640,12 +1812,15 @@ docker compose up --build iluminate-web
     "lint": "next lint"
   },
   "dependencies": {
+    "@aws-sdk/client-s3": "^3.1128.0",
+    "@aws-sdk/s3-request-presigner": "^3.1128.0",
     "@radix-ui/react-slot": "1.1.0",
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
     "jssip": "^3.13.8",
     "lucide-react": "0.468.0",
     "next": "16.2.6",
+    "paper": "^0.12.18",
     "pg": "^8.13.1",
     "react": "19.2.4",
     "react-dom": "19.2.4",
@@ -1654,6 +1829,7 @@ docker compose up --build iluminate-web
   },
   "devDependencies": {
     "@types/node": "20.17.12",
+    "@types/paper": "^0.11.14",
     "@types/pg": "^8.11.11",
     "@types/react": "19.2.8",
     "@types/react-dom": "19.2.3",
@@ -1713,10 +1889,24 @@ export const menuCatalog: MenuSection[] = [
     label: "Lighting",
     items: [
       {
+        id: "projects",
+        label: "Projects",
+        href: "/projects",
+        description: "Physical signs and installations with assets, partituras and controllers.",
+        required_permission: "lighting:projects:manage"
+      },
+      {
         id: "partitura-generator",
         label: "Partitura Generator",
         href: "/partituras/generator",
         description: "Internal generator and validation workbench for partitura.v1.",
+        required_permission: "lighting:partituras:manage"
+      },
+      {
+        id: "designer",
+        label: "Designer",
+        href: "/partituras/designer",
+        description: "Full-screen visual composer for signs, zones and LED routing.",
         required_permission: "lighting:partituras:manage"
       }
     ]
@@ -1838,20 +2028,6 @@ async function getJson<T>(path: string): Promise<T> {
   }
 
   return response.json() as Promise<T>;
-}
-
-export async function getMenu(): Promise<MenuPayload> {
-  if (placeholderAuthEnabled) {
-    const cookieStore = await cookies();
-    if (!cookieStore.get(sessionCookieName)?.value) redirect("/login");
-    const requestedRole = cookieStore.get(placeholderRoleCookieName)?.value ?? defaultPlaceholderRole;
-    const role = isRole(requestedRole) ? requestedRole : defaultPlaceholderRole;
-    return placeholderMenuForRole(role);
-  }
-
-  return getJson<MenuPayload>("/menu");
-}
-
 ```
 ### `services/web/iluminate/lib/modules.ts`
 
@@ -1894,8 +2070,9 @@ Functional domain for choreographed addressable LED installations.
 This service owns:
 
 - chains
-- segments
 - zones
+- visual groups
+- generated pixel maps
 - scenes
 - tracks
 - clips
@@ -1910,6 +2087,14 @@ It may contain an API under `api/`, pure domain logic under `domain/`, schemas u
 Persistent records owned by lighting-core are multitenant by design. Projects, controllers, partituras, deployments, device commands and status records must be scoped by the trusted `client_id` context provided by auth or device identity.
 
 Each project owns one current partitura. Iluminate does not model partitura revisions or version history; duplicating a partitura creates a separate partitura record instead of another revision of the same one.
+
+## Effect Targeting Boundary
+
+Physical wiring establishes each pixel's output and serial order. A generated
+pixel map adds its spatial position. Effects normally target visual zones or
+named groups, not manually authored logical LED segments. Effects then evaluate
+the selected pixels in serial, local, or global coordinates. See
+`.agent/EFFECT_TARGETING_MODEL.md` for the canonical definition.
 
 It must not own login, password, sessions, billing, or web component state.
 

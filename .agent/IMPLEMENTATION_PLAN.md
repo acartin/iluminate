@@ -35,6 +35,7 @@ SVG/canvas of real sign
 -> continuous LED strings drawn by the operator, plus optional green data cables for signal planning
 -> sampled real LED points using one project LED density
 -> generated pixelMap
+-> zones/groups resolve effect targets
 -> spatial/linear effects
 ```
 
@@ -55,7 +56,7 @@ UX direction after starting the Designer branch:
 - The canvas has intelligent rulers in `cm` or `in`; labels stay screen-readable and automatically promote to `m` or `ft` when the visible span is large. Canonical stored coordinates remain centimeters.
 - Rulers are optional and can be hidden from the top system bar to recover canvas space.
 - Formal import direction is SVG-only for the production model. Raster images may be references later, but SVG is the geometry source.
-- Designer route vocabulary is split into `LED string` and `Data cable`. `LED string` is amber/orange and compiles into LEDs/segments/pixelMap. `Data cable` is always green, is visual-only, and is ignored by layout compilation.
+- Designer route vocabulary is split into `LED string` and `Data cable`. `LED string` is amber/orange and compiles into the physical pixelMap. `Data cable` is green and establishes serial signal connectivity between controller ports and LED strings.
 - Addressable pixel count is derived from real route length and `Pixels/m`. Example: at `60 Pixels/m`, a `100 cm` LED string should compile to about 60 addressable pixels. `LEDs/m` is separate and represents physical emitters for preview/simulation, so WS2811 strips can model multiple physical LEDs per addressable pixel.
 - Every Designer document owns one controller card on the canvas. The controller is movable and persisted, but not deletable. It starts with 3 data connectors; future configuration should support different controller profiles, including 12-output controllers.
 - Route points are fabrication nodes, not LEDs. Double-clicking a route segment inserts a node/bend. Selecting an internal node enables point deletion and route cutting. Cutting splits one continuous route into two continuous routes. LED points are sampled inside each leg with a half-step offset, so cuts/bends sit between LEDs instead of replacing LEDs.
@@ -64,8 +65,9 @@ UX direction after starting the Designer branch:
 - Soldering is automatic only when terminals land on the same grid snap point. Green terminal plus red terminal on the exact same snap point solders, regardless of whether the route is `LED string` or `Data cable`; if they do not share that snap point, nothing solders. The canvas marks the joint in cyan and persists `joint: true`. Same-kind routes are merged and the duplicate terminal disappears. Mixed `Data cable` + `LED string` joints remain separate route types, but dragging the cyan joint or moving a soldered route endpoint keeps connected terminals together as one physical point. Output/zone validation may be added later as warnings, but must not block drawing.
 - Controller ports are red output snap terminals. A `Data cable` green/input terminal on the exact same snap point as a controller port solders to that port, paints the port cyan, assigns the cable output from the port number and moves with the controller card when the card is dragged.
 - Deleting routes must reconcile `joint: true`; cyan may remain only on a real terminal/port connection.
-- The Designer geometry is suitable for a later electrical emulator because controller ports, data cables, LED strings, terminals and cyan joints form a physical connectivity graph. Future validation should derive continuity and warnings from that graph.
-- Layout technical grids remain available for debug/inspection, but the production workflow should keep moving toward the visual studio.
+- The Designer geometry is a physical connectivity graph. `Compile` derives the pixelMap and validates controller paths/serial branches; a successful, current compilation is required before Animate is available.
+- Effects are authored against visual `zones` and named `groups`, not manually created logical segments. The physical wiring graph produces output/serial order; pixelMap connects it to `x/y`; effects choose `serial`, `local`, or `global` evaluation. Read `.agent/EFFECT_TARGETING_MODEL.md` for the canonical model.
+- The retired Layout, Physical map and Effect Lab views must not be reintroduced. Effects are authored from the Designer-derived pixelMap.
 
 ---
 
@@ -172,13 +174,14 @@ UX direction after starting the Designer branch:
 - [x] Add a persistent, movable, non-deletable controller card with 3 default data connectors.
 - [x] Add exact snap connection from controller red output ports to data-cable green input terminal.
 - [x] Keep cables attached when dragging the controller.
-- [x] Assign each route to logical output `1`, `2` or `3`.
+- [x] Draw controller/data-cable/LED-string topology; output assignment is derived from physical connections rather than edited on a route.
 - [x] Sample route points using project LED density.
-- [x] Generate serial LED indices from route order.
+- [ ] Generate serial LED indices by traversing the validated electrical graph, not document/route array order.
 - [ ] Show LED points and indices during route editing.
 - [ ] Represent non-LED jumpers/continuations between route portions.
-- [ ] Calculate zone membership for each sampled LED.
-- [x] Generate `pixelMap` from routed real LED points through compiled segments.
+- [ ] Calculate zone membership for each sampled LED from zone geometry.
+- [ ] Generate canonical `pixelMap` from routed real LED points and the electrical graph.
+- [ ] Add named visual groups with recursive/cycle-safe membership.
 - [ ] Keep raw `pixelMap` hidden from normal operators.
 - [ ] Export partitura through `lighting-core`.
 - [x] Add basic canvas zoom and pan.
@@ -207,7 +210,7 @@ UX direction after starting the Designer branch:
 ### Deliverables
 
 - [x] Add scenes.
-- [x] Add clips targeting zones.
+- [x] Add initial clips targeting legacy zone data.
 - [x] Edit effect parameters from effect metadata.
 - [x] Add scene loop.
 - [x] Add modal player with play/pause/stop.
@@ -219,7 +222,8 @@ UX direction after starting the Designer branch:
 - [ ] Resize clip duration with a timeline UI.
 - [ ] Add playback head in scene timeline.
 - [ ] Simulate LEDs over the uploaded SVG/image.
-- [ ] Formalize effect coordinate space: global, zone-local and grouped/sequential.
+- [ ] Make clips target canonical zones/groups resolved from pixelMap.
+- [ ] Formalize effect coordinate space: `serial`, `local`, and `global`.
 - [ ] Add deterministic simulator fixtures.
 - [ ] Compare web simulator output against expected effect cases.
 - [ ] Improve effect library enough for convincing demos before prioritizing firmware parity.

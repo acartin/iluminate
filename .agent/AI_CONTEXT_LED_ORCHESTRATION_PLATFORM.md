@@ -15,14 +15,14 @@ Este documento es la referencia conceptual principal del proyecto. Antes de prop
 2. No convertir el producto en un editor vectorial general, una copia de WLED ni un sistema de video.
 3. No generar un firmware diferente para cada instalación.
 4. Mantener separados el **core compilado** y la **partitura actualizable**.
-5. Mantener separados el modelo físico —cadenas y segmentos— y el modelo visual —zonas—.
+5. Mantener separados el modelo físico de cableado —controlador, cables de datos, strings LED y nodos de fabricación— y el modelo visual —zonas y grupos—. Los segmentos/rangos lógicos no son un flujo normal del operador.
 6. Diseñar para profesionales de rótulos, stands y mobiliario comercial; no para consumidores sin conocimientos técnicos.
 7. No introducir complejidad futura dentro del MVP, pero evitar decisiones que cierren las extensiones previstas.
 8. Cuando se proponga cambiar un concepto establecido, explicar primero qué problema concreto resuelve el cambio.
 9. Tratar el firmware ESP32 como un ambiente externo a este repo. Este repo produce, valida, simula y publica partituras; no contiene el proyecto Arduino/PlatformIO/ESP-IDF.
 10. Para el composer real, no iniciar desde una matriz visible. El operador debe trabajar sobre SVG/canvas, zonas y rutas LED continuas; el sistema genera el `pixelMap`.
 11. Mantener una sola densidad LED por proyecto. Si cambia, se resetea el cableado/rutas existentes.
-12. Usar `.agent/PIXELMAP_COMPOSER_DIRECTION.md` como referencia actual antes de redisenar composer, efectos espaciales o flujos de mapeo.
+12. Usar `.agent/PIXELMAP_COMPOSER_DIRECTION.md` y `.agent/EFFECT_TARGETING_MODEL.md` como referencia actual antes de redisenar composer, efectos espaciales o flujos de mapeo.
 
 ---
 
@@ -35,8 +35,8 @@ La solución completa tendrá:
 - Un controlador propio basado en ESP32.
 - Tres salidas físicas de datos para tiras WS2812B.
 - Un firmware universal externo con un motor de iluminación y una biblioteca de efectos.
-- Una partitura declarativa, separada del firmware, que define cadenas, segmentos, zonas, escenas, pistas, clips, efectos seleccionados y temporización.
-- Un editor web visual con canvas, reglas, escala, herramientas para dibujar cadenas y segmentos, zonas y una timeline estilo CapCut.
+- Una partitura declarativa, separada del firmware, que define cableado físico, pixelMap generado, zonas, grupos, escenas, pistas, clips, efectos seleccionados y temporización.
+- Un editor web visual con canvas, reglas, escala, herramientas para dibujar cableado, zonas y grupos, y una timeline estilo CapCut.
 - Un simulador que reproduce la partitura sobre una fotografía, render o plano de la instalación.
 - Publicación y cambio remoto de partituras y escenas sin recompilar el firmware.
 - Administración en la nube de proyectos, controladores, revisiones, despliegues y escena activa.
@@ -200,24 +200,7 @@ Propiedades mínimas:
 - Recorrido geométrico sobre el canvas.
 - Saltos de cable sin LEDs.
 
-### 6.3 Segmento
-
-Un **segmento** es un rango contiguo dentro de una cadena. Pertenece exactamente a una cadena y se expresa mediante `start` y `length`.
-
-```json
-{
-  "id": "letter_a_left",
-  "name": "A1",
-  "chainId": "chain_1",
-  "start": 0,
-  "length": 42,
-  "reverse": false
-}
-```
-
-El segmento representa direccionamiento físico/lógico de LEDs. Debe conservar el mismo concepto y nombre en la interfaz, el JSON y el core.
-
-### 6.4 Zona
+### 6.3 Zona
 
 Una **zona** representa un objeto visual perceptible, por ejemplo:
 
@@ -227,29 +210,26 @@ Una **zona** representa un objeto visual perceptible, por ejemplo:
 - Contorno.
 - Nombre completo.
 
-Una zona puede contener uno o varios segmentos. Esto evita que una letra formada por tres tramos tenga que animarse manualmente como `A1`, `A2` y `A3` cada vez.
+A zone is geometry, not a manual string range. It selects every generated pixel
+whose physical `x/y` location falls within it. The same pixel may belong to
+several zones.
 
-```json
-{
-  "id": "letter_a",
-  "name": "Letra A",
-  "segments": [
-    "letter_a_left",
-    "letter_a_right",
-    "letter_a_crossbar"
-  ]
-}
-```
+### 6.4 Grupo
 
-Las zonas pueden llegar a ser jerárquicas: una zona `brand_name` podría contener las zonas de sus letras. Si se implementa esta capacidad, el validador debe impedir ciclos.
+Un **grupo** es una composición nombrada de zonas y/u otros grupos, por ejemplo
+`letter_A`, `word_CARIBE` o `full_sign`. No crea píxeles ni modifica el
+cableado. Se permiten grupos anidados, pero el validador debe impedir ciclos.
 
 ### 6.5 Distinción fundamental
 
-- **Cadena:** conexión física completa a un pin.
-- **Segmento:** rango contiguo de LEDs dentro de una cadena.
-- **Zona:** objeto visual compuesto por uno o varios segmentos.
+- **Cableado/string:** conexión física continua que define dirección y orden serial.
+- **Tramo de fabricación:** sección entre dos nodos de una ruta; detalle de construcción.
+- **Zona:** geometría visual que selecciona píxeles por posición.
+- **Grupo:** composición semántica de zonas/grupos.
 
-En proyectos sencillos habrá zonas de un solo segmento. No es un error: la separación existe porque en proyectos complejos la relación deja de ser uno a uno.
+Los efectos normales se aplican a zonas o grupos. El motor puede ordenar los
+píxeles seleccionados por serial (`serial`) o evaluarlos en coordenadas locales
+o globales (`local`, `global`).
 
 ### 6.6 Escena
 
@@ -487,7 +467,7 @@ Componentes conceptuales:
 2. **Clock:** mantiene el tiempo monotónico global.
 3. **Scene runner:** administra escena activa, bucles e inicio/detención.
 4. **Scheduler:** determina qué clips están activos en cada instante.
-5. **Target resolver:** convierte zonas en sus segmentos y píxeles.
+5. **Target resolver:** convierte zonas y grupos en conjuntos deduplicados de píxeles del pixelMap.
 6. **Effect registry:** localiza el algoritmo compilado por su identificador.
 7. **Renderer:** ejecuta cada efecto con su tiempo local.
 8. **Compositor:** mezcla capas.

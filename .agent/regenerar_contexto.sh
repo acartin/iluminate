@@ -128,7 +128,7 @@ cat > "$BRAIN_FILE" <<EOF
 |---|---|---:|
 | \`compose.yml\` | Compose local actual; validar antes de tocar infraestructura. | 4 |
 | \`services/web/iluminate\` | Next.js UI, portal, editor/simulador inicial y adaptadores temporales. | 5 |
-| \`services/lighting-core\` | Dominio LED: chains, segments, zones, partitura, scenes, validation y deployments. | 5 |
+| \`services/lighting-core\` | Dominio LED: rutas fisicas, pixelMap, zones, groups, partitura, scenes, validation y deployments. | 5 |
 | \`services/auth\` | Identidad, organizaciones, roles, permisos, sesiones y auth API. | 4 |
 | \`services/simulator\` | Simulacion reusable cuando salga del prototipo web. | 4 |
 | \`services/device-protocol\` | Contratos cloud/controlador y estado deseado/reportado. | 4 |
@@ -146,7 +146,8 @@ cat > "$BRAIN_FILE" <<EOF
 - El hardware se modela aqui solo como tres salidas logicas: \`chain.output\` 1, 2 y 3.
 - El sistema es multitenant por diseno; toda tabla persistente de negocio debe contemplar \`client_id\`.
 - PostgreSQL es la base de datos objetivo.
-- Mantener separados chains/segments fisicos y zones visuales.
+- Mantener separados el cableado fisico (controller, data cables, LED strings y nodos) y los objetivos visuales (zones y groups). Los segmentos/rangos logicos no son flujo normal de autoria; el pixelMap los deriva cuando haga falta.
+- Leer \`.agent/EFFECT_TARGETING_MODEL.md\` antes de cambiar compilacion, pixelMap, zonas, grupos, efectos o simulador.
 
 ## 3. SERVICIOS DOCKER ACTUALES
 
@@ -187,6 +188,7 @@ append_file_excerpt ".agent/EXECUTION_MAP.md"
 append_file_excerpt ".agent/IMPLEMENTATION_PLAN.md"
 append_file_excerpt ".agent/ILUMINATE_UI_STANDARDS.md"
 append_file_excerpt ".agent/ILUMINATE_BOOTSTRAP.md"
+append_file_excerpt ".agent/EFFECT_TARGETING_MODEL.md"
 
 append_section "Documentacion de Arquitectura"
 append_file_excerpt "docs/partitura-lifecycle.md"

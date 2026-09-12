@@ -22,6 +22,10 @@ The `auth_*` tables live in `public` for now because they were copied from the e
 
 Canonical tenant/client table. Every Iluminate project, controller, partitura and deployment belongs to one `auth_clients.id` through `client_id`.
 
+Client-owned binary artwork lives in Cloudflare R2, outside PostgreSQL. Its canonical storage prefix is `clients/<auth_clients.id>/`; the numeric ID is immutable and is never derived from a display name or `client_key`. R2 has key prefixes rather than physical folders, so no empty folder is created at client creation. The first uploaded artwork creates the prefix naturally.
+
+The service must delete all objects below that prefix when a client is permanently deleted. This is a cross-service operation, not a browser operation: list and delete R2 objects server-side, record any failure for retry, and only report the client deletion complete when the database lifecycle and storage lifecycle have both succeeded.
+
 ### `public.auth_users`
 
 Platform user accounts. Used as partitura authors, deployment requesters and audit actors.
@@ -85,9 +89,9 @@ Primary use:
 - persist the latest validated firmware-facing artifact in `generated_json`;
 - keep validation results in `validation_report`;
 - provide the artifact that controllers download and interpret;
-- enforce one current partitura per project.
+- allow multiple independent partituras per project, with `iluminate.projects.active_partitura_id` selecting the one currently active for deployment.
 
-Iluminate does not model partitura revisions. When a user wants a variant, the application duplicates the partitura as a separate record. The partitura JSON remains declarative. It must not contain firmware code, physical pin maps, credentials or FastLED array names.
+Iluminate does not model partitura revisions. When a user wants a variant, the application duplicates the partitura as a separate record in the same project. A project may therefore hold normal, seasonal or proposal programs, but only one is active at a time. The partitura JSON remains declarative. It must not contain firmware code, physical pin maps, credentials or FastLED array names.
 
 Current direction for `document_json`:
 
@@ -109,19 +113,19 @@ Changing LED density resets existing LED routes/cabling.
 Current direction for `generated_json`:
 
 - validated `partitura.v1`;
-- chains/logical outputs;
-- segments derived from routes;
-- zones;
+- controller outputs and validated electrical topology;
+- generated physical `pixelMap` from connected routes;
+- visual zones and named groups;
 - scenes/tracks/clips;
-- generated `pixelMap`.
+- effect target and coordinate-space metadata.
 
 `pixelMap` is generated georeferencing data. It maps physical serial LEDs to visual coordinates:
 
 ```text
-output/index -> x/y -> segment/zone memberships -> effect sampling
+output/serialIndex -> x/y -> zone/group memberships -> effect sampling
 ```
 
-Operators should not normally edit raw `pixelMap`. They edit zones and continuous LED routes; the system regenerates the map.
+Operators should not normally edit raw `pixelMap`. They edit zones, groups and continuous LED routes; the system regenerates the map. Logical string ranges are not part of the normal data-entry flow.
 
 ### `iluminate.deployments`
 
@@ -164,6 +168,8 @@ Primary use:
 - reference photos, renders, plans, SVGs and other files;
 - keep storage URI and metadata;
 - connect visual editor inputs to a project without embedding files in PostgreSQL.
+
+Assets are client-owned objects in R2 and are registered in PostgreSQL. `client_id` is mandatory; `project_id` is optional so future client-library assets can be reused. Initial project uploads use `clients/<client_id>/artwork/<asset_id>-<file_name>` and the database stores the `r2://` URI. `metadata.sizeBytes` records upload size. The application accepts any non-empty SVG, PNG, JPEG, WEBP or BMP up to 2 MiB, records it as a `reference`, retains its exact MIME type, opens files through a five-minute server-generated signed URL, and deletes the R2 object before soft-deleting the database record.
 
 ### `iluminate.audit_events`
 

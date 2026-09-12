@@ -26,7 +26,8 @@ Estructura esperada:
 - `components/ui`: primitivos reutilizables sin conocimiento de dominio.
 - `components/portal`: shell, navegacion, topbar, sidebar y composicion general.
 - `components/lighting`: componentes especificos del dominio LED, cuando se creen.
-- `components/editor`: canvas, herramientas de cadena, segmento y zona, cuando se creen.
+- `components/lighting/designer`: editor grafico de partituras; debe mantenerse modular por tipos, canvas, renderer, geometria/wiring, compiler y UI.
+- `components/editor`: canvas, herramientas de rutas fisicas, zonas y grupos, cuando se creen.
 - `components/timeline`: escenas, pistas y clips, cuando se creen.
 - `lib`: clientes API, helpers, tipos de UI y mocks temporales explicitamente marcados.
 
@@ -40,7 +41,7 @@ Reglas:
 Idioma de UI:
 
 - Usar ingles por defecto para copy visible del producto, salvo que se pida una variante localizada.
-- Mantener terminos de dominio estables: chain, segment, zone, partitura, scene, track, clip, effect, controller, deployment.
+- Mantener terminos de dominio estables: string, zone, group, pixelMap, partitura, scene, track, clip, effect, controller, deployment. Los segmentos/rangos logicos no son una herramienta normal de autoria.
 - `partitura` es el termino oficial del dominio. No usar `score` como sinonimo en UI, API, JSON, codigo ni documentacion.
 
 ## 3. Componentes existentes a preservar
@@ -111,8 +112,8 @@ Herramientas esperadas:
 - Mostrar direccion de datos.
 - Marcar saltos sin LEDs.
 - Calcular puntos LED e indices.
-- Crear segments desde rangos.
-- Crear zones que agrupen segments.
+- Crear zonas geometricas que seleccionen pixeles por posicion.
+- Crear grupos nombrados que combinen zonas, sin alterar cableado ni duplicar pixeles.
 
 El formato principal no debe ser JSON privado de Konva ni de una libreria de timeline.
 
@@ -168,7 +169,7 @@ No instalar librerias visuales grandes sin justificar.
 
 Permitido con criterio:
 
-- React Konva para canvas de autoria.
+- Paper.js para el canvas de autoria vectorial avanzada. El Designer debe renderizar sobre HTML canvas + Paper.js; no reconstruir un motor SVG paralelo para strings, zonas o controlador.
 - PixiJS si el simulador lo requiere.
 - Librerias funcionales pequenas.
 - Iconos de la libreria ya presente.
@@ -198,7 +199,7 @@ Detenerse antes de implementar si el cambio propone:
 - Reemplazar AppShell/Sidebar/Topbar o UI primitives sin justificacion.
 - Conectar frontend directo a Postgres.
 - Hacer del web la fuente de verdad de la partitura.
-- Usar un documento de Konva/timeline como formato canonico.
+- Usar un documento privado de Paper.js/Konva/timeline como formato canonico.
 - Hardcodear colores fuera del sistema de tokens.
 - Mostrar JSON crudo de errores.
 - Usar GET/Link para logout o mutaciones.

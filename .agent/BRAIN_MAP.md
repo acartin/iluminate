@@ -1,11 +1,9 @@
 # BRAIN_MAP
 
-- Generated UTC: `2026-09-02T00:00:00Z`
-- Designer handoff: `.agent/DESIGNER_HANDOFF.md`
-- Last Designer handoff update: `2026-09-05`
+- Generated UTC: `2026-09-10T23:02:17Z`
 - Repo root: `/srv/iluminate`
-- Git branch: `HETZNER-DEV-2026-Agosto-23`
-- Git commit: `7f7c4a2`
+- Git branch: `HETZNER-DEV-2026-Setiembre-8`
+- Git commit: `8061f3d`
 
 ## 1. MAPA DE INTENCIONES (ILUMINATE)
 
@@ -13,7 +11,7 @@
 |---|---|---:|
 | `compose.yml` | Compose local actual; validar antes de tocar infraestructura. | 4 |
 | `services/web/iluminate` | Next.js UI, portal, editor/simulador inicial y adaptadores temporales. | 5 |
-| `services/lighting-core` | Dominio LED: chains, segments, zones, pixelMap, efectos, partitura, scenes, validation y simulacion. | 5 |
+| `services/lighting-core` | Dominio LED: rutas fisicas, pixelMap, zones, groups, partitura, scenes, validation y deployments. | 5 |
 | `services/auth` | Identidad, organizaciones, roles, permisos, sesiones y auth API. | 4 |
 | `services/simulator` | Simulacion reusable cuando salga del prototipo web. | 4 |
 | `services/device-protocol` | Contratos cloud/controlador y estado deseado/reportado. | 4 |
@@ -31,40 +29,8 @@
 - El hardware se modela aqui solo como tres salidas logicas: `chain.output` 1, 2 y 3.
 - El sistema es multitenant por diseno; toda tabla persistente de negocio debe contemplar `client_id`.
 - PostgreSQL es la base de datos objetivo.
-- Mantener separados chains/segments/rutas fisicas y zones visuales.
-- `pixelMap` es la capa de georreferenciacion que une `output/index` fisico con `x/y` visual.
-- La matriz gigante es un espacio virtual interno para efectos; no debe ser el concepto principal de UI para el operador.
-- En producto real, el operador trabaja sobre un canvas fisico amplio, un `Build Area` medido que representa el rotulo/display real, una imagen de referencia opcional, zonas, cables LED continuos y cables de datos; el sistema genera el `pixelMap` solo desde los cables LED.
-- Diferenciar siempre `LED string` y `Data cable`: el `LED string` representa una ruta fisica WS281x direccionable y compila pixeles/segmentos; el `Data cable` es verde, sirve para planear la senal y no genera pixeles.
-- No asumir que un pixel direccionable equivale a un LED fisico. El Designer maneja `Pixels/m` para direccionamiento/partitura/firmware y `LEDs/m` para emisores fisicos/simulacion. La relacion `LEDs/px` se deriva de `LEDs/m / Pixels/m` y permite modelar WS2812B 5V, WS2811 12V/24V o megapixeles sin cambiar el contrato de partitura.
-- El Designer debe incluir siempre una tarjeta controladora en el canvas. La tarjeta se puede mover y persistir, pero no borrar. Por defecto nace cerca de la esquina superior izquierda, con una franja libre para el PCB/cableado; las zonas/rutas iniciales deben arrancar bastante mas a la derecha para no encimarse. Tiene 3 conectores/salidas de datos. Mas adelante el menu de configuracion permitira variar esa cantidad, porque hay controladores de 12 salidas o mas.
-- Las rutas (`LED string` y `Data cable`) son polilineas editables. Sus puntos son nodos de fabricacion: dobleces, bajadas, vueltas o puntos donde se puede cortar/soldar. Insertar un nodo no rompe continuidad; cortar en un nodo interno divide la ruta en dos rutas continuas.
-- Los nodos de fabricacion no son LEDs y no deben sustituir un LED. En `LED string`, los LEDs se muestrean dentro de cada tramo, desplazados medio paso para quedar entre nodos/cortes/vueltas.
-- Convencion de direccion en rutas: punto verde = inicio/entrada/DIN, punto rojo = final/salida/DOUT, flecha = flujo serial.
-- La direccionalidad se debe mostrar con flechas sobre cada tramo de `LED string` y `Data cable`, no solo con el color de terminal. Los puertos rojos del controlador tambien muestran flecha de salida.
-- La herramienta tijera corta rutas en nodos internos. No hay herramienta cautin: soldar ocurre automaticamente cuando una terminal roja y una verde quedan exactamente sobre el mismo punto de snap del grid. Si no comparten el mismo punto de snap, no se suelda.
-- Soldar es una regla fisica/geometrica simple: verde con rojo en el mismo snap point suelda, sin importar si son `LED string` o `Data cable`. Las validaciones de output/zona pueden venir despues como advertencias, pero no deben bloquear el dibujo.
-- Si se unen dos rutas del mismo tipo, las rutas se fusionan y desaparece el nodo duplicado. Si se une `Data cable` con `LED string`, el cable se conecta visualmente a la tira LED sin convertirse en LEDs y adopta el output de la tira.
-- Al arrastrar un nodo cian ya soldado, todos los terminales del mismo joint se mueven juntos para que la union se sienta como un punto fisico continuo y no como piezas que se despegan.
-- Los puertos rojos del controlador tambien son puntos de snap y deben tener el mismo tamano visual que las terminales de las rutas. Si la terminal verde inicial de un `Data cable` cae en el mismo snap point que un puerto rojo, queda soldada al controlador, el puerto se pinta cian y el cable toma el output de ese puerto. Al mover la tarjeta controladora, los cables soldados a sus puertos se mueven con ella.
-- Esta arquitectura grafica es base para una emulacion electrica posterior: controlador + puertos + data cables + LED strings + terminales + joints forman un grafo fisico. Sobre ese grafo se podran validar salidas sin conexion, cadenas sin entrada, direcciones invertidas, ramas ambiguas, outputs duplicados y continuidad desde cada puerto hasta las tiras.
-- Un nodo soldado se persiste con `joint: true` y se pinta cian para confirmar visualmente que la soldadura si ocurrio.
-- Un proyecto usa una sola densidad LED. Si cambia, se resetea el cableado/rutas.
-- La densidad no se infiere de una tira dibujada: si el proyecto dice `60 Pixels/m`, un `LED string` de `100 cm` debe generar cerca de 60 pixeles direccionables. Si genera 54, el trazo mide cerca de 90 cm o la escala del canvas esta mal.
-- Los presets de matrices son para `Effect Lab`; el composer real debe nacer de Reference/Build Area + zonas + rutas.
-- Efectos espaciales deben soportar los modos conceptuales `Whole Sign`, `Each Element` y `Sequential Elements`.
-- UX actual: `Designer` existe como item principal del menu. `/partituras/designer` muestra un grid de partituras del tenant; `/partituras/designer/[id]` abre un estudio full-screen con top bar, barra contextual superior, tool rail izquierdo, canvas central y status bar inferior.
-- `Layout` queda como vista tecnica/debug dentro del workspace de partitura, no como flujo principal de composicion visual.
-- Si una IA retoma el Designer, debe leer primero `.agent/DESIGNER_HANDOFF.md`; ahi estan las reglas actuales de snap, soldadura, controlador, defaults y validacion.
-
-## 2.1 ESTADO ACTUAL DEL DESIGNER
-
-- Ruta grid: `/partituras/designer`.
-- Ruta editor: `/partituras/designer/[id]`.
-- Partitura local activa: `id=1`, `partitura_key=default_installation`, `status=draft`, canvas `170x40 cm`, 4 rutas.
-- El documento activo fue reseteado para preservar `default_installation` y quitar el layout viejo encimado. `generated_json` quedo en `null` para evitar artefacto stale.
-- El duplicado `default_installation_2` fue soft-deleted.
-- Validacion reciente usada: `git diff --check` y `docker compose up -d --build iluminate-web`.
+- Mantener separados el cableado fisico (controller, data cables, LED strings y nodos) y los objetivos visuales (zones y groups). Los segmentos/rangos logicos no son flujo normal de autoria; el pixelMap los deriva cuando haga falta.
+- Leer `.agent/EFFECT_TARGETING_MODEL.md` antes de cambiar compilacion, pixelMap, zonas, grupos, efectos o simulador.
 
 ## 3. SERVICIOS DOCKER ACTUALES
 
@@ -121,6 +87,7 @@ services/web/iluminate/app/console
 services/web/iluminate/app/forgot-password
 services/web/iluminate/app/login
 services/web/iluminate/app/partituras
+services/web/iluminate/app/projects
 services/web/iluminate/app/reset-password
 services/web/iluminate/app/settings
 services/web/iluminate/components
@@ -134,6 +101,7 @@ services/web/iluminate/lib
 services/web/iluminate/lib/lighting
 services/web/iluminate/lib/server
 services/web/iluminate/public
+services/web/iluminate/public/vendor
 ```
 
 ## 5. ARCHIVOS RELEVANTES
@@ -179,8 +147,11 @@ services/lighting-core/migrations/.gitkeep
 services/lighting-core/migrations/2026-08-19_create_iluminate_operational_tables.sql
 services/lighting-core/migrations/2026-08-22_create_iluminate_partituras.sql
 services/lighting-core/migrations/2026-08-22_remove_partitura_revisions.sql
+services/lighting-core/migrations/2026-09-09_projects_many_partituras.sql
 services/lighting-core/package-lock.json
 services/lighting-core/package.json
+services/lighting-core/pixel-map/builders.ts
+services/lighting-core/pixel-map/create-pixel-map.ts
 services/lighting-core/player/scene-player.ts
 services/lighting-core/player/ws2812b-simulator.ts
 services/lighting-core/schemas/README.md
@@ -218,6 +189,7 @@ services/web/iluminate/tsconfig.json
 .agent/BRAIN_MAP.md
 .agent/DATABASE_MODEL.md
 .agent/DESIGNER_HANDOFF.md
+.agent/EFFECT_TARGETING_MODEL.md
 .agent/EXECUTION_MAP.md
 .agent/FILESYSTEM_GUARDRAILS.md
 .agent/ILUMINATE_BOOTSTRAP.md

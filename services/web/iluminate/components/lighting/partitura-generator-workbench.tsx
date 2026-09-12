@@ -32,6 +32,7 @@ const partituraCrudConfig: CrudResourceConfig<PartituraRecord> = {
   searchPlaceholder: "Search partitura, client or status",
   emptyTitle: "No partituras match the current filters",
   emptyDescription: "Create a partitura for the active client before editing scenes.",
+  canCreate: false,
   allowedActions: ["workspace", "delete"],
   workspaceLabel: "Open partitura workspace",
   workspaceHref: (record) => `/partituras/generator/${encodeURIComponent(record.id)}`,
@@ -84,7 +85,7 @@ function recordFromPartitura(partitura: PersistedPartitura): PartituraRecord {
     status: partitura.status,
     scenes: partitura.document.scenes.length,
     clips: partitura.document.scenes.reduce((total, scene) => total + scene.clips.length, 0),
-    leds: partitura.document.chain1Pixels + partitura.document.chain2Pixels + partitura.document.chain3Pixels,
+    leds: partitura.document.compiledLayout?.pixelMap.length ?? 0,
     updatedAt: new Date(partitura.updatedAt).toLocaleString(),
     _actions: [{ label: "Duplicate", href: `duplicate:${partitura.id}`, icon: "copy" }]
   };
@@ -112,21 +113,13 @@ export function PartituraGeneratorWorkbench() {
 
   const gridRecords = useMemo(() => records.map(recordFromPartitura), [records]);
 
-  async function createPartitura() {
-    const response = await fetch("/api/lighting/partituras", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: `Partitura ${records.length + 1}` })
-    });
-    const payload = (await response.json()) as { partitura?: PersistedPartitura };
-    if (payload.partitura) router.push(`/partituras/generator/${encodeURIComponent(payload.partitura.id)}`);
-  }
-
   async function duplicatePartitura(id: string) {
+    const source = records.find((partitura) => partitura.id === id);
+    if (!source) return;
     const response = await fetch("/api/lighting/partituras", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ duplicateOf: id })
+      body: JSON.stringify({ projectId: source.projectId, duplicateOf: id })
     });
     const payload = (await response.json()) as { partitura?: PersistedPartitura };
     if (payload.partitura) router.push(`/partituras/generator/${encodeURIComponent(payload.partitura.id)}`);
@@ -154,7 +147,6 @@ export function PartituraGeneratorWorkbench() {
         config={partituraCrudConfig}
         records={gridRecords}
         onNavigateAction={handleAction}
-        onCreateAction={createPartitura}
       />
     </div>
   );

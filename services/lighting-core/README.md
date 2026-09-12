@@ -5,8 +5,9 @@ Functional domain for choreographed addressable LED installations.
 This service owns:
 
 - chains
-- segments
 - zones
+- visual groups
+- generated pixel maps
 - scenes
 - tracks
 - clips
@@ -21,6 +22,14 @@ It may contain an API under `api/`, pure domain logic under `domain/`, schemas u
 Persistent records owned by lighting-core are multitenant by design. Projects, controllers, partituras, deployments, device commands and status records must be scoped by the trusted `client_id` context provided by auth or device identity.
 
 Each project owns one current partitura. Iluminate does not model partitura revisions or version history; duplicating a partitura creates a separate partitura record instead of another revision of the same one.
+
+## Effect Targeting Boundary
+
+Physical wiring establishes each pixel's output and serial order. A generated
+pixel map adds its spatial position. Effects normally target visual zones or
+named groups, not manually authored logical LED segments. Effects then evaluate
+the selected pixels in serial, local, or global coordinates. See
+`.agent/EFFECT_TARGETING_MODEL.md` for the canonical definition.
 
 It must not own login, password, sessions, billing, or web component state.
 

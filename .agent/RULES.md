@@ -9,6 +9,7 @@ Precondicion recomendada al iniciar cada nueva sesion:
    - Leer `.agent/EXECUTION_MAP.md`.
    - Leer `.agent/FILESYSTEM_GUARDRAILS.md`.
    - Leer `.agent/IMPLEMENTATION_PLAN.md` cuando la tarea afecte roadmap, fases o priorizacion.
+   - Leer `.agent/EFFECT_TARGETING_MODEL.md` antes de cambiar el compilador, pixelMap, zonas, grupos, efectos o simulador.
    - Leer `.agent/ILUMINATE_UI_STANDARDS.md` si se toca `services/web/iluminate`.
    - Leer `.agent/AI_CONTEXT_LED_ORCHESTRATION_PLATFORM.md` para decisiones de producto/dominio.
 2. Determinar si se requiere regeneracion de contexto:
@@ -54,7 +55,7 @@ Servicios principales:
 - En este repo solo se modelan tres salidas logicas del controlador: `chain.output` 1, 2 y 3.
 - El sistema es multitenant por diseno. La notacion canonica de tenant en PostgreSQL/backend es `client_id`, alineada con el auth copiado desde `datasyncsa`.
 - PostgreSQL es la base de datos objetivo para persistencia de auth, proyectos, controladores, revisiones de partitura, despliegues y estado.
-- Mantener separados modelo fisico (`chain`, `segment`) y modelo visual (`zone`).
+- Mantener separados el modelo fisico de cableado (`controller`, data cables, LED strings y nodos de fabricacion) y el modelo visual (`zone`, `group`). Los segmentos/rangos logicos no forman parte del flujo normal del operador; el pixelMap los deriva cuando haga falta.
 - Preferir contratos claros entre servicios: API, schemas, DTOs y fixtures versionados.
 
 ## 4. Seguridad y entorno

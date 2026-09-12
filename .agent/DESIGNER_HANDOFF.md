@@ -1,6 +1,6 @@
 # Iluminate Designer Handoff
 
-**Last updated:** 2026-09-05
+**Last updated:** 2026-09-10
 **Purpose:** concise handoff for another AI/developer to continue the visual Designer without re-litigating current decisions.
 
 ## Current State
@@ -14,7 +14,8 @@ Designer grid
 -> draw/edit zones
 -> draw/edit LED strings and data cables
 -> snap/solder terminals
--> compile layout into segments/pixelMap
+-> compile electrical topology and pixelMap
+-> resolve zones/groups into effect targets
 ```
 
 The Designer is intentionally fabrication-oriented. It is not a raw matrix editor and it is not the old technical Layout tab.
@@ -23,12 +24,33 @@ The Designer is intentionally fabrication-oriented. It is not a raw matrix edito
 
 - Grid entry: `/partituras/designer`
 - Full-screen editor: `/partituras/designer/[id]`
-- Main UI: `services/web/iluminate/components/lighting/partitura-workspace.tsx`
+- Workspace shell / tabs: `services/web/iluminate/components/lighting/partitura-workspace.tsx`
+- Designer modules: `services/web/iluminate/components/lighting/designer/`
+  - `types.ts`: shared Designer UI/canvas types.
+  - `designer-paper-canvas.tsx`: canvas host, Paper.js loading, pointer interactions, pan/zoom drag plumbing.
+  - `designer-paper-renderer.ts`: Paper.js drawing for grid, build areas, zones, routes, controller, terminals and labels.
+  - `designer-geometry.ts`: snap, bounds, hit testing, route sampling, solder/wiring helpers and ruler math.
+  - `designer-compiler.ts`: compiles visual routes into the physical pixelMap and resolves visual targets from zones/groups.
+  - `designer-ui.tsx`: toolbox buttons, contextual fields, layers panel and rulers.
 - Grid wrapper: `services/web/iluminate/components/lighting/partitura-designer-workbench.tsx`
 - Model/defaults/normalization: `services/web/iluminate/lib/lighting/partitura-model.ts`
 - Server persistence: `services/web/iluminate/lib/server/partituras.ts`
 - Menu config: `services/web/iluminate/lib/api.ts`
 - Sidebar icon/style: `services/web/iluminate/components/portal/sidebar.tsx`
+
+## Graphics Engine Decision
+
+The Designer canvas now uses an HTML `<canvas>` rendered by Paper.js. The surrounding React UI, domain model, snap/solder logic and persistence still use Iluminate `DesignerForm`.
+
+The selected vector editing engine for the next Designer migration is **Paper.js**:
+
+- Runtime dependency: `paper`.
+- TypeScript dependency: `@types/paper`.
+- Installed in `services/web/iluminate/package.json`, so Docker rebuilds include it through `npm ci`.
+- Browser bundle served from `services/web/iluminate/public/vendor/paper-core.min.js` and loaded through `window.paper` to avoid Next/Turbopack SSR resolving Paper's Node/jsdom path.
+- Paper.js is the editing/rendering engine for vector work: straight polygons, Bezier paths, path segments, handles, hit testing and node insertion/deletion. Freehand smoothing and trace tooling remain future work.
+- The persisted format must remain the Iluminate `DesignerForm`/partitura domain JSON. Do not persist Paper.js private project JSON as the source of truth.
+- The previous SVG renderer was removed from `components/lighting`. Do not reintroduce SVG canvas components for Designer behavior. SVG files are still acceptable as imported reference artwork later, but not as the editor engine.
 
 ## Current Persisted Record
 
@@ -76,31 +98,35 @@ Do not assume one addressable pixel is always one physical LED.
 
 ### Canvas Layers
 
-The Designer separates three persisted visual layers:
+The Designer separates four persisted visual layers:
 
-- `Reference`: art/reference plane. It renders below zones, does not generate LEDs and can later contain SVG, JPG, PNG, BMP or WebP.
+- `Artwork`: imported client/project image assets placed on the canvas. It renders image references only, does not duplicate/upload assets, and does not generate LEDs. Each item persists `assetId`, name, rectangle, visibility, lock and opacity.
+- `Reference`: measured construction/reference geometry such as build areas. It does not generate LEDs.
 - `Zones`: visual targets such as letters, logos, background and full sign.
 - `Strings`: physical fabrication plane containing LED strings, data cables, terminals, joints and the controller.
 
 Each layer has `visible`, `locked` and `opacity`. Hidden layers do not render or receive selection. Locked layers remain visible but cannot be edited from the canvas/toolbox/top properties.
 
-The right Layers panel is the active-plane selector. Exactly one layer is active at a time, and the active layer must have a clearly different background. Visibility and lock buttons are secondary controls, not the active selection state. Canvas editing only applies to the active layer: build area/reference edits only when `Reference` is active; zones edit only when `Zones` is active; routes/controller edit only when `Strings` is active. Tools must not switch the active layer. The toolbox should show only the tools that apply to the active layer, plus global navigation/actions such as select, pan, zoom and delete.
+The right Layers panel is the active-plane selector. Exactly one layer is active at a time, and the active layer must have a clearly different background. Visibility and lock buttons are secondary controls, not the active selection state. Canvas editing only applies to the active layer: artwork image placement edits only when `Artwork` is active; build area/reference edits only when `Reference` is active; zones edit only when `Zones` is active; routes/controller edit only when `Strings` is active. Tools must not switch the active layer. The toolbox should show only the tools that apply to the active layer, plus global navigation/actions such as select, pan, zoom and delete.
 
-`Build Areas` are editable reference geometries. They are not containers and do not own/delete zones or strings. Multiple build areas may exist. They currently support rectangle, ellipse and polygon. The overall canvas can be larger to leave room for controller, cables and notes. Reference artwork should be positioned/scaled into a build area, not forced to occupy the whole canvas.
+`Build Areas` are editable reference geometries. They are not containers and do not own/delete zones or strings. Multiple build areas may exist. They currently support rectangle, ellipse and polygon. The overall canvas can be larger to leave room for controller, cables and notes. Artwork image references should be positioned/scaled into a build area, not forced to occupy the whole canvas.
 
 Render order:
 
 ```text
 Grid/rulers
--> Reference artwork / Build Area
+-> Artwork image references
+-> Reference / Build Area
 -> Zones
 -> Strings/controller/terminals
 -> selection handles
 ```
 
+Artwork source files live in the project Assets library (`iluminate.assets` + R2). Designer documents must never persist signed URLs or duplicate the binary asset. The browser resolves an artwork item through `/api/lighting/projects/[projectId]/assets/[assetId]`.
+
 ### Route Types
 
-- `LED string`: amber/orange LED strip. It generates LED dots, segments and pixelMap data.
+- `LED string`: amber/orange LED strip. It generates addressable pixel points and pixelMap data. Fabrication legs are derived between its nodes; they are not normal effect targets.
 - `Data cable`: green signal cable. It is visual/planning geometry only and does not generate LEDs.
 
 ### Terminals And Direction
@@ -181,6 +207,7 @@ Zone tools:
 - Rectangle Zone.
 - Ellipse Zone.
 - Polygon/Pen Zone.
+- Bezier Build Area / Bezier Zone.
 
 Polygon/Pen behavior:
 
@@ -194,6 +221,14 @@ Polygon/Pen behavior:
 - Delete/Backspace or the `Point` delete action removes the selected node, but polygons must keep at least 3 points.
 - Moving/resizing a polygon moves/scales its nodes.
 
+Bezier behavior:
+
+- The Bezier tools create the same persisted `polygon` geometry as the Pen, with `pathMode: "bezier"`; they do not create a parallel shape model.
+- Click anchors, then click the first anchor again to close. Initial smooth handles are generated automatically from neighboring anchors.
+- Select an anchor to show its two control handles. Drag either handle to reshape the curve; its opposing handle mirrors automatically, keeping the node smooth.
+- Curve hit testing, selecting and double-click node insertion follow the rendered Bezier curve, rather than the straight anchor chords.
+- Moving/resizing a Bezier path preserves and transforms its handle vectors.
+
 There is no solder/cautin tool. Do not add it back.
 
 Top command/context bars:
@@ -201,19 +236,34 @@ Top command/context bars:
 - Back.
 - Copy/paste/delete also exist in the top command area, but delete in the toolbox is more intuitive for canvas editing.
 - Save.
-- Compile.
+- Compile: derives and persists the physical pixelMap from controller ports, data cables, LED strings, zones and groups.
+- Animate is disabled until the current Designer signature has compiled with no electrical errors. Any change to controller, routes, addressable density, zones or groups makes the compilation stale. Artwork and reference-only changes do not.
 - Canvas settings: ruler unit, ruler visibility, width, height, LED density, snap.
 - Selected object properties appear in the contextual bar.
 
 ## Current Limitations
 
 - Reference image import is still pending. The product should support SVG plus raster image references such as JPG, PNG, BMP and WebP.
-- Bezier path and freehand trace tools are pending. AI trace is intentionally out of scope for now.
-- Electrical validation is conceptual, not implemented.
+- Freehand trace is pending. AI trace is intentionally out of scope for now.
+- The first electrical validation covers missing controller signal paths, multiple output roots and serial branches. It must pass before Animate is enabled.
 - Cutting welded joints needs a future UX decision.
 - LED density changes do not yet reset/recompute routing with a warning.
 - Raw pixelMap should remain hidden from normal operators.
-- Layout tab is technical/debug; the Designer is the production direction.
+- There is no legacy Layout, Physical map or Effect Lab workflow. The Designer is the canonical physical authoring surface; generated maps are derived data.
+
+## Canonical Effect Targeting
+
+Read `.agent/EFFECT_TARGETING_MODEL.md` before changing targeting semantics.
+
+- The wiring graph is the physical truth: controller ports, data cables, LED
+  strings and solder joints establish output and serial order.
+- `pixelMap` joins that serial truth to a pixel's physical `x/y` position.
+- The operator applies effects to named **zones** and **groups**, never by
+  manually creating logical LED segments in the normal workflow.
+- A zone selects pixels by geometry; a group combines zones/groups without
+  changing wiring or duplicating pixels.
+- Effects declare whether they use `serial`, `local`, or `global` coordinates.
+- A future exact string range is an advanced exception only.
 
 ## Future Electrical Emulator Direction
 

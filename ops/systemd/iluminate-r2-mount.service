@@ -1,0 +1,16 @@
+[Unit]
+Description=Iluminate development mount for Cloudflare R2 artwork
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+User=acartin
+Group=acartin
+ExecStart=/usr/local/bin/iluminate-rclone mount r2-remote:iluminate-assets /srv/iluminate/data/r2 --allow-other --dir-cache-time 10s --poll-interval 0 --vfs-cache-mode writes --vfs-write-back 2s --vfs-cache-max-size 2G --vfs-cache-max-age 24h
+ExecStop=/usr/bin/fusermount3 -uz /srv/iluminate/data/r2
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

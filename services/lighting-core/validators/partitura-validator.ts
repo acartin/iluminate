@@ -1,12 +1,4 @@
-import {
-  LOGICAL_OUTPUTS,
-  PARTITURA_SCHEMA_VERSION,
-  Partitura,
-  PartituraTarget,
-  SUPPORTED_CORE_VERSION,
-  ValidationIssue,
-  ValidationResult
-} from "../domain/partituras/types.js";
+import { LOGICAL_OUTPUTS, PARTITURA_SCHEMA_VERSION, Partitura, PartituraTarget, SUPPORTED_CORE_VERSION, ValidationIssue, ValidationResult } from "../domain/partituras/types.js";
 import { effectCatalog, isSupportedEffect } from "../domain/effects/catalog.js";
 
 const idPattern = /^[a-zA-Z][a-zA-Z0-9_-]*$/;
@@ -14,429 +6,132 @@ const colorPattern = /^#[0-9a-fA-F]{6}$/;
 
 export function validatePartitura(partitura: Partitura): ValidationResult {
   const issues: ValidationIssue[] = [];
-
-  check(partitura.schemaVersion === PARTITURA_SCHEMA_VERSION, issues, {
-    code: "schema.unsupported",
-    path: "schemaVersion",
-    message: `schemaVersion must be ${PARTITURA_SCHEMA_VERSION}.`
-  });
-
+  check(partitura.schemaVersion === PARTITURA_SCHEMA_VERSION, issues, "schema.unsupported", "schemaVersion", `schemaVersion must be ${PARTITURA_SCHEMA_VERSION}.`);
   checkId(partitura.projectId, "projectId", issues);
-  check(isSemver(partitura.requiredCoreVersion), issues, {
-    code: "coreVersion.invalid",
-    path: "requiredCoreVersion",
-    message: "requiredCoreVersion must use MAJOR.MINOR.PATCH format."
-  });
-  check(!isVersionGreater(partitura.requiredCoreVersion, SUPPORTED_CORE_VERSION), issues, {
-    code: "coreVersion.unsupported",
-    path: "requiredCoreVersion",
-    message: `requiredCoreVersion ${partitura.requiredCoreVersion} is newer than supported core ${SUPPORTED_CORE_VERSION}.`
+  check(isSemver(partitura.requiredCoreVersion), issues, "coreVersion.invalid", "requiredCoreVersion", "requiredCoreVersion must use MAJOR.MINOR.PATCH format.");
+  check(!isVersionGreater(partitura.requiredCoreVersion, SUPPORTED_CORE_VERSION), issues, "coreVersion.unsupported", "requiredCoreVersion", `requiredCoreVersion ${partitura.requiredCoreVersion} is newer than supported core ${SUPPORTED_CORE_VERSION}.`);
+
+  const outputIds = new Set<string>();
+  const outputNumbers = new Set<number>();
+  const outputsByNumber = new Map<number, Partitura["outputs"][number]>();
+  partitura.outputs.forEach((output, index) => {
+    const path = `outputs[${index}]`;
+    checkUniqueId(output.id, outputIds, `${path}.id`, issues);
+    check(LOGICAL_OUTPUTS.includes(output.output), issues, "output.invalid", `${path}.output`, "output must be one of 1, 2 or 3.");
+    check(!outputNumbers.has(output.output), issues, "output.duplicate", `${path}.output`, `Only one output may own ${output.output}.`);
+    outputNumbers.add(output.output);
+    outputsByNumber.set(output.output, output);
+    check(Number.isInteger(output.pixelCount) && output.pixelCount >= 0, issues, "output.pixelCount.invalid", `${path}.pixelCount`, "output.pixelCount must be a non-negative integer.");
   });
 
-  const chainIds = new Set<string>();
-  const segmentIds = new Set<string>();
+  check(partitura.pixelMap.length > 0, issues, "pixelMap.empty", "pixelMap", "pixelMap must include physical pixels.");
+  const pixelIds = new Set<string>();
+  const addresses = new Set<string>();
+  const countByOutput = new Map<number, number>();
+  partitura.pixelMap.forEach((pixel, index) => {
+    const path = `pixelMap[${index}]`;
+    checkUniqueId(pixel.id, pixelIds, `${path}.id`, issues);
+    const output = outputsByNumber.get(pixel.output);
+    check(Boolean(output), issues, "pixelMap.output.missing", `${path}.output`, `Pixel ${pixel.id} references an undeclared output.`);
+    check(Number.isInteger(pixel.serialIndex) && pixel.serialIndex >= 0, issues, "pixelMap.serialIndex.invalid", `${path}.serialIndex`, "serialIndex must be a non-negative integer.");
+    check(typeof pixel.stringId === "string" && pixel.stringId.length > 0, issues, "pixelMap.string.missing", `${path}.stringId`, "stringId is required.");
+    check(Number.isFinite(pixel.routeOffsetCm) && pixel.routeOffsetCm >= 0, issues, "pixelMap.offset.invalid", `${path}.routeOffsetCm`, "routeOffsetCm must be non-negative.");
+    check(Number.isFinite(pixel.x) && Number.isFinite(pixel.y), issues, "pixelMap.coordinate.invalid", path, "Pixel coordinates must be finite.");
+    check(Number.isFinite(pixel.tangentDeg), issues, "pixelMap.tangent.invalid", `${path}.tangentDeg`, "tangentDeg must be finite.");
+    const address = `${pixel.output}:${pixel.serialIndex}`;
+    check(!addresses.has(address), issues, "pixelMap.address.duplicate", path, `Pixel address ${address} is duplicated.`);
+    addresses.add(address);
+    countByOutput.set(pixel.output, (countByOutput.get(pixel.output) ?? 0) + 1);
+    if (output) check(pixel.serialIndex < output.pixelCount, issues, "pixelMap.index.out_of_output", `${path}.serialIndex`, `Pixel ${pixel.id} is outside output ${pixel.output}.`);
+  });
+  partitura.outputs.forEach((output, index) => check((countByOutput.get(output.output) ?? 0) === output.pixelCount, issues, "output.pixelCount.mismatch", `outputs[${index}].pixelCount`, `Output ${output.output} count does not match pixelMap.`));
+
   const zoneIds = new Set<string>();
-  const sceneIds = new Set<string>();
-  const outputIds = new Set<number>();
-  const chainById = new Map<string, Partitura["chains"][number]>();
-
-  check(partitura.chains.length > 0, issues, {
-    code: "chains.empty",
-    path: "chains",
-    message: "At least one chain is required."
-  });
-
-  partitura.chains.forEach((chain, index) => {
-    const path = `chains[${index}]`;
-    checkUniqueId(chain.id, chainIds, `${path}.id`, issues);
-    check(LOGICAL_OUTPUTS.includes(chain.output), issues, {
-      code: "chain.output.invalid",
-      path: `${path}.output`,
-      message: "chain.output must be one of 1, 2 or 3."
-    });
-    check(!outputIds.has(chain.output), issues, {
-      code: "chain.output.duplicate",
-      path: `${path}.output`,
-      message: `Only one chain can own logical output ${chain.output}.`
-    });
-    outputIds.add(chain.output);
-    chainById.set(chain.id, chain);
-    check(Number.isInteger(chain.pixelCount) && chain.pixelCount >= 0, issues, {
-      code: "chain.pixelCount.invalid",
-      path: `${path}.pixelCount`,
-      message: "chain.pixelCount must be a non-negative integer."
-    });
-    check(["forward", "reverse"].includes(chain.direction), issues, {
-      code: "chain.direction.invalid",
-      path: `${path}.direction`,
-      message: "chain.direction must be forward or reverse."
-    });
-  });
-
-  check(partitura.segments.length > 0, issues, {
-    code: "segments.empty",
-    path: "segments",
-    message: "At least one segment is required."
-  });
-
-  partitura.segments.forEach((segment, index) => {
-    const path = `segments[${index}]`;
-    checkUniqueId(segment.id, segmentIds, `${path}.id`, issues);
-    check(chainIds.has(segment.chainId), issues, {
-      code: "segment.chain.missing",
-      path: `${path}.chainId`,
-      message: `Segment ${segment.id} references missing chain ${segment.chainId}.`
-    });
-    check(Number.isInteger(segment.start) && segment.start >= 0, issues, {
-      code: "segment.start.invalid",
-      path: `${path}.start`,
-      message: "segment.start must be a non-negative integer."
-    });
-    check(Number.isInteger(segment.length) && segment.length > 0, issues, {
-      code: "segment.length.invalid",
-      path: `${path}.length`,
-      message: "segment.length must be a positive integer."
-    });
-
-    const chain = partitura.chains.find((entry) => entry.id === segment.chainId);
-    if (chain) {
-      check(segment.start + segment.length <= chain.pixelCount, issues, {
-        code: "segment.range.out_of_chain",
-        path,
-        message: `Segment ${segment.id} exceeds chain ${chain.id} pixelCount.`
-      });
-    }
-  });
-
-  validateOverlappingSegments(partitura, issues);
-  validatePixelMap(partitura, chainById, segmentIds, issues);
-
-  check(partitura.zones.length > 0, issues, {
-    code: "zones.empty",
-    path: "zones",
-    message: "At least one zone is required."
-  });
-
   partitura.zones.forEach((zone, index) => {
     const path = `zones[${index}]`;
     checkUniqueId(zone.id, zoneIds, `${path}.id`, issues);
-    check((zone.segments?.length ?? 0) + (zone.zones?.length ?? 0) > 0, issues, {
-      code: "zone.empty",
-      path,
-      message: `Zone ${zone.id} must include at least one segment or child zone.`
-    });
-    for (const segmentId of zone.segments ?? []) {
-      check(segmentIds.has(segmentId), issues, {
-        code: "zone.segment.missing",
-        path: `${path}.segments`,
-        message: `Zone ${zone.id} references missing segment ${segmentId}.`
-      });
-    }
+    warn(zone.pixelIds.length > 0, issues, "zone.empty", path, `Zone ${zone.id} selects no pixels.`);
+    zone.pixelIds.forEach((pixelId) => check(pixelIds.has(pixelId), issues, "zone.pixel.missing", `${path}.pixelIds`, `Zone ${zone.id} references missing pixel ${pixelId}.`));
   });
 
-  partitura.zones.forEach((zone, index) => {
-    const path = `zones[${index}]`;
-    for (const childZoneId of zone.zones ?? []) {
-      check(zoneIds.has(childZoneId), issues, {
-        code: "zone.child.missing",
-        path: `${path}.zones`,
-        message: `Zone ${zone.id} references missing child zone ${childZoneId}.`
-      });
-    }
+  const groupIds = new Set<string>();
+  partitura.groups.forEach((group, index) => {
+    const path = `groups[${index}]`;
+    checkUniqueId(group.id, groupIds, `${path}.id`, issues);
+    check(group.members.length > 0, issues, "group.empty", path, `Group ${group.id} has no members.`);
   });
-  validateZoneCycles(partitura, issues);
+  partitura.groups.forEach((group, index) => group.members.forEach((member) => {
+    const exists = member.type === "zone" ? zoneIds.has(member.id) : groupIds.has(member.id);
+    check(exists, issues, "group.member.missing", `groups[${index}].members`, `Group ${group.id} references missing ${member.type} ${member.id}.`);
+  }));
+  validateGroupCycles(partitura, issues);
 
-  check(partitura.scenes.length > 0, issues, {
-    code: "scenes.empty",
-    path: "scenes",
-    message: "At least one scene is required."
-  });
-
+  const sceneIds = new Set<string>();
   partitura.scenes.forEach((scene, sceneIndex) => {
     const scenePath = `scenes[${sceneIndex}]`;
     checkUniqueId(scene.id, sceneIds, `${scenePath}.id`, issues);
-    check(Number.isInteger(scene.durationMs) && scene.durationMs > 0, issues, {
-      code: "scene.duration.invalid",
-      path: `${scenePath}.durationMs`,
-      message: "scene.durationMs must be a positive integer."
-    });
-
+    check(Number.isInteger(scene.durationMs) && scene.durationMs > 0, issues, "scene.duration.invalid", `${scenePath}.durationMs`, "scene.durationMs must be a positive integer.");
     const trackIds = new Set<string>();
     scene.tracks.forEach((track, trackIndex) => {
       const trackPath = `${scenePath}.tracks[${trackIndex}]`;
       checkUniqueId(track.id, trackIds, `${trackPath}.id`, issues);
-      validateTarget(track.target, trackPath, { chainIds, segmentIds, zoneIds }, issues);
-
+      validateTarget(track.target, trackPath, zoneIds, groupIds, issues);
       const clipIds = new Set<string>();
       track.clips.forEach((clip, clipIndex) => {
         const clipPath = `${trackPath}.clips[${clipIndex}]`;
         checkUniqueId(clip.id, clipIds, `${clipPath}.id`, issues);
-        check(isSupportedEffect(clip.effect), issues, {
-          code: "clip.effect.unsupported",
-          path: `${clipPath}.effect`,
-          message: `Effect ${clip.effect} is not supported by this core.`
-        });
-        check(Number.isInteger(clip.startMs) && clip.startMs >= 0, issues, {
-          code: "clip.start.invalid",
-          path: `${clipPath}.startMs`,
-          message: "clip.startMs must be a non-negative integer."
-        });
-        check(Number.isInteger(clip.durationMs) && clip.durationMs > 0, issues, {
-          code: "clip.duration.invalid",
-          path: `${clipPath}.durationMs`,
-          message: "clip.durationMs must be a positive integer."
-        });
-        check(clip.startMs + clip.durationMs <= scene.durationMs || scene.loop, issues, {
-          code: "clip.range.out_of_scene",
-          path: clipPath,
-          message: `Clip ${clip.id} exceeds scene ${scene.id} duration.`
-        });
-        if (clip.target) {
-          validateTarget(clip.target, clipPath, { chainIds, segmentIds, zoneIds }, issues);
-        }
+        check(isSupportedEffect(clip.effect), issues, "clip.effect.unsupported", `${clipPath}.effect`, `Effect ${clip.effect} is not supported by this core.`);
+        check(["serial", "local", "global"].includes(clip.coordinateSpace), issues, "clip.coordinateSpace.invalid", `${clipPath}.coordinateSpace`, "coordinateSpace must be serial, local, or global.");
+        check(Number.isInteger(clip.startMs) && clip.startMs >= 0, issues, "clip.start.invalid", `${clipPath}.startMs`, "clip.startMs must be non-negative.");
+        check(Number.isInteger(clip.durationMs) && clip.durationMs > 0, issues, "clip.duration.invalid", `${clipPath}.durationMs`, "clip.durationMs must be positive.");
+        check(clip.startMs + clip.durationMs <= scene.durationMs || scene.loop, issues, "clip.range.out_of_scene", clipPath, `Clip ${clip.id} exceeds scene ${scene.id}.`);
+        if (clip.target) validateTarget(clip.target, clipPath, zoneIds, groupIds, issues);
         validateEffectParams(clip.effect, clip.params, clipPath, issues);
       });
     });
   });
-
-  check(sceneIds.has(partitura.defaultScene), issues, {
-    code: "scene.default.missing",
-    path: "defaultScene",
-    message: `defaultScene ${partitura.defaultScene} does not exist.`
-  });
-
-  const errors = issues.filter((issue) => issue.severity === "error");
-  const warnings = issues.filter((issue) => issue.severity === "warning");
-  return { ok: errors.length === 0, errors, warnings };
+  check(sceneIds.has(partitura.defaultScene), issues, "scene.default.missing", "defaultScene", `defaultScene ${partitura.defaultScene} does not exist.`);
+  return { ok: !issues.some((issue) => issue.severity === "error"), errors: issues.filter((issue) => issue.severity === "error"), warnings: issues.filter((issue) => issue.severity === "warning") };
 }
 
-function validatePixelMap(
-  partitura: Partitura,
-  chainById: Map<string, Partitura["chains"][number]>,
-  segmentIds: Set<string>,
-  issues: ValidationIssue[]
-) {
-  check((partitura.pixelMap?.length ?? 0) > 0, issues, {
-    code: "pixelMap.empty",
-    path: "pixelMap",
-    message: "pixelMap is required and must include spatial coordinates for rendered pixels."
-  });
-
-  const addresses = new Set<string>();
-  const pixelIds = new Set<string>();
-  partitura.pixelMap?.forEach((pixel, index) => {
-    const path = `pixelMap[${index}]`;
-    checkUniqueId(pixel.id, pixelIds, `${path}.id`, issues);
-    const chain = chainById.get(pixel.chainId);
-    check(Boolean(chain), issues, {
-      code: "pixelMap.chain.missing",
-      path: `${path}.chainId`,
-      message: `Pixel ${pixel.id} references missing chain ${pixel.chainId}.`
-    });
-    if (chain) {
-      check(pixel.output === chain.output, issues, {
-        code: "pixelMap.output.mismatch",
-        path: `${path}.output`,
-        message: `Pixel ${pixel.id} output must match chain ${chain.id}.`
-      });
-      check(Number.isInteger(pixel.index) && pixel.index >= 0 && pixel.index < chain.pixelCount, issues, {
-        code: "pixelMap.index.out_of_chain",
-        path: `${path}.index`,
-        message: `Pixel ${pixel.id} index is outside chain ${chain.id}.`
-      });
-    }
-    if (pixel.segmentId) {
-      check(segmentIds.has(pixel.segmentId), issues, {
-        code: "pixelMap.segment.missing",
-        path: `${path}.segmentId`,
-        message: `Pixel ${pixel.id} references missing segment ${pixel.segmentId}.`
-      });
-    }
-    check(Number.isFinite(pixel.x) && Number.isFinite(pixel.y), issues, {
-      code: "pixelMap.coordinate.invalid",
-      path,
-      message: `Pixel ${pixel.id} must include finite x and y coordinates.`
-    });
-    check(Number.isInteger(pixel.order) && pixel.order >= 0, issues, {
-      code: "pixelMap.order.invalid",
-      path: `${path}.order`,
-      message: `Pixel ${pixel.id} order must be a non-negative integer.`
-    });
-    const address = `${pixel.chainId}:${pixel.index}`;
-    check(!addresses.has(address), issues, {
-      code: "pixelMap.address.duplicate",
-      path,
-      message: `Pixel address ${address} is duplicated in pixelMap.`
-    });
-    addresses.add(address);
-  });
-}
-
-function validateTarget(
-  target: PartituraTarget,
-  path: string,
-  refs: { chainIds: Set<string>; segmentIds: Set<string>; zoneIds: Set<string> },
-  issues: ValidationIssue[]
-) {
+function validateTarget(target: PartituraTarget, path: string, zoneIds: Set<string>, groupIds: Set<string>, issues: ValidationIssue[]) {
   if (target.type === "installation") return;
-  const exists =
-    target.type === "chain"
-      ? refs.chainIds.has(target.id)
-      : target.type === "segment"
-        ? refs.segmentIds.has(target.id)
-        : refs.zoneIds.has(target.id);
-  check(exists, issues, {
-    code: "target.missing",
-    path: `${path}.target`,
-    message: `Target ${target.type}:${target.id} does not exist.`
-  });
+  check(target.type === "zone" ? zoneIds.has(target.id) : groupIds.has(target.id), issues, "target.missing", `${path}.target`, `Target ${target.type}:${target.id} does not exist.`);
+}
+
+function validateGroupCycles(partitura: Partitura, issues: ValidationIssue[]) {
+  const children = new Map(partitura.groups.map((group) => [group.id, group.members.filter((member) => member.type === "group").map((member) => member.id)]));
+  const visit = (id: string, trail: string[]) => {
+    if (trail.includes(id)) { issues.push({ severity: "error", code: "group.cycle", path: "groups", message: `Group hierarchy contains a cycle: ${[...trail, id].join(" -> ")}.` }); return; }
+    (children.get(id) ?? []).forEach((child) => visit(child, [...trail, id]));
+  };
+  partitura.groups.forEach((group) => visit(group.id, []));
 }
 
 function validateEffectParams(effect: string, params: Record<string, unknown>, path: string, issues: ValidationIssue[]) {
   if (!isSupportedEffect(effect)) return;
-  const definition = effectCatalog[effect];
-
-  for (const [name, parameter] of Object.entries(definition.parameters)) {
+  for (const [name, parameter] of Object.entries(effectCatalog[effect].parameters)) {
     const value = params[name];
-    check(value !== undefined || !parameter.required, issues, {
-      code: "clip.params.required",
-      path: `${path}.params.${name}`,
-      message: `Effect ${effect} requires parameter ${name}.`
-    });
+    check(value !== undefined || !parameter.required, issues, "clip.params.required", `${path}.params.${name}`, `Effect ${effect} requires parameter ${name}.`);
     if (value === undefined) continue;
-
-    if (parameter.type === "color") {
-      check(typeof value === "string" && colorPattern.test(value), issues, {
-        code: "clip.params.color",
-        path: `${path}.params.${name}`,
-        message: `Parameter ${name} must be a #RRGGBB color.`
-      });
-    }
-    if (parameter.type === "number" || parameter.type === "integer" || parameter.type === "percent") {
-      check(typeof value === "number" && Number.isFinite(value), issues, {
-        code: "clip.params.number",
-        path: `${path}.params.${name}`,
-        message: `Parameter ${name} must be a finite number.`
-      });
+    if (parameter.type === "color") check(typeof value === "string" && colorPattern.test(value), issues, "clip.params.color", `${path}.params.${name}`, `Parameter ${name} must be a #RRGGBB color.`);
+    if (["number", "integer", "percent"].includes(parameter.type)) {
+      check(typeof value === "number" && Number.isFinite(value), issues, "clip.params.number", `${path}.params.${name}`, `Parameter ${name} must be a finite number.`);
       if (typeof value === "number") {
-        if (parameter.type === "integer") {
-          check(Number.isInteger(value), issues, {
-            code: "clip.params.integer",
-            path: `${path}.params.${name}`,
-            message: `Parameter ${name} must be an integer.`
-          });
-        }
-        check(parameter.min === undefined || value >= parameter.min, issues, {
-          code: "clip.params.min",
-          path: `${path}.params.${name}`,
-          message: `Parameter ${name} must be >= ${parameter.min}.`
-        });
-        check(parameter.max === undefined || value <= parameter.max, issues, {
-          code: "clip.params.max",
-          path: `${path}.params.${name}`,
-          message: `Parameter ${name} must be <= ${parameter.max}.`
-        });
+        if (parameter.type === "integer") check(Number.isInteger(value), issues, "clip.params.integer", `${path}.params.${name}`, `Parameter ${name} must be an integer.`);
+        if (parameter.min !== undefined) check(value >= parameter.min, issues, "clip.params.min", `${path}.params.${name}`, `Parameter ${name} must be >= ${parameter.min}.`);
+        if (parameter.max !== undefined) check(value <= parameter.max, issues, "clip.params.max", `${path}.params.${name}`, `Parameter ${name} must be <= ${parameter.max}.`);
       }
     }
-    if (parameter.type === "boolean") {
-      check(typeof value === "boolean", issues, {
-        code: "clip.params.boolean",
-        path: `${path}.params.${name}`,
-        message: `Parameter ${name} must be a boolean.`
-      });
-    }
-    if (parameter.type === "string") {
-      check(typeof value === "string", issues, {
-        code: "clip.params.string",
-        path: `${path}.params.${name}`,
-        message: `Parameter ${name} must be a string.`
-      });
-    }
-    if (parameter.type === "select") {
-      check(typeof value === "string" && Boolean(parameter.options?.some((option) => option.value === value)), issues, {
-        code: "clip.params.select",
-        path: `${path}.params.${name}`,
-        message: `Parameter ${name} must be a supported option.`
-      });
-    }
+    if (parameter.type === "boolean") check(typeof value === "boolean", issues, "clip.params.boolean", `${path}.params.${name}`, `Parameter ${name} must be boolean.`);
+    if (parameter.type === "string") check(typeof value === "string", issues, "clip.params.string", `${path}.params.${name}`, `Parameter ${name} must be a string.`);
+    if (parameter.type === "select") check(typeof value === "string" && Boolean(parameter.options?.some((option) => option.value === value)), issues, "clip.params.select", `${path}.params.${name}`, `Parameter ${name} must be supported.`);
   }
 }
 
-function validateOverlappingSegments(partitura: Partitura, issues: ValidationIssue[]) {
-  for (const chain of partitura.chains) {
-    const segments = partitura.segments
-      .filter((segment) => segment.chainId === chain.id)
-      .sort((left, right) => left.start - right.start);
-    for (let index = 1; index < segments.length; index += 1) {
-      const previous = segments[index - 1];
-      const current = segments[index];
-      check(previous.start + previous.length <= current.start, issues, {
-        code: "segment.range.overlap",
-        path: "segments",
-        message: `Segments ${previous.id} and ${current.id} overlap on chain ${chain.id}.`
-      });
-    }
-  }
-}
-
-function validateZoneCycles(partitura: Partitura, issues: ValidationIssue[]) {
-  const childrenByZone = new Map(partitura.zones.map((zone) => [zone.id, zone.zones ?? []]));
-
-  function visit(zoneId: string, trail: string[]) {
-    if (trail.includes(zoneId)) {
-      issues.push({
-        severity: "error",
-        code: "zone.cycle",
-        path: "zones",
-        message: `Zone hierarchy contains a cycle: ${[...trail, zoneId].join(" -> ")}.`
-      });
-      return;
-    }
-    for (const child of childrenByZone.get(zoneId) ?? []) {
-      visit(child, [...trail, zoneId]);
-    }
-  }
-
-  for (const zone of partitura.zones) {
-    visit(zone.id, []);
-  }
-}
-
-function checkUniqueId(id: string, seen: Set<string>, path: string, issues: ValidationIssue[]) {
-  checkId(id, path, issues);
-  check(!seen.has(id), issues, {
-    code: "id.duplicate",
-    path,
-    message: `Duplicate id ${id}.`
-  });
-  seen.add(id);
-}
-
-function checkId(id: string, path: string, issues: ValidationIssue[]) {
-  check(typeof id === "string" && idPattern.test(id), issues, {
-    code: "id.invalid",
-    path,
-    message: "Ids must start with a letter and contain only letters, numbers, underscores or hyphens."
-  });
-}
-
-function check(condition: boolean, issues: ValidationIssue[], issue: Omit<ValidationIssue, "severity">) {
-  if (!condition) {
-    issues.push({ severity: "error", ...issue });
-  }
-}
-
-function isSemver(value: string) {
-  return /^\d+\.\d+\.\d+$/.test(value);
-}
-
-function isVersionGreater(left: string, right: string) {
-  if (!isSemver(left) || !isSemver(right)) return false;
-  const leftParts = left.split(".").map(Number);
-  const rightParts = right.split(".").map(Number);
-  for (let index = 0; index < 3; index += 1) {
-    if (leftParts[index] > rightParts[index]) return true;
-    if (leftParts[index] < rightParts[index]) return false;
-  }
-  return false;
-}
+function checkUniqueId(id: string, seen: Set<string>, path: string, issues: ValidationIssue[]) { checkId(id, path, issues); check(!seen.has(id), issues, "id.duplicate", path, `Duplicate id ${id}.`); seen.add(id); }
+function checkId(id: string, path: string, issues: ValidationIssue[]) { check(typeof id === "string" && idPattern.test(id), issues, "id.invalid", path, "Ids must start with a letter and contain only letters, numbers, underscores or hyphens."); }
+function check(condition: boolean, issues: ValidationIssue[], code: string, path: string, message: string) { if (!condition) issues.push({ severity: "error", code, path, message }); }
+function warn(condition: boolean, issues: ValidationIssue[], code: string, path: string, message: string) { if (!condition) issues.push({ severity: "warning", code, path, message }); }
+function isSemver(value: string) { return /^\d+\.\d+\.\d+$/.test(value); }
+function isVersionGreater(left: string, right: string) { if (!isSemver(left) || !isSemver(right)) return false; return left.split(".").map(Number).some((part, index, all) => part !== right.split(".").map(Number)[index] && all.slice(0, index).every((previous, previousIndex) => previous === right.split(".").map(Number)[previousIndex]) && part > right.split(".").map(Number)[index]); }

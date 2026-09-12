@@ -39,6 +39,13 @@ export const menuCatalog: MenuSection[] = [
     label: "Lighting",
     items: [
       {
+        id: "projects",
+        label: "Projects",
+        href: "/projects",
+        description: "Physical signs and installations with assets, partituras and controllers.",
+        required_permission: "lighting:projects:manage"
+      },
+      {
         id: "partitura-generator",
         label: "Partitura Generator",
         href: "/partituras/generator",

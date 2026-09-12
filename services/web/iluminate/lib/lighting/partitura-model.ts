@@ -1,26 +1,12 @@
-export type SegmentForm = {
-  id: string;
-  name: string;
-  output: number;
-  start: number;
-  length: number;
-  reverse: boolean;
-  x: number;
-  y: number;
-  stepX: number;
-  stepY: number;
-};
-
-export type ZoneForm = {
-  id: string;
-  name: string;
-  segments: string[];
-};
+export type DesignerPointNodeType = "corner" | "straight" | "smooth" | "symmetric";
 
 export type DesignerPoint = {
   x: number;
   y: number;
   joint?: boolean;
+  nodeType?: DesignerPointNodeType;
+  handleIn?: { x: number; y: number };
+  handleOut?: { x: number; y: number };
 };
 
 export type DesignerZoneForm = {
@@ -32,9 +18,16 @@ export type DesignerZoneForm = {
   width: number;
   height: number;
   points?: DesignerPoint[];
+  pathMode?: "straight" | "bezier";
   visible: boolean;
   locked: boolean;
   opacity: number;
+};
+
+export type DesignerGroupForm = {
+  id: string;
+  name: string;
+  members: Array<{ type: "zone" | "group"; id: string }>;
 };
 
 export type DesignerRouteKind = "led_string" | "data_cable";
@@ -43,8 +36,6 @@ export type DesignerRouteForm = {
   id: string;
   name: string;
   kind: DesignerRouteKind;
-  output: number;
-  zoneId: string;
   points: DesignerPoint[];
 };
 
@@ -65,9 +56,23 @@ export type DesignerLayerSettings = {
 };
 
 export type DesignerLayersForm = {
+  artwork: DesignerLayerSettings;
   reference: DesignerLayerSettings;
   zones: DesignerLayerSettings;
   strings: DesignerLayerSettings;
+};
+
+export type DesignerArtworkForm = {
+  id: string;
+  assetId: string;
+  name: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  visible: boolean;
+  locked: boolean;
+  opacity: number;
 };
 
 export type DesignerBuildAreaForm = {
@@ -79,6 +84,7 @@ export type DesignerBuildAreaForm = {
   width: number;
   height: number;
   points?: DesignerPoint[];
+  pathMode?: "straight" | "bezier";
   visible: boolean;
   locked: boolean;
   opacity: number;
@@ -95,9 +101,11 @@ export type DesignerForm = {
   rulerVisible: boolean;
   sourceSvg: string | null;
   layers: DesignerLayersForm;
+  artwork: DesignerArtworkForm[];
   buildAreas: DesignerBuildAreaForm[];
   controller: DesignerControllerForm;
   zones: DesignerZoneForm[];
+  groups: DesignerGroupForm[];
   routes: DesignerRouteForm[];
 };
 
@@ -107,6 +115,7 @@ export type ClipForm = {
   id: string;
   name: string;
   target: string;
+  coordinateSpace?: "serial" | "local" | "global";
   effect: string;
   blend: string;
   startMs: number;
@@ -125,16 +134,19 @@ export type SceneForm = {
 
 export type PartituraDocument = {
   projectId: string;
-  chain1Pixels: number;
-  chain2Pixels: number;
-  chain3Pixels: number;
-  segments: SegmentForm[];
-  zones: ZoneForm[];
   scenes: SceneForm[];
   activeSceneId: string;
   previewTimeMs: number;
   accentColor: string;
   designer?: DesignerForm;
+  compiledDesignerSignature?: string;
+  compiledLayout?: {
+    outputs: Array<{ id: string; name: string; output: 1 | 2 | 3; pixelCount: number }>;
+    pixelMap: Array<{ id: string; output: 1 | 2 | 3; serialIndex: number; stringId: string; routeOffsetCm: number; x: number; y: number; tangentDeg: number }>;
+    zones: Array<{ id: string; name: string; pixelIds: string[] }>;
+    groups: Array<{ id: string; name: string; members: Array<{ type: "zone" | "group"; id: string }> }>;
+    validation: { errors: string[]; warnings: string[] };
+  };
 };
 
 export type PersistedPartitura = {
@@ -155,30 +167,6 @@ export function createDefaultPartituraDocument(projectId = "web_test_partitura")
   const designer = createDefaultDesigner();
   return {
     projectId,
-    chain1Pixels: 100,
-    chain2Pixels: 40,
-    chain3Pixels: 100,
-    segments: [
-      { id: "fondo_row_1", name: "Fondo row 1", output: 1, start: 0, length: 25, reverse: false, x: 0, y: 0, stepX: 1, stepY: 0 },
-      { id: "fondo_row_2", name: "Fondo row 2", output: 1, start: 25, length: 25, reverse: true, x: 0, y: 1, stepX: 1, stepY: 0 },
-      { id: "fondo_row_3", name: "Fondo row 3", output: 1, start: 50, length: 25, reverse: false, x: 0, y: 2, stepX: 1, stepY: 0 },
-      { id: "fondo_row_4", name: "Fondo row 4", output: 1, start: 75, length: 25, reverse: true, x: 0, y: 3, stepX: 1, stepY: 0 },
-      { id: "estrella_ring", name: "Estrella", output: 2, start: 0, length: 40, reverse: false, x: 0, y: 4, stepX: 1, stepY: 0 },
-      { id: "letra_1_segment", name: "Letra 1", output: 3, start: 0, length: 25, reverse: false, x: 0, y: 6, stepX: 1, stepY: 0 },
-      { id: "letra_2_segment", name: "Letra 2", output: 3, start: 25, length: 25, reverse: false, x: 28, y: 6, stepX: 1, stepY: 0 },
-      { id: "letra_3_segment", name: "Letra 3", output: 3, start: 50, length: 25, reverse: false, x: 56, y: 6, stepX: 1, stepY: 0 },
-      { id: "letra_4_segment", name: "Letra 4", output: 3, start: 75, length: 25, reverse: false, x: 84, y: 6, stepX: 1, stepY: 0 }
-    ],
-    zones: [
-      { id: "fondo", name: "Fondo", segments: ["fondo_row_1", "fondo_row_2", "fondo_row_3", "fondo_row_4"] },
-      { id: "estrella", name: "Estrella", segments: ["estrella_ring"] },
-      { id: "letras", name: "Letras", segments: ["letra_1_segment", "letra_2_segment", "letra_3_segment", "letra_4_segment"] },
-      { id: "letra_1", name: "Letra 1", segments: ["letra_1_segment"] },
-      { id: "letra_2", name: "Letra 2", segments: ["letra_2_segment"] },
-      { id: "letra_3", name: "Letra 3", segments: ["letra_3_segment"] },
-      { id: "letra_4", name: "Letra 4", segments: ["letra_4_segment"] },
-      { id: "rotulo_completo", name: "Rotulo completo", segments: ["fondo_row_1", "fondo_row_2", "fondo_row_3", "fondo_row_4", "estrella_ring", "letra_1_segment", "letra_2_segment", "letra_3_segment", "letra_4_segment"] }
-    ],
     scenes: [
       {
         id: "normal",
@@ -242,16 +230,16 @@ export function createDefaultPartituraDocument(projectId = "web_test_partitura")
         loop: true,
         durationMs: 10000,
         clips: [
-          { id: "cal_red", name: "Red", target: "rotulo_completo", effect: "solid", blend: "replace", startMs: 0, durationMs: 1000, layer: 0, params: { color: "#FF0000" } },
-          { id: "cal_green", name: "Green", target: "rotulo_completo", effect: "solid", blend: "replace", startMs: 1000, durationMs: 1000, layer: 0, params: { color: "#00FF00" } },
-          { id: "cal_blue", name: "Blue", target: "rotulo_completo", effect: "solid", blend: "replace", startMs: 2000, durationMs: 1000, layer: 0, params: { color: "#0000FF" } },
-          { id: "cal_white", name: "White", target: "rotulo_completo", effect: "solid", blend: "replace", startMs: 3000, durationMs: 1000, layer: 0, params: { color: "#FFFFFF" } },
-          { id: "cal_gray_25", name: "Gray 25%", target: "rotulo_completo", effect: "solid", blend: "replace", startMs: 4000, durationMs: 1000, layer: 0, params: { color: "#404040" } },
-          { id: "cal_gray_50", name: "Gray 50%", target: "rotulo_completo", effect: "solid", blend: "replace", startMs: 5000, durationMs: 1000, layer: 0, params: { color: "#808080" } },
-          { id: "cal_yellow", name: "Yellow", target: "rotulo_completo", effect: "solid", blend: "replace", startMs: 6000, durationMs: 1000, layer: 0, params: { color: "#FFFF00" } },
-          { id: "cal_cyan", name: "Cyan", target: "rotulo_completo", effect: "solid", blend: "replace", startMs: 7000, durationMs: 1000, layer: 0, params: { color: "#00FFFF" } },
-          { id: "cal_magenta", name: "Magenta", target: "rotulo_completo", effect: "solid", blend: "replace", startMs: 8000, durationMs: 1000, layer: 0, params: { color: "#FF00FF" } },
-          { id: "cal_off", name: "Off", target: "rotulo_completo", effect: "off", blend: "replace", startMs: 9000, durationMs: 1000, layer: 0, params: {} }
+          { id: "cal_red", name: "Red", target: "full_sign", effect: "solid", blend: "replace", startMs: 0, durationMs: 1000, layer: 0, params: { color: "#FF0000" } },
+          { id: "cal_green", name: "Green", target: "full_sign", effect: "solid", blend: "replace", startMs: 1000, durationMs: 1000, layer: 0, params: { color: "#00FF00" } },
+          { id: "cal_blue", name: "Blue", target: "full_sign", effect: "solid", blend: "replace", startMs: 2000, durationMs: 1000, layer: 0, params: { color: "#0000FF" } },
+          { id: "cal_white", name: "White", target: "full_sign", effect: "solid", blend: "replace", startMs: 3000, durationMs: 1000, layer: 0, params: { color: "#FFFFFF" } },
+          { id: "cal_gray_25", name: "Gray 25%", target: "full_sign", effect: "solid", blend: "replace", startMs: 4000, durationMs: 1000, layer: 0, params: { color: "#404040" } },
+          { id: "cal_gray_50", name: "Gray 50%", target: "full_sign", effect: "solid", blend: "replace", startMs: 5000, durationMs: 1000, layer: 0, params: { color: "#808080" } },
+          { id: "cal_yellow", name: "Yellow", target: "full_sign", effect: "solid", blend: "replace", startMs: 6000, durationMs: 1000, layer: 0, params: { color: "#FFFF00" } },
+          { id: "cal_cyan", name: "Cyan", target: "full_sign", effect: "solid", blend: "replace", startMs: 7000, durationMs: 1000, layer: 0, params: { color: "#00FFFF" } },
+          { id: "cal_magenta", name: "Magenta", target: "full_sign", effect: "solid", blend: "replace", startMs: 8000, durationMs: 1000, layer: 0, params: { color: "#FF00FF" } },
+          { id: "cal_off", name: "Off", target: "full_sign", effect: "off", blend: "replace", startMs: 9000, durationMs: 1000, layer: 0, params: {} }
         ]
       }
     ],
@@ -267,24 +255,30 @@ export function clonePartituraDocument(document: PartituraDocument) {
 }
 
 export function normalizeDefaultSignLayout(document: PartituraDocument) {
-  const next = clonePartituraDocument(document);
-  next.designer = normalizeDesigner(next.designer);
-  const segmentsById = new Map(next.segments.map((segment) => [segment.id, segment]));
-  const star = segmentsById.get("estrella_ring") ?? segmentsById.get("estrella_segment");
-  const secondLetter = segmentsById.get("letra_2_segment");
-  const hasLegacyCompressedStar = star && star.x === 8 && star.y === 1 && star.stepX === 0.25;
-  const hasLegacyOverlappedLetters = secondLetter && secondLetter.x === 7 && secondLetter.y === 5;
+  const fallback = createDefaultPartituraDocument(document.projectId);
+  const source = clonePartituraDocument(document);
+  const designer = normalizeDesigner(source.designer);
+  const targetIds = new Set(["full_sign", ...designer.zones.map((zone) => zone.id), ...designer.groups.map((group) => group.id)]);
+  // An empty scene list is a valid authoring state while Animate is being composed.
+  const scenes = Array.isArray(source.scenes) ? source.scenes : fallback.scenes;
 
-  if (!hasLegacyCompressedStar && !hasLegacyOverlappedLetters) return next;
-
-  applySegmentLayout(segmentsById, "estrella_ring", { x: 0, y: 4, stepX: 1, stepY: 0 });
-  applySegmentLayout(segmentsById, "estrella_segment", { x: 0, y: 4, stepX: 1, stepY: 0 });
-  applySegmentLayout(segmentsById, "letra_1_segment", { x: 0, y: 6, stepX: 1, stepY: 0 });
-  applySegmentLayout(segmentsById, "letra_2_segment", { x: 28, y: 6, stepX: 1, stepY: 0 });
-  applySegmentLayout(segmentsById, "letra_3_segment", { x: 56, y: 6, stepX: 1, stepY: 0 });
-  applySegmentLayout(segmentsById, "letra_4_segment", { x: 84, y: 6, stepX: 1, stepY: 0 });
-
-  return next;
+  return {
+    projectId: source.projectId || fallback.projectId,
+    scenes: scenes.map((scene) => ({
+      ...scene,
+      clips: (scene.clips ?? []).map((clip) => ({
+        ...clip,
+        target: targetIds.has(clip.target) ? clip.target : "full_sign",
+        coordinateSpace: clip.coordinateSpace ?? "local"
+      }))
+    })),
+    activeSceneId: scenes.some((scene) => scene.id === source.activeSceneId) ? source.activeSceneId : scenes[0]?.id ?? "normal",
+    previewTimeMs: typeof source.previewTimeMs === "number" ? source.previewTimeMs : 0,
+    accentColor: typeof source.accentColor === "string" ? source.accentColor : "#FFFFFF",
+    designer,
+    compiledDesignerSignature: typeof source.compiledDesignerSignature === "string" ? source.compiledDesignerSignature : undefined,
+    compiledLayout: source.compiledLayout
+  };
 }
 
 export function createDefaultDesigner(): DesignerForm {
@@ -299,6 +293,7 @@ export function createDefaultDesigner(): DesignerForm {
     rulerVisible: true,
     sourceSvg: null,
     layers: defaultDesignerLayers(),
+    artwork: [],
     buildAreas: [
       { id: "build_area_main", name: "Main Sign Face", shape: "rect", x: 40, y: 0, width: 120, height: 40, visible: true, locked: false, opacity: 1 },
       { id: "build_area_logo", name: "Round Logo Reference", shape: "ellipse", x: 108, y: 2, width: 18, height: 18, visible: true, locked: false, opacity: 0.9 },
@@ -325,6 +320,7 @@ export function createDefaultDesigner(): DesignerForm {
       height: 12,
       dataOutputs: 3
     },
+    groups: [],
     zones: [
       {
         id: "fondo",
@@ -359,10 +355,10 @@ export function createDefaultDesigner(): DesignerForm {
       { id: "letra_4", name: "Letra 4", shape: "rect", x: 120, y: 24, width: 22, height: 10, visible: true, locked: false, opacity: 1 }
     ],
     routes: [
-      { id: "route_fondo", name: "Fondo LED string", kind: "led_string", output: 1, zoneId: "fondo", points: [{ x: 44, y: 4, joint: true }, { x: 100, y: 4 }, { x: 100, y: 8 }, { x: 44, y: 8 }, { x: 44, y: 12 }, { x: 100, y: 12 }] },
-      { id: "route_estrella", name: "Estrella LED string", kind: "led_string", output: 2, zoneId: "estrella", points: [{ x: 110, y: 12 }, { x: 124, y: 12 }] },
-      { id: "route_letras", name: "Letras LED string", kind: "led_string", output: 3, zoneId: "letras", points: [{ x: 44, y: 30 }, { x: 64, y: 30 }, { x: 70, y: 30 }, { x: 90, y: 30 }, { x: 96, y: 30 }, { x: 116, y: 30 }, { x: 122, y: 30 }, { x: 142, y: 30 }] },
-      { id: "data_feed_1", name: "Data cable", kind: "data_cable", output: 1, zoneId: "fondo", points: [{ x: 16, y: 8, joint: true }, { x: 32, y: 8 }, { x: 32, y: 4 }, { x: 44, y: 4, joint: true }] }
+      { id: "route_fondo", name: "Fondo LED string", kind: "led_string", points: [{ x: 44, y: 4, joint: true }, { x: 100, y: 4 }, { x: 100, y: 8 }, { x: 44, y: 8 }, { x: 44, y: 12 }, { x: 100, y: 12 }] },
+      { id: "route_estrella", name: "Estrella LED string", kind: "led_string", points: [{ x: 110, y: 12 }, { x: 124, y: 12 }] },
+      { id: "route_letras", name: "Letras LED string", kind: "led_string", points: [{ x: 44, y: 30 }, { x: 64, y: 30 }, { x: 70, y: 30 }, { x: 90, y: 30 }, { x: 96, y: 30 }, { x: 116, y: 30 }, { x: 122, y: 30 }, { x: 142, y: 30 }] },
+      { id: "data_feed_1", name: "Data cable", kind: "data_cable", points: [{ x: 16, y: 8, joint: true }, { x: 32, y: 8 }, { x: 32, y: 4 }, { x: 44, y: 4, joint: true }] }
     ]
   };
 }
@@ -376,15 +372,22 @@ function normalizeDesigner(designer?: DesignerForm): DesignerForm {
     addressablePixelsPerMeter: positiveNumber(designer.addressablePixelsPerMeter ?? designer.ledDensityPerMeter, fallback.addressablePixelsPerMeter),
     ledsPerMeter: positiveNumber(designer.ledsPerMeter ?? designer.addressablePixelsPerMeter ?? designer.ledDensityPerMeter, fallback.ledsPerMeter),
     ledDensityPerMeter: positiveNumber(designer.addressablePixelsPerMeter ?? designer.ledDensityPerMeter, fallback.ledDensityPerMeter),
-    snapCm: positiveNumber(designer.snapCm, fallback.snapCm),
+    snapCm: nonNegativeNumber(designer.snapCm, fallback.snapCm),
     rulerUnit: designer.rulerUnit === "in" ? "in" : "cm",
     rulerVisible: typeof designer.rulerVisible === "boolean" ? designer.rulerVisible : fallback.rulerVisible,
     sourceSvg: typeof designer.sourceSvg === "string" ? designer.sourceSvg : null,
     layers: normalizeDesignerLayers(designer.layers, fallback.layers),
+    artwork: Array.isArray(designer.artwork) ? designer.artwork.map(normalizeDesignerArtwork) : [],
     buildAreas: normalizeBuildAreas(designer, fallback.buildAreas),
     controller: normalizeController(designer.controller, fallback.controller),
     zones: Array.isArray(designer.zones) && designer.zones.length ? designer.zones.map(normalizeDesignerZone) : fallback.zones,
-    routes: Array.isArray(designer.routes) && designer.routes.length ? designer.routes.map((route) => ({ ...route, kind: route.kind === "data_cable" ? "data_cable" : "led_string" })) : fallback.routes
+    groups: Array.isArray(designer.groups) ? designer.groups.filter((group) => typeof group.id === "string" && typeof group.name === "string").map((group) => ({ id: group.id, name: group.name, members: Array.isArray(group.members) ? group.members.filter((member) => member?.type === "zone" || member?.type === "group") : [] })) : [],
+    routes: Array.isArray(designer.routes) && designer.routes.length ? designer.routes.map((route, index): DesignerRouteForm => ({
+      id: typeof route.id === "string" && route.id ? route.id : `route_${index + 1}`,
+      name: typeof route.name === "string" && route.name ? route.name : `Route ${index + 1}`,
+      kind: route.kind === "data_cable" ? "data_cable" : "led_string",
+      points: Array.isArray(route.points) ? route.points.filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y)).map((point) => ({ x: point.x, y: point.y, ...(point.joint ? { joint: true } : {}) })) : []
+    })).filter((route) => route.points.length >= 2) : fallback.routes
   };
 }
 
@@ -397,6 +400,7 @@ function normalizeDesignerZone(zone: DesignerZoneForm): DesignerZoneForm {
     width: positiveNumber(zone.width, 10),
     height: positiveNumber(zone.height, 10),
     points: normalizeDesignerPoints(zone.points),
+    pathMode: zone.pathMode === "bezier" ? "bezier" : "straight",
     visible: typeof zone.visible === "boolean" ? zone.visible : true,
     locked: typeof zone.locked === "boolean" ? zone.locked : false,
     opacity: clampNumber(typeof zone.opacity === "number" ? zone.opacity : 1, 0.05, 1)
@@ -405,6 +409,7 @@ function normalizeDesignerZone(zone: DesignerZoneForm): DesignerZoneForm {
 
 function defaultDesignerLayers(): DesignerLayersForm {
   return {
+    artwork: { visible: true, locked: false, opacity: 1 },
     reference: { visible: true, locked: false, opacity: 0.75 },
     zones: { visible: true, locked: false, opacity: 0.35 },
     strings: { visible: true, locked: false, opacity: 1 }
@@ -414,9 +419,25 @@ function defaultDesignerLayers(): DesignerLayersForm {
 function normalizeDesignerLayers(layers: (Partial<DesignerLayersForm> & { svg?: DesignerLayerSettings }) | undefined, fallback: DesignerLayersForm): DesignerLayersForm {
   const reference = layers?.reference ?? layers?.svg;
   return {
+    artwork: normalizeDesignerLayer(layers?.artwork, fallback.artwork),
     reference: normalizeDesignerLayer(reference, fallback.reference),
     zones: normalizeDesignerLayer(layers?.zones, fallback.zones),
     strings: normalizeDesignerLayer(layers?.strings, fallback.strings)
+  };
+}
+
+function normalizeDesignerArtwork(artwork: DesignerArtworkForm): DesignerArtworkForm {
+  return {
+    id: typeof artwork.id === "string" && artwork.id ? artwork.id : typeof artwork.assetId === "string" && artwork.assetId ? `artwork_${artwork.assetId}` : "artwork",
+    assetId: typeof artwork.assetId === "string" ? artwork.assetId : "",
+    name: typeof artwork.name === "string" && artwork.name ? artwork.name : "Artwork",
+    x: typeof artwork.x === "number" && Number.isFinite(artwork.x) ? artwork.x : 0,
+    y: typeof artwork.y === "number" && Number.isFinite(artwork.y) ? artwork.y : 0,
+    width: positiveNumber(artwork.width, 20),
+    height: positiveNumber(artwork.height, 20),
+    visible: typeof artwork.visible === "boolean" ? artwork.visible : true,
+    locked: typeof artwork.locked === "boolean" ? artwork.locked : false,
+    opacity: clampNumber(typeof artwork.opacity === "number" ? artwork.opacity : 1, 0.05, 1)
   };
 }
 
@@ -430,7 +451,10 @@ function normalizeDesignerLayer(layer: DesignerLayerSettings | undefined, fallba
 
 function normalizeBuildAreas(designer: (Partial<DesignerForm> & { buildArea?: Partial<DesignerBuildAreaForm> }) | undefined, fallback: DesignerBuildAreaForm[]): DesignerBuildAreaForm[] {
   const legacyBuildArea = designer?.buildArea;
-  const source = Array.isArray(designer?.buildAreas) && designer.buildAreas.length ? designer.buildAreas : legacyBuildArea ? [legacyBuildArea] : fallback;
+  // An empty array is a valid, user-authored state: it means every build area
+  // was deliberately removed. Only fall back for documents that predate the
+  // buildAreas field altogether.
+  const source = Array.isArray(designer?.buildAreas) ? designer.buildAreas : legacyBuildArea ? [legacyBuildArea] : fallback;
   return source.map((buildArea, index) => normalizeBuildArea(buildArea, fallback[index] ?? fallback[0], index));
 }
 
@@ -445,6 +469,7 @@ function normalizeBuildArea(buildArea: Partial<DesignerBuildAreaForm> | undefine
     width: positiveNumber(buildArea.width, fallback.width),
     height: positiveNumber(buildArea.height, fallback.height),
     points: normalizeDesignerPoints(buildArea.points),
+    pathMode: buildArea.pathMode === "bezier" ? "bezier" : "straight",
     visible: typeof buildArea.visible === "boolean" ? buildArea.visible : true,
     locked: typeof buildArea.locked === "boolean" ? buildArea.locked : false,
     opacity: clampNumber(typeof buildArea.opacity === "number" ? buildArea.opacity : 1, 0.05, 1)
@@ -455,8 +480,22 @@ function normalizeDesignerPoints(points: DesignerPoint[] | undefined) {
   if (!Array.isArray(points) || points.length < 3) return undefined;
   const normalized = points
     .filter((point) => typeof point.x === "number" && Number.isFinite(point.x) && typeof point.y === "number" && Number.isFinite(point.y))
-    .map((point) => ({ x: point.x, y: point.y }));
+    .map((point) => ({
+      x: point.x,
+      y: point.y,
+      ...(isDesignerPointNodeType(point.nodeType) ? { nodeType: point.nodeType } : {}),
+      ...(isDesignerHandle(point.handleIn) ? { handleIn: { x: point.handleIn.x, y: point.handleIn.y } } : {}),
+      ...(isDesignerHandle(point.handleOut) ? { handleOut: { x: point.handleOut.x, y: point.handleOut.y } } : {})
+    }));
   return normalized.length >= 3 ? normalized : undefined;
+}
+
+function isDesignerPointNodeType(value: unknown): value is DesignerPointNodeType {
+  return value === "corner" || value === "straight" || value === "smooth" || value === "symmetric";
+}
+
+function isDesignerHandle(handle: DesignerPoint["handleIn"] | undefined): handle is { x: number; y: number } {
+  return Boolean(handle && typeof handle.x === "number" && Number.isFinite(handle.x) && typeof handle.y === "number" && Number.isFinite(handle.y));
 }
 
 function clampNumber(value: number, min: number, max: number) {
@@ -480,15 +519,6 @@ function positiveNumber(value: number | undefined, fallback: number) {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
-function applySegmentLayout(
-  segmentsById: Map<string, SegmentForm>,
-  id: string,
-  layout: Pick<SegmentForm, "x" | "y" | "stepX" | "stepY">
-) {
-  const segment = segmentsById.get(id);
-  if (!segment) return;
-  segment.x = layout.x;
-  segment.y = layout.y;
-  segment.stepX = layout.stepX;
-  segment.stepY = layout.stepY;
+function nonNegativeNumber(value: number | undefined, fallback: number) {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : fallback;
 }

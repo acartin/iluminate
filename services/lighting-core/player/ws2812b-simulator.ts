@@ -6,12 +6,12 @@ export const WS2812B_BIT_TIME_US = 1.25;
 export const WS2812B_RESET_TIME_US = 280;
 
 export type Ws2812bPixel = {
-  chainId: string;
   output: number;
-  index: number;
+  serialIndex: number;
+  stringId: string;
   x: number;
   y: number;
-  order: number;
+  tangentDeg: number;
   normalizedX: number;
   normalizedY: number;
   color: Rgb;
@@ -20,7 +20,7 @@ export type Ws2812bPixel = {
 
 export type Ws2812bOutputFrame = {
   output: number;
-  chainId: string;
+  outputId: string;
   pixelCount: number;
   transmitTimeUs: number;
   maxRefreshRateFps: number;
@@ -41,36 +41,36 @@ export type Ws2812bSimulationFrame = {
 
 export function simulateWs2812bFrame(partitura: Partitura, sceneId: string, timeMs: number): Ws2812bSimulationFrame {
   const renderedFrame = renderSceneFrame(partitura, sceneId, timeMs);
-  const renderedByAddress = new Map(renderedFrame.pixels.map((pixel) => [`${pixel.chainId}:${pixel.index}`, pixel]));
+  const renderedByAddress = new Map(renderedFrame.pixels.map((pixel) => [`${pixel.output}:${pixel.serialIndex}`, pixel]));
 
-  const outputs = partitura.chains
+  const outputs = partitura.outputs
     .slice()
     .sort((left, right) => left.output - right.output)
-    .map<Ws2812bOutputFrame>((chain) => {
-      const pixels = Array.from({ length: chain.pixelCount }, (_, index) => {
-        const renderedPixel = renderedByAddress.get(`${chain.id}:${index}`);
+    .map<Ws2812bOutputFrame>((output) => {
+      const pixels = Array.from({ length: output.pixelCount }, (_, serialIndex) => {
+        const renderedPixel = renderedByAddress.get(`${output.output}:${serialIndex}`);
         return toWs2812bPixel(
           renderedPixel ?? {
-            chainId: chain.id,
-            output: chain.output,
-            index,
-            x: index,
+            output: output.output,
+            serialIndex,
+            stringId: "unmapped",
+            x: serialIndex,
             y: 0,
-            order: index,
-            normalizedX: chain.pixelCount > 1 ? index / (chain.pixelCount - 1) : 0,
+            tangentDeg: 0,
+            normalizedX: output.pixelCount > 1 ? serialIndex / (output.pixelCount - 1) : 0,
             normalizedY: 0,
             color: { r: 0, g: 0, b: 0 }
           }
         );
       });
-      const transmitTimeUs = estimateTransmitTimeUs(chain.pixelCount);
+      const transmitTimeUs = estimateTransmitTimeUs(output.pixelCount);
 
       return {
-        output: chain.output,
-        chainId: chain.id,
-        pixelCount: chain.pixelCount,
+        output: output.output,
+        outputId: output.id,
+        pixelCount: output.pixelCount,
         transmitTimeUs,
-        maxRefreshRateFps: estimateRefreshRateFps(chain.pixelCount),
+        maxRefreshRateFps: estimateRefreshRateFps(output.pixelCount),
         pixels
       };
     });
@@ -102,12 +102,12 @@ export function estimateRefreshRateFps(pixelCount: number) {
 function toWs2812bPixel(pixel: FramePixel): Ws2812bPixel {
   const color = quantizeRgb(pixel.color);
   return {
-    chainId: pixel.chainId,
     output: pixel.output,
-    index: pixel.index,
+    serialIndex: pixel.serialIndex,
+    stringId: pixel.stringId,
     x: pixel.x,
     y: pixel.y,
-    order: pixel.order,
+    tangentDeg: pixel.tangentDeg,
     normalizedX: pixel.normalizedX,
     normalizedY: pixel.normalizedY,
     color,

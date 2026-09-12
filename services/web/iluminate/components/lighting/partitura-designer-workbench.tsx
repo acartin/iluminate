@@ -33,6 +33,7 @@ const designerCrudConfig: CrudResourceConfig<DesignerRecord> = {
   searchPlaceholder: "Search partitura, client or status",
   emptyTitle: "No partituras match the current filters",
   emptyDescription: "Create a partitura before opening the visual designer.",
+  canCreate: false,
   allowedActions: ["workspace"],
   workspaceLabel: "Open designer",
   workspaceHref: (record) => `/partituras/designer/${encodeURIComponent(record.id)}`,
@@ -90,9 +91,9 @@ function recordFromPartitura(partitura: PersistedPartitura): DesignerRecord {
     canvas: designer ? `${designer.canvasWidthCm}x${designer.canvasHeightCm} cm` : "Not configured",
     pixelsPerMeter: designer?.addressablePixelsPerMeter ?? designer?.ledDensityPerMeter ?? 0,
     ledsPerMeter: designer?.ledsPerMeter ?? designer?.addressablePixelsPerMeter ?? designer?.ledDensityPerMeter ?? 0,
-    zones: designer?.zones.length ?? partitura.document.zones.length,
+    zones: designer?.zones.length ?? 0,
     routes: designer?.routes.length ?? 0,
-    pixels: partitura.document.chain1Pixels + partitura.document.chain2Pixels + partitura.document.chain3Pixels,
+    pixels: partitura.document.compiledLayout?.pixelMap.length ?? 0,
     updatedAt: new Date(partitura.updatedAt).toLocaleString()
   };
 }

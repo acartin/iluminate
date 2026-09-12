@@ -13,8 +13,8 @@ const invalidReferences = readFixture("partitura-v1-invalid-references.json");
 assert(validatePartitura(valid).ok, "minimal fixture should validate");
 assert(!validatePartitura(invalidOutput).ok, "invalid output fixture should fail");
 assert(
-  validatePartitura(invalidOutput).errors.some((issue) => issue.code === "chain.output.invalid"),
-  "invalid output fixture should report chain.output.invalid"
+  validatePartitura(invalidOutput).errors.some((issue) => issue.code === "output.invalid"),
+  "invalid output fixture should report output.invalid"
 );
 assert(!validatePartitura(invalidReferences).ok, "invalid references fixture should fail");
 assert(
@@ -30,8 +30,8 @@ assert(
 );
 
 const wsFrame = simulateWs2812bFrame(valid, "normal", 1000);
-assert(wsFrame.outputs.length === 3, "WS2812B simulator should produce three logical outputs");
-assert(wsFrame.outputs[0].pixels.length === 24, "output 1 should include all pixels");
+assert(wsFrame.outputs.length === 1, "WS2812B simulator should produce declared outputs");
+assert(wsFrame.outputs[0].pixels.length === 3, "output 1 should include all pixels");
 assert(wsFrame.outputs[0].pixels[0].grb.length === 3, "WS2812B pixels should expose GRB transport order");
 assert(wsFrame.estimatedMaxRefreshRateFps > 0, "WS2812B simulator should estimate refresh rate");
 

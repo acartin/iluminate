@@ -1,6 +1,6 @@
 # PixelMap Composer Direction
 
-**Last updated:** 2026-09-05
+**Last updated:** 2026-09-10
 **Purpose:** preserve the current product/architecture direction for the real sign composer.
 
 ## Current Decision
@@ -109,13 +109,17 @@ The system samples the route using the project LED density:
 20 Pixels/m + 60 LEDs/m -> one WS281x addressable pixel visually drives about 3 physical emitters
 ```
 
-Each generated LED receives:
+Each generated addressable pixel receives:
 
 - output number;
 - serial index;
 - global x/y;
 - zone memberships;
 - local coordinates per relevant zone.
+
+The serial index is determined by the connected controller/data-cable/LED-string
+graph, never by drawing order. A fabrication leg between route nodes is a
+physical construction detail and is not a normal effect target.
 
 ### Data Cables And Controller
 
@@ -159,6 +163,22 @@ physical wiring -> visual coordinates -> effects -> firmware output
 
 The operator should not manually edit raw `pixelMap` in normal workflows.
 
+## Canonical Effect Targets
+
+Effects are authored against visual **zones** and **groups**, not manually
+defined logical string segments.
+
+- A zone is named geometry that selects pixels by their `x/y` location.
+- A group is a named, cycle-free composition of zones and/or groups. It does not
+  change cable routing or duplicate pixels.
+- A selected pixel set can be evaluated in `serial`, `local`, or `global`
+  coordinates according to the effect.
+
+This means a single wired `L` can have `L vertical` and `L base` zones, with no
+manual start/end ranges. A serial chase orders each selected set by its physical
+serial index; a wave or flame samples its coordinates. An exact string range is
+only a future advanced exception.
+
 ## Product UI Direction
 
 The real composer should not start from matrix presets.
@@ -172,7 +192,7 @@ The production composer should flow like this:
 3. Trace zones over the sign using deterministic drawing tools: rectangle, ellipse, Polygon/Pen, later Bezier path and freehand.
 4. Show optional snap/grid/pitch guides only when routing LEDs.
 5. Draw continuous LED routes.
-6. Validate route continuity, LED count, output capacity, LEDs outside zones and sparse areas.
+6. Validate electrical continuity, output topology, LED count, output capacity, LEDs outside zones and sparse areas.
 7. Generate `pixelMap`.
 8. Run effects against the generated map.
 
@@ -183,7 +203,7 @@ Effects should be tested on ideal Lab templates, but production effects run by s
 Important modes:
 
 - `Whole Sign`: use global coordinate space.
-- `Each Element`: run the same effect independently per element/zone.
+- `Each Element`: run the same effect independently per element/zone or group child.
 - `Sequential Elements`: activate elements left-to-right or by explicit order, using local coordinates per element.
 
 Examples:
@@ -204,6 +224,7 @@ Implemented so far:
 - `/partituras/designer` lists partituras using the platform grid pattern.
 - `/partituras/designer/[id]` opens a full-screen Designer studio.
 - The Designer supports selection, copy, paste, delete, zoom, pan, rulers, snap, rectangle/ellipse zones, LED strings, data cables, route point editing, route cutting and exact snap soldering.
+- The Designer has an `Artwork` layer for project assets. Artwork items reference existing R2/DB assets by `assetId`, can be selected, moved, resized, renamed, hidden, locked and adjusted for opacity, and do not generate `pixelMap`.
 - The controller card supports red output ports, data-cable attachment and moving attached cables when the controller is dragged.
 - `Effect Lab` exists in the partitura workspace with:
   - matrix presets;

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useMemo, useState } from "react";
-import { ArrowUpRight, Copy, Eye, Filter, Pencil, Plus, Search, Trash2 } from "lucide-react";
+import { ArrowUpRight, CheckCircle2, Copy, Eye, Filter, Pencil, Plus, Search, Trash2 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
@@ -14,7 +14,7 @@ import { CrudColumn, CrudResourceConfig } from "./types";
 type RowAction = {
   label: string;
   href: string;
-  icon?: "copy";
+  icon?: "copy" | "activate" | "preview";
 };
 
 function normalizeSearch(value: unknown) {
@@ -57,13 +57,15 @@ function rowActions(value: unknown): RowAction[] {
     return (
       typeof candidate.label === "string"
       && typeof candidate.href === "string"
-      && (candidate.icon === undefined || candidate.icon === "copy")
+      && (candidate.icon === undefined || candidate.icon === "copy" || candidate.icon === "activate" || candidate.icon === "preview")
     );
   });
 }
 
 function rowActionContent(action: RowAction) {
   if (action.icon === "copy") return <Copy className="h-4 w-4" />;
+  if (action.icon === "activate") return <CheckCircle2 className="h-4 w-4" />;
+  if (action.icon === "preview") return <Eye className="h-4 w-4" />;
   return <span>{action.label}</span>;
 }
 
