@@ -60,8 +60,49 @@ export function compileDesignerLayout(designer: DesignerForm): CompiledDesignerL
   zones.filter((zone) => !zone.pixelIds.length).forEach((zone) => warnings.push(`${zone.name} contains no mapped pixels.`));
   const groups = [...designer.groups];
   if (zones.length) groups.push({ id: "full_sign", name: "Full sign", members: zones.map((zone) => ({ type: "zone" as const, id: zone.id })) });
+  validateGroups(designer, groups, errors, warnings);
   const outputs: CompiledDesignerLayout["outputs"] = ([1, 2, 3] as const).map((output) => ({ id: `output_${output}`, name: `Output ${output}`, output, pixelCount: serialStarts[output] }));
   return { outputs, pixelMap, zones, groups, validation: { errors, warnings } };
+}
+
+function validateGroups(
+  designer: DesignerForm,
+  groups: CompiledDesignerLayout["groups"],
+  errors: string[],
+  warnings: string[]
+) {
+  const zoneIds = new Set(designer.zones.map((zone) => zone.id));
+  const groupIds = new Set(groups.map((group) => group.id));
+  const membersById = new Map(groups.map((group) => [group.id, group.members]));
+
+  groups.forEach((group) => {
+    const seen = new Set<string>();
+    group.members.forEach((member) => {
+      const known = member.type === "zone" ? zoneIds.has(member.id) : groupIds.has(member.id);
+      if (!known) {
+        errors.push(`${group.name}: member ${member.id} does not exist.`);
+        return;
+      }
+      const key = `${member.type}:${member.id}`;
+      if (seen.has(key)) warnings.push(`${group.name}: member ${member.id} is listed more than once.`);
+      seen.add(key);
+    });
+  });
+
+  const state = new Map<string, "visiting" | "done">();
+  function visit(groupId: string, path: string[]) {
+    if (state.get(groupId) === "done") return;
+    if (state.get(groupId) === "visiting") {
+      errors.push(`Group cycle detected: ${[...path, groupId].join(" -> ")}.`);
+      return;
+    }
+    state.set(groupId, "visiting");
+    (membersById.get(groupId) ?? [])
+      .filter((member) => member.type === "group" && groupIds.has(member.id))
+      .forEach((member) => visit(member.id, [...path, groupId]));
+    state.set(groupId, "done");
+  }
+  groups.forEach((group) => visit(group.id, []));
 }
 
 function pixelTouchesZone(zone: DesignerForm["zones"][number], point: DesignerPoint, radiusCm: number) {

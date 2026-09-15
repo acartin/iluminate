@@ -1,9 +1,9 @@
 # AI Context Pack
 
-- Generated UTC: `2026-09-10T23:02:17Z`
+- Generated UTC: `2026-09-15T18:54:10Z`
 - Repo root: `/srv/iluminate`
-- Git branch: `HETZNER-DEV-2026-Setiembre-8`
-- Git commit: `8061f3d`
+- Git branch: `HETZNER-DEV-2026-Setiembre-15`
+- Git commit: `be138a4`
 - Policy: high-signal only; enfocado en Iluminate.
 
 ## Contexto Maestro
@@ -13,10 +13,10 @@
 ```
 # BRAIN_MAP
 
-- Generated UTC: `2026-09-10T23:02:17Z`
+- Generated UTC: `2026-09-15T18:54:10Z`
 - Repo root: `/srv/iluminate`
-- Git branch: `HETZNER-DEV-2026-Setiembre-8`
-- Git commit: `8061f3d`
+- Git branch: `HETZNER-DEV-2026-Setiembre-15`
+- Git commit: `be138a4`
 
 ## 1. MAPA DE INTENCIONES (ILUMINATE)
 
@@ -94,10 +94,10 @@ services/simulator
 services/web
 services/web/iluminate
 services/web/iluminate/app
-services/web/iluminate/app/[group]
 services/web/iluminate/app/api
 services/web/iluminate/app/console
 services/web/iluminate/app/forgot-password
+services/web/iluminate/app/[group]
 services/web/iluminate/app/login
 services/web/iluminate/app/partituras
 services/web/iluminate/app/projects
@@ -115,82 +115,82 @@ services/web/iluminate/lib/lighting
 services/web/iluminate/lib/server
 services/web/iluminate/public
 services/web/iluminate/public/vendor
+services/web/iluminate/services
+services/web/iluminate/services/web
 ```
 
 ## 5. ARCHIVOS RELEVANTES
 
 ```text
-services/README.md
-services/auth/README.md
 services/auth/api/README.md
 services/auth/contracts/README.md
 services/auth/domain/README.md
-services/auth/migrations/.gitkeep
 services/auth/migrations/2026-08-19_create_auth_password_reset_tokens.sql
 services/auth/migrations/2026-08-19_create_auth_security_baseline.sql
+services/auth/migrations/.gitkeep
+services/auth/README.md
 services/auth/storage/README.md
 services/auth/tests/.gitkeep
 services/device-protocol/README.md
-services/firmware/README.md
-services/firmware/esp32-fastled-spike/README.md
 services/firmware/esp32-fastled-spike/esp32-fastled-spike.ino
 services/firmware/esp32-fastled-spike/fixtures/one-strip-100.partitura.json
-services/lighting-core/README.md
+services/firmware/esp32-fastled-spike/README.md
+services/firmware/README.md
 services/lighting-core/api/README.md
 services/lighting-core/contracts/README.md
-services/lighting-core/domain/README.md
 services/lighting-core/domain/chains/.gitkeep
 services/lighting-core/domain/clips/.gitkeep
 services/lighting-core/domain/controllers/.gitkeep
 services/lighting-core/domain/deployments/.gitkeep
-services/lighting-core/domain/effects/.gitkeep
 services/lighting-core/domain/effects/catalog.ts
+services/lighting-core/domain/effects/.gitkeep
 services/lighting-core/domain/partituras/types.ts
+services/lighting-core/domain/README.md
 services/lighting-core/domain/scenes/.gitkeep
 services/lighting-core/domain/segments/.gitkeep
 services/lighting-core/domain/tracks/.gitkeep
 services/lighting-core/domain/zones/.gitkeep
-services/lighting-core/fixtures/README.md
 services/lighting-core/fixtures/partitura-v1-invalid-output.json
 services/lighting-core/fixtures/partitura-v1-invalid-references.json
 services/lighting-core/fixtures/partitura-v1-minimal.json
+services/lighting-core/fixtures/README.md
 services/lighting-core/generators/partitura-generator.ts
 services/lighting-core/index.ts
-services/lighting-core/migrations/.gitkeep
 services/lighting-core/migrations/2026-08-19_create_iluminate_operational_tables.sql
 services/lighting-core/migrations/2026-08-22_create_iluminate_partituras.sql
 services/lighting-core/migrations/2026-08-22_remove_partitura_revisions.sql
 services/lighting-core/migrations/2026-09-09_projects_many_partituras.sql
-services/lighting-core/package-lock.json
+services/lighting-core/migrations/2026-09-11_remove_legacy_partitura_layout.sql
+services/lighting-core/migrations/.gitkeep
 services/lighting-core/package.json
+services/lighting-core/package-lock.json
 services/lighting-core/pixel-map/builders.ts
 services/lighting-core/pixel-map/create-pixel-map.ts
 services/lighting-core/player/scene-player.ts
 services/lighting-core/player/ws2812b-simulator.ts
-services/lighting-core/schemas/README.md
+services/lighting-core/README.md
 services/lighting-core/schemas/partitura.v1.schema.json
+services/lighting-core/schemas/README.md
 services/lighting-core/storage/README.md
 services/lighting-core/tests/.gitkeep
 services/lighting-core/tests/validate-fixtures.test.ts
 services/lighting-core/tsconfig.json
-services/lighting-core/validators/README.md
 services/lighting-core/validators/partitura-validator.ts
+services/lighting-core/validators/README.md
+services/README.md
 services/simulator/README.md
-services/web/iluminate/Dockerfile
-services/web/iluminate/README.md
 services/web/iluminate/app/globals.css
 services/web/iluminate/app/icon.svg
 services/web/iluminate/app/layout.tsx
 services/web/iluminate/app/not-found.tsx
 services/web/iluminate/app/page.tsx
+services/web/iluminate/Dockerfile
 services/web/iluminate/docs/theme-standard.md
 services/web/iluminate/lib/api.ts
 services/web/iluminate/lib/feedback.ts
 services/web/iluminate/lib/modules.ts
 services/web/iluminate/lib/request-url.ts
 services/web/iluminate/lib/types.ts
-services/web/iluminate/lib/utils.ts
-services/web/iluminate/next-env.d.ts
 ```
 ### `.agent/AI_CONTEXT_LED_ORCHESTRATION_PLATFORM.md`
 
@@ -868,7 +868,7 @@ UX direction after starting the Designer branch:
 - The canvas has intelligent rulers in `cm` or `in`; labels stay screen-readable and automatically promote to `m` or `ft` when the visible span is large. Canonical stored coordinates remain centimeters.
 - Rulers are optional and can be hidden from the top system bar to recover canvas space.
 - Formal import direction is SVG-only for the production model. Raster images may be references later, but SVG is the geometry source.
-- Designer route vocabulary is split into `LED string` and `Data cable`. `LED string` is amber/orange and compiles into LEDs/segments/pixelMap. `Data cable` is always green, is visual-only, and is ignored by layout compilation.
+- Designer route vocabulary is split into `LED string` and `Data cable`. `LED string` is amber/orange and compiles into the physical pixelMap. `Data cable` is green and establishes serial signal connectivity between controller ports and LED strings.
 - Addressable pixel count is derived from real route length and `Pixels/m`. Example: at `60 Pixels/m`, a `100 cm` LED string should compile to about 60 addressable pixels. `LEDs/m` is separate and represents physical emitters for preview/simulation, so WS2811 strips can model multiple physical LEDs per addressable pixel.
 - Every Designer document owns one controller card on the canvas. The controller is movable and persisted, but not deletable. It starts with 3 data connectors; future configuration should support different controller profiles, including 12-output controllers.
 - Route points are fabrication nodes, not LEDs. Double-clicking a route segment inserts a node/bend. Selecting an internal node enables point deletion and route cutting. Cutting splits one continuous route into two continuous routes. LED points are sampled inside each leg with a half-step offset, so cuts/bends sit between LEDs instead of replacing LEDs.
@@ -877,9 +877,9 @@ UX direction after starting the Designer branch:
 - Soldering is automatic only when terminals land on the same grid snap point. Green terminal plus red terminal on the exact same snap point solders, regardless of whether the route is `LED string` or `Data cable`; if they do not share that snap point, nothing solders. The canvas marks the joint in cyan and persists `joint: true`. Same-kind routes are merged and the duplicate terminal disappears. Mixed `Data cable` + `LED string` joints remain separate route types, but dragging the cyan joint or moving a soldered route endpoint keeps connected terminals together as one physical point. Output/zone validation may be added later as warnings, but must not block drawing.
 - Controller ports are red output snap terminals. A `Data cable` green/input terminal on the exact same snap point as a controller port solders to that port, paints the port cyan, assigns the cable output from the port number and moves with the controller card when the card is dragged.
 - Deleting routes must reconcile `joint: true`; cyan may remain only on a real terminal/port connection.
-- The Designer geometry is suitable for a later electrical emulator because controller ports, data cables, LED strings, terminals and cyan joints form a physical connectivity graph. Future validation should derive continuity and warnings from that graph.
+- The Designer geometry is a physical connectivity graph. `Compile` derives the pixelMap and validates controller paths/serial branches; a successful, current compilation is required before Animate is available.
 - Effects are authored against visual `zones` and named `groups`, not manually created logical segments. The physical wiring graph produces output/serial order; pixelMap connects it to `x/y`; effects choose `serial`, `local`, or `global` evaluation. Read `.agent/EFFECT_TARGETING_MODEL.md` for the canonical model.
-- Layout technical grids remain available for debug/inspection, but the production workflow should keep moving toward the visual studio.
+- The retired Layout, Physical map and Effect Lab views must not be reintroduced. Effects are authored from the Designer-derived pixelMap.
 
 ---
 
@@ -1313,11 +1313,11 @@ primary entity, UI workflow, or required partitura target type.
 
 This document defines where a partitura lives today, which copy is authoritative, and how the firmware path should evolve.
 
-## Current Sources
+## Current Sources And Truth Rules
 
 ### Editable Source
 
-The editable source of truth for the web application is:
+The only persistent editable source of truth for the web application is:
 
 ```text
 PostgreSQL
@@ -1326,14 +1326,47 @@ iluminate.partituras.document_json
 
 `document_json` stores the authoring document used by the browser workspace:
 
-- logical output sizes;
-- segments;
-- zones;
+- project settings such as canvas size, snap, pixels per meter and LEDs per meter;
+- Designer geometry: controller, data cables, LED strings, references, artwork, zones and groups;
+- `compiledLayout`, when the Designer has been explicitly compiled;
 - scenes;
 - clips;
-- simulator defaults.
+- simulator/player defaults that are part of authoring.
 
-The web UI edits this document and persists it as one JSON value. Segments, zones, scenes and clips are not separate database tables at this stage.
+The web UI edits this document and persists it as one JSON value. Designer objects, zones, groups, scenes and clips are not separate database tables at this stage.
+
+Do not create parallel editable state in another table, another JSON column, Paper.js project JSON, Pixi/WebGL state or a simulator-private model. Canvas and player libraries are views over `document_json`, not sources of truth.
+
+### Derived Compile Data
+
+The physical map is derived data inside the editable document:
+
+```text
+iluminate.partituras.document_json.compiledLayout
+```
+
+`compiledLayout` is produced only by the Designer `Compile` action. It contains:
+
+- controller outputs and output pixel counts;
+- generated `pixelMap` rows, each with `output`, `serialIndex`, `stringId`, `x/y` and tangent;
+- zone memberships, generated by intersecting visual zone geometry with the compiled pixels;
+- group membership;
+- compile validation errors and warnings.
+
+Compilation is strict. The canvas may use proximity while dragging only to help
+the operator land a terminal on the correct snap point. The persisted document
+must contain exact same-point soldered terminals (`joint: true`) for the
+compiler to treat two routes, or a controller port and a data cable, as
+electrically connected.
+
+Validation should separate blockers from drafting noise. A missing controller
+root, multiple data-cable starts on the same output, or serial branching is an
+error. Disconnected LED strings are warnings unless no mapped pixels can be
+generated at all.
+
+Operators must not edit `compiledLayout` directly. Any change to controller outputs, data cables, LED strings, zones, groups, pixel density or snap can make `compiledLayout` stale. The UI must then require a new `Compile` before Animate, Generate or firmware export uses the layout.
+
+Reference artwork changes do not require compile unless they change zones, groups or LED routes. Scene/clip/effect changes do not require physical compile, but they invalidate any old animation preview or generated firmware artifact.
 
 ### Generated Artifact
 
@@ -1344,9 +1377,11 @@ PostgreSQL
 iluminate.partituras.generated_json
 ```
 
-`generated_json` is produced from `document_json` through `lighting-core` generation and validation. It is the JSON shape that the simulator and firmware interpreter should consume.
+`generated_json` is produced from the current `document_json` and its fresh `compiledLayout` through `lighting-core` generation and validation. It is the JSON shape that the firmware interpreter consumes.
 
 The generated artifact must remain declarative. It must not include ESP32 pins, FastLED array names, WiFi credentials, per-device secrets, or firmware code.
+
+`generated_json` is not editable and must not be used as the source for Designer edits. If `document_json` changes after generation, `generated_json` is stale and should be cleared or regenerated before device download.
 
 The device download endpoint exposes this artifact as raw JSON:
 
@@ -1412,9 +1447,12 @@ The intended operating model is:
 
 ```text
 Web editor
-  -> persists document_json
-  -> generates and validates generated_json
-  -> exposes generated_json through a device endpoint
+  -> edits document_json in browser memory
+  -> Save persists document_json only
+  -> Compile derives document_json.compiledLayout
+  -> Animate builds a temporary preview artifact from document_json + compiledLayout
+  -> Generate/Publish validates and persists generated_json
+  -> device endpoint exposes generated_json
   -> ESP32 downloads generated_json
   -> ESP32 stores/applies it locally
   -> ESP32 executes defaultScene
@@ -1425,70 +1463,32 @@ Once the loader exists, changing colors, timing, zones, scenes or clips should r
 
 Firmware upload should be needed only for interpreter changes, new supported effects, device protocol changes, bug fixes, or hardware support changes.
 
+## Operator Flow
+
+The UI rules are intentionally strict:
+
+```text
+Edit Designer geometry/settings -> Save optional, Compile required before Animate/Generate.
+Edit scenes/clips/effect params -> Save optional, Compile not required if physical map is current, Preview/Generate must be regenerated.
+Click Save -> persists current document_json; it does not compile secretly.
+Click Compile -> regenerates compiledLayout, clears stale preview/generated artifacts, and saves the compiled document.
+Compile belongs to Design; Animate consumes an already compiled document.
+Click Play/Preview -> requires a fresh compiledLayout; it may generate a temporary preview artifact but must not persist it as truth.
+Click Generate/Publish -> creates generated_json from the current document_json + fresh compiledLayout.
+ESP32 Download -> reads generated_json only.
+```
+
+If `Compile required` is visible, Animate and firmware generation must not trust the old pixel map.
+
 ## Runtime Ownership
 
 The partitura owns:
 
-- chains and logical outputs;
-- segment ranges;
+- controller logical outputs;
+- continuous LED routes and generated serial pixel order;
 - spatial pixel coordinates generated as `pixelMap`;
 - zones;
-- scenes;
-- tracks and clips;
-- effect identifiers and parameters;
-- `defaultScene`.
-
-The controller runtime owns:
-
-- physical pin mapping;
-- FastLED array allocation;
-- brightness and power limits;
-- WiFi/device credentials;
-- active scene state;
-- applied partitura id/checksum;
-- command polling;
-- status reporting.
-
-`defaultScene` is part of the partitura. The current active scene is device runtime state.
-
-## Three Logical Outputs
-
-Controllers are expected to expose three logical outputs:
-
-```text
-1
-2
-3
-```
-
-The partitura should keep the three logical chains present. An unused output is represented with:
-
-```json
-{ "pixelCount": 0 }
-```
-
-This makes the controller shape stable while allowing a project to use only one or two physical strings.
-
-Concrete pin mapping remains firmware-owned.
-
-## Spatial Pixel Model
-
-Iluminate uses one spatial model for linear strips and surface-like areas.
-
-Physical outputs and segments describe wiring:
-
-```text
-output -> chain -> segment range
-```
-
-The generated partitura expands those ranges into:
-
-```text
-pixelMap[]
-```
-
-Each pixel carries:
-
+- groups;
 ```
 
 ## Compose y Variables
@@ -1624,10 +1624,10 @@ services/simulator
 services/web
 services/web/iluminate
 services/web/iluminate/app
-services/web/iluminate/app/[group]
 services/web/iluminate/app/api
 services/web/iluminate/app/console
 services/web/iluminate/app/forgot-password
+services/web/iluminate/app/[group]
 services/web/iluminate/app/login
 services/web/iluminate/app/partituras
 services/web/iluminate/app/projects
@@ -1645,74 +1645,76 @@ services/web/iluminate/lib/lighting
 services/web/iluminate/lib/server
 services/web/iluminate/public
 services/web/iluminate/public/vendor
+services/web/iluminate/services
+services/web/iluminate/services/web
 ```
 
 ## Archivos
 
 ```text
-services/README.md
-services/auth/README.md
 services/auth/api/README.md
 services/auth/contracts/README.md
 services/auth/domain/README.md
-services/auth/migrations/.gitkeep
 services/auth/migrations/2026-08-19_create_auth_password_reset_tokens.sql
 services/auth/migrations/2026-08-19_create_auth_security_baseline.sql
+services/auth/migrations/.gitkeep
+services/auth/README.md
 services/auth/storage/README.md
 services/auth/tests/.gitkeep
 services/device-protocol/README.md
-services/firmware/README.md
-services/firmware/esp32-fastled-spike/README.md
 services/firmware/esp32-fastled-spike/esp32-fastled-spike.ino
 services/firmware/esp32-fastled-spike/fixtures/one-strip-100.partitura.json
-services/lighting-core/README.md
+services/firmware/esp32-fastled-spike/README.md
+services/firmware/README.md
 services/lighting-core/api/README.md
 services/lighting-core/contracts/README.md
-services/lighting-core/domain/README.md
 services/lighting-core/domain/chains/.gitkeep
 services/lighting-core/domain/clips/.gitkeep
 services/lighting-core/domain/controllers/.gitkeep
 services/lighting-core/domain/deployments/.gitkeep
-services/lighting-core/domain/effects/.gitkeep
 services/lighting-core/domain/effects/catalog.ts
+services/lighting-core/domain/effects/.gitkeep
 services/lighting-core/domain/partituras/types.ts
+services/lighting-core/domain/README.md
 services/lighting-core/domain/scenes/.gitkeep
 services/lighting-core/domain/segments/.gitkeep
 services/lighting-core/domain/tracks/.gitkeep
 services/lighting-core/domain/zones/.gitkeep
-services/lighting-core/fixtures/README.md
 services/lighting-core/fixtures/partitura-v1-invalid-output.json
 services/lighting-core/fixtures/partitura-v1-invalid-references.json
 services/lighting-core/fixtures/partitura-v1-minimal.json
+services/lighting-core/fixtures/README.md
 services/lighting-core/generators/partitura-generator.ts
 services/lighting-core/index.ts
-services/lighting-core/migrations/.gitkeep
 services/lighting-core/migrations/2026-08-19_create_iluminate_operational_tables.sql
 services/lighting-core/migrations/2026-08-22_create_iluminate_partituras.sql
 services/lighting-core/migrations/2026-08-22_remove_partitura_revisions.sql
 services/lighting-core/migrations/2026-09-09_projects_many_partituras.sql
-services/lighting-core/package-lock.json
+services/lighting-core/migrations/2026-09-11_remove_legacy_partitura_layout.sql
+services/lighting-core/migrations/.gitkeep
 services/lighting-core/package.json
+services/lighting-core/package-lock.json
 services/lighting-core/pixel-map/builders.ts
 services/lighting-core/pixel-map/create-pixel-map.ts
 services/lighting-core/player/scene-player.ts
 services/lighting-core/player/ws2812b-simulator.ts
-services/lighting-core/schemas/README.md
+services/lighting-core/README.md
 services/lighting-core/schemas/partitura.v1.schema.json
+services/lighting-core/schemas/README.md
 services/lighting-core/storage/README.md
 services/lighting-core/tests/.gitkeep
 services/lighting-core/tests/validate-fixtures.test.ts
 services/lighting-core/tsconfig.json
-services/lighting-core/validators/README.md
 services/lighting-core/validators/partitura-validator.ts
+services/lighting-core/validators/README.md
+services/README.md
 services/simulator/README.md
-services/web/iluminate/Dockerfile
-services/web/iluminate/README.md
 services/web/iluminate/app/globals.css
 services/web/iluminate/app/icon.svg
 services/web/iluminate/app/layout.tsx
 services/web/iluminate/app/not-found.tsx
 services/web/iluminate/app/page.tsx
+services/web/iluminate/Dockerfile
 services/web/iluminate/docs/theme-standard.md
 services/web/iluminate/lib/api.ts
 services/web/iluminate/lib/feedback.ts
@@ -1720,11 +1722,12 @@ services/web/iluminate/lib/modules.ts
 services/web/iluminate/lib/request-url.ts
 services/web/iluminate/lib/types.ts
 services/web/iluminate/lib/utils.ts
-services/web/iluminate/next-env.d.ts
 services/web/iluminate/next.config.mjs
-services/web/iluminate/package-lock.json
+services/web/iluminate/next-env.d.ts
 services/web/iluminate/package.json
+services/web/iluminate/package-lock.json
 services/web/iluminate/postcss.config.mjs
+services/web/iluminate/README.md
 services/web/iluminate/tailwind.config.ts
 services/web/iluminate/tsconfig.json
 ```
@@ -1814,6 +1817,9 @@ docker compose up --build iluminate-web
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1128.0",
     "@aws-sdk/s3-request-presigner": "^3.1128.0",
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/sortable": "^10.0.0",
+    "@dnd-kit/utilities": "^3.2.2",
     "@radix-ui/react-slot": "1.1.0",
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
@@ -1822,6 +1828,7 @@ docker compose up --build iluminate-web
     "next": "16.2.6",
     "paper": "^0.12.18",
     "pg": "^8.13.1",
+    "pixi.js": "^8.20.1",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "recharts": "^3.8.1",

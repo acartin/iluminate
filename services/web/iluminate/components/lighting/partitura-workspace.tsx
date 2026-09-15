@@ -49,12 +49,14 @@ import type { DesignerActiveLayer, DesignerRouteTerminal, DesignerSelection, Des
 import type { EffectDefinition, EffectParameterDefinition } from "@/lib/lighting/effect-catalog";
 import {
   clonePartituraDocument,
+  createClipIdentity,
   ClipParams,
   ClipForm,
   DesignerArtworkForm,
   DesignerBuildAreaForm,
   DesignerControllerForm,
   DesignerForm,
+  DesignerGroupForm,
   DesignerLayerSettings,
   DesignerLayersForm,
   DesignerPoint,
@@ -473,6 +475,57 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
     if (patch.id && patch.id !== routeId) setSelection({ type: "route", id: patch.id });
   }
 
+  function addGroup() {
+    const groups = designer.groups ?? [];
+    const usedIds = new Set(groups.map((group) => group.id));
+    let index = groups.length + 1;
+    while (usedIds.has(`group_${index}`)) index += 1;
+    const members = designer.zones.map((zone) => ({ type: "zone" as const, id: zone.id }));
+    const group: DesignerGroupForm = { id: `group_${index}`, name: `Group ${index}`, members };
+    updateDesigner({ ...designer, groups: [...groups, group] });
+    setFabricationNotice(`Group ${index} created with ${members.length} zones. Uncheck the ones to exclude, then Compile.`);
+  }
+
+  function patchGroup(groupId: string, patch: Partial<Pick<DesignerGroupForm, "name" | "members">>) {
+    updateDesigner({
+      ...designer,
+      groups: (designer.groups ?? []).map((group) => (group.id === groupId ? { ...group, ...patch } : group))
+    });
+  }
+
+  function removeGroup(groupId: string) {
+    updateDesigner({
+      ...designer,
+      groups: (designer.groups ?? [])
+        .filter((group) => group.id !== groupId)
+        .map((group) => ({ ...group, members: group.members.filter((member) => !(member.type === "group" && member.id === groupId)) }))
+    });
+    setFabricationNotice("Group deleted.");
+  }
+
+  function toggleGroupMember(groupId: string, memberType: "zone" | "group", memberId: string) {
+    updateDesigner({
+      ...designer,
+      groups: (designer.groups ?? []).map((group) => {
+        if (group.id !== groupId) return group;
+        const exists = group.members.some((member) => member.type === memberType && member.id === memberId);
+        return {
+          ...group,
+          members: exists
+            ? group.members.filter((member) => !(member.type === memberType && member.id === memberId))
+            : [...group.members, { type: memberType, id: memberId }]
+        };
+      })
+    });
+  }
+
+  function selectGroupZone(zoneId: string) {
+    if (!designer.zones.some((zone) => zone.id === zoneId)) return;
+    setActiveLayer("zones");
+    setTool("select");
+    setSelection({ type: "zone", id: zoneId });
+  }
+
   function addZone(shape: DesignerZoneForm["shape"] = "rect") {
     const next = designer.zones.length + 1;
     const defaultWidth = Math.max(8, Math.round(activeViewport.width * 0.22));
@@ -777,7 +830,11 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
       const zones = designer.zones.filter((zone) => zone.id !== selection.id);
       updateDesigner({
         ...designer,
-        zones
+        zones,
+        groups: (designer.groups ?? []).map((group) => ({
+          ...group,
+          members: group.members.filter((member) => !(member.type === "zone" && member.id === selection.id))
+        }))
       });
       setSelection(null);
     }
@@ -1264,6 +1321,11 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
             onPatchArtwork={patchArtwork}
             onPatchBuildArea={patchBuildAreaVisual}
             onPatchZone={patchZoneVisual}
+            onAddGroup={addGroup}
+            onPatchGroup={patchGroup}
+            onRemoveGroup={removeGroup}
+            onToggleGroupMember={toggleGroupMember}
+            onSelectZone={selectGroupZone}
             onPatchController={patchController}
             onPatchRoute={patchRoute}
             onReorderItems={reorderDesignerItems}
@@ -1627,24 +1689,25 @@ function ScenesTab({
   }
 
   function addClip() {
-    const nextIndex = (activeScene?.clips.length ?? 0) + 1;
+    const clips = activeScene?.clips ?? [];
+    const identity = createClipIdentity(clips);
     const clip: ClipForm = {
-      id: `clip_${nextIndex}`,
-      name: `Clip ${nextIndex}`,
+      id: identity.id,
+      name: identity.name,
       target: sceneTargets[0]?.id ?? "full_sign",
       coordinateSpace: "local",
       effect: "solid",
       blend: "max",
       startMs: 0,
       durationMs: activeScene?.durationMs ?? 4000,
-      layer: nextIndex,
+      layer: clips.length + 1,
       params: defaultParamsForEffect(effectCatalog, "solid", document.accentColor)
     };
     onChange({
       ...document,
       scenes: document.scenes.map((scene) => (scene.id === document.activeSceneId ? { ...scene, clips: [...scene.clips, clip] } : scene))
     });
-    setSelectedClipIndex(nextIndex - 1);
+    setSelectedClipIndex(clips.length);
   }
 
   function removeClip(index: number) {
@@ -1833,7 +1896,7 @@ function buildSceneTargets(document: PartituraDocument) {
   return [
     { id: "full_sign", name: "Full sign", detail: `${layout?.pixelMap.length ?? 0} mapped pixels` },
     ...zoneTargets.map((zone) => ({ id: zone.id, name: zone.name || zone.id, detail: `${mappedZones.get(zone.id) ?? 0} mapped pixels` })),
-    ...groupTargets.map((group) => ({ id: group.id, name: group.name || group.id, detail: "Designer group" }))
+    ...groupTargets.map((group) => ({ id: group.id, name: group.name || group.id, detail: `Group · ${group.members.length} member${group.members.length === 1 ? "" : "s"}` }))
   ];
 }
 

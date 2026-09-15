@@ -4,8 +4,8 @@ import { cloneElement, isValidElement, useEffect, useRef, useState, type ReactEl
 import { DndContext, KeyboardSensor, PointerSensor, closestCenter, type DragEndEvent, useSensor, useSensors } from "@dnd-kit/core";
 import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { ChevronDown, ChevronRight, CircleDot, CornerDownRight, Eye, EyeOff, Folder, GripVertical, ImageIcon, Info, Layers, Lock, Minus, Pencil, Search, Spline, Unlock, X } from "lucide-react";
-import type { DesignerArtworkForm, DesignerBuildAreaForm, DesignerForm, DesignerLayerSettings, DesignerLayersForm, DesignerPointNodeType, DesignerZoneForm } from "@/lib/lighting/partitura-model";
+import { ChevronDown, ChevronRight, CircleDot, CornerDownRight, Eye, EyeOff, Folder, GripVertical, ImageIcon, Info, Layers, Lock, Minus, Pencil, Plus, Search, Spline, Trash2, Unlock, X } from "lucide-react";
+import type { DesignerArtworkForm, DesignerBuildAreaForm, DesignerForm, DesignerGroupForm, DesignerLayerSettings, DesignerLayersForm, DesignerPointNodeType, DesignerZoneForm } from "@/lib/lighting/partitura-model";
 import { formatDecimal, rulerTicks } from "./designer-geometry";
 import type { DesignerActiveLayer, DesignerRouteSummary, DesignerSelection, DesignerViewport } from "./types";
 
@@ -58,6 +58,11 @@ export function DesignerLayersPanel({
   onPatchArtwork,
   onPatchBuildArea,
   onPatchZone,
+  onAddGroup,
+  onPatchGroup,
+  onRemoveGroup,
+  onToggleGroupMember,
+  onSelectZone,
   onPatchController,
   onPatchRoute,
   onReorderItems,
@@ -76,6 +81,11 @@ export function DesignerLayersPanel({
   onPatchArtwork: (artworkId: string, patch: Partial<DesignerArtworkForm>) => void;
   onPatchBuildArea: (buildAreaId: string, patch: Partial<Pick<DesignerBuildAreaForm, "name" | "visible" | "locked" | "opacity">>) => void;
   onPatchZone: (zoneId: string, patch: Partial<Pick<DesignerZoneForm, "name" | "visible" | "locked" | "opacity">>) => void;
+  onAddGroup: () => void;
+  onPatchGroup: (groupId: string, patch: Partial<Pick<DesignerGroupForm, "name" | "members">>) => void;
+  onRemoveGroup: (groupId: string) => void;
+  onToggleGroupMember: (groupId: string, memberType: "zone" | "group", memberId: string) => void;
+  onSelectZone: (zoneId: string) => void;
   onPatchController: (patch: Pick<DesignerForm["controller"], "name">) => void;
   onPatchRoute: (routeId: string, patch: Pick<DesignerForm["routes"][number], "name">) => void;
   onReorderItems: (layer: "artwork" | "reference" | "zones" | "strings", activeId: string, overId: string) => void;
@@ -277,6 +287,17 @@ export function DesignerLayersPanel({
           </SortableLayerList>
         </LayerPanelSection>
 
+        <GroupPanelSection
+          groups={designer.groups ?? []}
+          zones={designer.zones}
+          selectedZoneId={selection?.type === "zone" ? selection.id : undefined}
+          onAddGroup={onAddGroup}
+          onPatchGroup={onPatchGroup}
+          onRemoveGroup={onRemoveGroup}
+          onToggleGroupMember={onToggleGroupMember}
+          onSelectZone={onSelectZone}
+        />
+
         <LayerPanelSection
           label="Strings"
           active={activeLayer === "strings"}
@@ -471,6 +492,128 @@ function RouteFolder({
       {expanded ? <div className="pl-2">{children}</div> : null}
     </div>
   );
+}
+
+function GroupPanelSection({
+  groups,
+  zones,
+  selectedZoneId,
+  onAddGroup,
+  onPatchGroup,
+  onRemoveGroup,
+  onToggleGroupMember,
+  onSelectZone
+}: {
+  groups: DesignerGroupForm[];
+  zones: DesignerZoneForm[];
+  selectedZoneId?: string;
+  onAddGroup: () => void;
+  onPatchGroup: (groupId: string, patch: Partial<Pick<DesignerGroupForm, "name" | "members">>) => void;
+  onRemoveGroup: (groupId: string) => void;
+  onToggleGroupMember: (groupId: string, memberType: "zone" | "group", memberId: string) => void;
+  onSelectZone: (zoneId: string) => void;
+}) {
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
+
+  return (
+    <section className="border-b border-border/80">
+      <div className="flex h-8 items-center gap-1 px-2 hover:bg-surface-hover">
+        <Folder className="ml-5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+        <span className="min-w-0 flex-1 truncate px-1.5 py-1 text-left text-body-sm font-semibold text-foreground">Groups</span>
+        <span className="font-mono text-[10px] text-muted-foreground">{groups.length}</span>
+        <button type="button" title="New group" className="flex h-6 w-6 items-center justify-center rounded border border-border-2 bg-card text-blue-700 hover:bg-surface-hover" onClick={onAddGroup}>
+          <Plus className="h-3.5 w-3.5" />
+        </button>
+      </div>
+      <div className="pb-2 pl-3 pr-1">
+        {!groups.length ? (
+          <p className="px-1.5 py-1 text-[11px] leading-4 text-muted-foreground">A group targets several zones as one effect while keeping each zone&apos;s pixel limits.</p>
+        ) : null}
+        {groups.map((group) => {
+          const expanded = expandedGroups[group.id] ?? true;
+          const members = group.members ?? [];
+          const zoneMembers = new Set(members.filter((member) => member.type === "zone").map((member) => member.id));
+          const groupMembers = new Set(members.filter((member) => member.type === "group").map((member) => member.id));
+          const nestedGroups = groups.filter((other) => other.id !== group.id);
+          return (
+            <div key={group.id} className="mb-1 rounded border border-border-2 bg-card">
+              <div className="flex items-center gap-1 px-1.5 py-1">
+                <button type="button" title={expanded ? "Collapse group" : "Expand group"} className="flex h-6 w-5 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-surface-hover" onClick={() => setExpandedGroups((current) => ({ ...current, [group.id]: !expanded }))}>
+                  {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                </button>
+                <input
+                  className="h-6 min-w-0 flex-1 rounded border border-transparent bg-transparent px-1.5 text-body-sm font-medium text-foreground outline-none hover:border-border-2 focus:border-blue-500 focus:bg-card"
+                  value={group.name}
+                  aria-label="Group name"
+                  onChange={(event) => onPatchGroup(group.id, { name: event.target.value })}
+                />
+                <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{members.length}</span>
+                <button type="button" title="Delete group" className="flex h-6 w-6 shrink-0 items-center justify-center rounded border border-transparent text-muted-foreground hover:border-border-2 hover:bg-surface-hover hover:text-red-600" onClick={() => onRemoveGroup(group.id)}>
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
+              {expanded ? (
+                <div className="max-h-56 space-y-0.5 overflow-auto border-t border-border px-2 py-1.5">
+                  {!zones.length ? <p className="text-[11px] text-muted-foreground">No zones to include yet.</p> : null}
+                  {zones.map((zone) => {
+                    const checked = zoneMembers.has(zone.id);
+                    const selected = selectedZoneId === zone.id;
+                    return (
+                      <div key={zone.id} className={`flex items-center gap-2 rounded px-1 py-0.5 text-body-sm ${selected ? "bg-blue-600 text-white" : "hover:bg-surface-hover"}`}>
+                        <input
+                          type="checkbox"
+                          className="accent-blue-600"
+                          checked={checked}
+                          aria-label={`Include ${zone.name || zone.id} in ${group.name}`}
+                          onChange={() => {
+                            onToggleGroupMember(group.id, "zone", zone.id);
+                            onSelectZone(zone.id);
+                          }}
+                        />
+                        <button
+                          type="button"
+                          className={`min-w-0 flex-1 truncate text-left ${selected ? "text-white" : ""}`}
+                          title={`Select ${zone.name || zone.id} on the canvas`}
+                          onClick={() => onSelectZone(zone.id)}
+                        >
+                          {zone.name || zone.id}
+                        </button>
+                        <span className={`shrink-0 font-mono text-[10px] ${selected ? "text-white/70" : "text-muted-foreground"}`}>{zone.id}</span>
+                      </div>
+                    );
+                  })}
+                  {nestedGroups.map((other) => {
+                    const blocked = wouldCreateGroupCycle(groups, group.id, other.id);
+                    return (
+                      <label key={other.id} className={`flex items-center gap-2 rounded px-1 py-0.5 text-body-sm ${blocked ? "cursor-not-allowed opacity-40" : "hover:bg-surface-hover"}`} title={blocked ? "This would create a group cycle." : undefined}>
+                        <input type="checkbox" className="accent-blue-600" disabled={blocked} checked={groupMembers.has(other.id)} onChange={() => onToggleGroupMember(group.id, "group", other.id)} />
+                        <span className="min-w-0 flex-1 truncate">Group · {other.name || other.id}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function wouldCreateGroupCycle(groups: DesignerGroupForm[], parentId: string, candidateId: string) {
+  if (parentId === candidateId) return true;
+  const stack = [candidateId];
+  const visited = new Set<string>();
+  while (stack.length) {
+    const id = stack.pop()!;
+    if (id === parentId) return true;
+    if (visited.has(id)) continue;
+    visited.add(id);
+    const group = groups.find((entry) => entry.id === id);
+    group?.members.filter((member) => member.type === "group").forEach((member) => stack.push(member.id));
+  }
+  return false;
 }
 
 function SortableLayerList({

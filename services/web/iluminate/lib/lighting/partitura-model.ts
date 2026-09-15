@@ -257,6 +257,22 @@ export function clonePartituraDocument(document: PartituraDocument) {
   return JSON.parse(JSON.stringify(document)) as PartituraDocument;
 }
 
+/** Builds a clip name/id that does not collide with the clips already in a scene. */
+export function createClipIdentity(clips: Array<{ id: string; name: string }>, labelPrefix = "Clip") {
+  const usedNames = new Set(clips.map((clip) => clip.name));
+  const usedIds = new Set(clips.map((clip) => clip.id));
+  let index = clips.length + 1;
+  while (usedNames.has(`${labelPrefix} ${index}`)) index += 1;
+  const stamp = Date.now();
+  let id = `clip_${stamp}_${index}`;
+  let suffix = 2;
+  while (usedIds.has(id)) {
+    id = `clip_${stamp}_${index}_${suffix}`;
+    suffix += 1;
+  }
+  return { id, name: `${labelPrefix} ${index}` };
+}
+
 export function normalizeDefaultSignLayout(document: PartituraDocument) {
   const fallback = createDefaultPartituraDocument(document.projectId);
   const source = clonePartituraDocument(document);
@@ -270,11 +286,11 @@ export function normalizeDefaultSignLayout(document: PartituraDocument) {
     scenes: scenes.map((scene) => ({
       ...scene,
       laneCount: Math.max(1, Math.round(positiveNumber(scene.laneCount, inferSceneLaneCount(scene.clips ?? [])))),
-      clips: (scene.clips ?? []).map((clip) => ({
+      clips: ensureUniqueClipNames((scene.clips ?? []).map((clip) => ({
         ...clip,
         target: targetIds.has(clip.target) ? clip.target : "full_sign",
         coordinateSpace: clip.coordinateSpace ?? "local"
-      }))
+      })))
     })),
     activeSceneId: scenes.some((scene) => scene.id === source.activeSceneId) ? source.activeSceneId : scenes[0]?.id ?? "normal",
     previewTimeMs: typeof source.previewTimeMs === "number" ? source.previewTimeMs : 0,
@@ -525,6 +541,23 @@ function positiveNumber(value: number | undefined, fallback: number) {
 
 function inferSceneLaneCount(clips: ClipForm[]) {
   return Math.max(1, ...clips.map((clip) => Math.max(0, Math.round(clip.layer)) + 1));
+}
+
+/** Keeps clip names distinguishable within a scene by suffixing repeated names. */
+function ensureUniqueClipNames(clips: ClipForm[]) {
+  const used = new Set<string>();
+  return clips.map((clip) => {
+    const name = typeof clip.name === "string" && clip.name ? clip.name : "Clip";
+    if (!used.has(name)) {
+      used.add(name);
+      return clip.name === name ? clip : { ...clip, name };
+    }
+    let suffix = 2;
+    while (used.has(`${name} ${suffix}`)) suffix += 1;
+    const next = `${name} ${suffix}`;
+    used.add(next);
+    return { ...clip, name: next };
+  });
 }
 
 function nonNegativeNumber(value: number | undefined, fallback: number) {

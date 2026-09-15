@@ -4,7 +4,7 @@ import * as React from "react";
 import { GripVertical, Pause, Play, Plus, Save, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { EffectDefinition, EffectParameterDefinition } from "@/lib/lighting/effect-catalog";
-import type { ClipForm, ClipParams, PartituraDocument, SceneForm } from "@/lib/lighting/partitura-model";
+import { createClipIdentity, type ClipForm, type ClipParams, type PartituraDocument, type SceneForm } from "@/lib/lighting/partitura-model";
 
 type Props = {
   document: PartituraDocument;
@@ -154,13 +154,13 @@ export function DesignerAnimateTimeline({
 
   function addClip(layer = laneCount) {
     if (!activeScene) return;
-    const next = activeScene.clips.length + 1;
+    const identity = createClipIdentity(activeScene.clips);
     const effect = effects.solid ?? Object.values(effects)[0];
     const defaultStart = 0;
     const clipDuration = Math.min(Math.max(1000, MIN_CLIP_MS), activeScene.durationMs);
     const clip: ClipForm = {
-      id: `clip_${Date.now()}_${next}`,
-      name: `Clip ${next}`,
+      id: identity.id,
+      name: identity.name,
       target: selectedTargetId && targets.some((target) => target.id === selectedTargetId) ? selectedTargetId : "full_sign",
       coordinateSpace: "local",
       effect: effect?.id ?? "solid",
@@ -306,9 +306,11 @@ export function DesignerAnimateTimeline({
                 {(activeScene.clips ?? []).map((clip) => {
                   const left = TRACK_GUTTER_WIDTH + timeToPx(clip.startMs, pxPerSecond);
                   const width = Math.max(34, timeToPx(clip.durationMs, pxPerSecond));
+                  const targetName = targets.find((target) => target.id === clip.target)?.name ?? clip.target;
                   return <ClipBlock
                     key={clip.id}
                     clip={clip}
+                    targetName={targetName}
                     left={left}
                     width={width}
                     top={HEADER_HEIGHT + Math.max(0, clip.layer) * ROW_HEIGHT + 7}
@@ -330,8 +332,18 @@ export function DesignerAnimateTimeline({
             </div>
           </div>
           <div className="min-h-0 overflow-auto border-l border-border-2 p-3">
-            <div className="mb-3 text-body-sm font-semibold">{selectedClip ? "Effect" : "Select a clip"}</div>
-            {selectedClip ? <ClipInspector clip={selectedClip} effect={effects[selectedClip.effect]} effects={effects} onChange={(patch) => updateClip(selectedClip.id, patch)} onDelete={() => removeClip(selectedClip.id)} /> : <div className="rounded-md border border-dashed p-4 text-body-sm text-muted-foreground">Select a zone, add a clip, then Play.</div>}
+            <div className="mb-3 text-body-sm font-semibold">{selectedClip ? selectedClip.name : "Select a clip"}</div>
+            {selectedClip ? <ClipInspector
+              clip={selectedClip}
+              targets={targets}
+              effect={effects[selectedClip.effect]}
+              effects={effects}
+              onChange={(patch) => {
+                updateClip(selectedClip.id, patch);
+                if (patch.target !== undefined) onClipTargetSelect?.(zoneTargetIds.has(patch.target) ? patch.target : null);
+              }}
+              onDelete={() => removeClip(selectedClip.id)}
+            /> : <div className="rounded-md border border-dashed p-4 text-body-sm text-muted-foreground">Select a zone, add a clip, then Play.</div>}
           </div>
         </div>
       </div>
@@ -339,8 +351,9 @@ export function DesignerAnimateTimeline({
   );
 }
 
-function ClipBlock({ clip, left, width, top, selected, dragging, onSelect, onDrag, onDelete }: {
+function ClipBlock({ clip, targetName, left, width, top, selected, dragging, onSelect, onDrag, onDelete }: {
   clip: ClipForm;
+  targetName: string;
   left: number;
   width: number;
   top: number;
@@ -361,7 +374,7 @@ function ClipBlock({ clip, left, width, top, selected, dragging, onSelect, onDra
       }}
       className={`absolute z-10 flex h-8 min-w-8 cursor-grab items-center overflow-hidden rounded border text-left text-meta shadow-sm ${dragging ? "cursor-grabbing" : ""} ${selected ? "border-primary bg-primary text-primary-foreground" : "border-border-strong bg-card hover:bg-surface-hover"}`}
       style={{ left, top, width }}
-      title={`${clip.name}: drag to move`}
+      title={`${clip.name} → ${targetName}: drag to move`}
     >
       <span className="flex h-full w-3 shrink-0 cursor-ew-resize items-center justify-center bg-black/10 hover:bg-black/20" onPointerDown={(event) => onDrag(event, "start")} title="Resize start">
         <GripVertical className="h-3 w-3" />
@@ -394,9 +407,10 @@ function TimelineGrid({ durationMs, laneCount, pxPerSecond }: { durationMs: numb
   </>;
 }
 
-function ClipInspector({ clip, effect, effects, onChange, onDelete }: { clip: ClipForm; effect?: EffectDefinition; effects: Record<string, EffectDefinition>; onChange: (patch: Partial<ClipForm>) => void; onDelete: () => void }) {
+function ClipInspector({ clip, targets, effect, effects, onChange, onDelete }: { clip: ClipForm; targets: Array<{ id: string; name: string }>; effect?: EffectDefinition; effects: Record<string, EffectDefinition>; onChange: (patch: Partial<ClipForm>) => void; onDelete: () => void }) {
   const definition = effect ?? effects.solid;
   return <div className="space-y-2">
+    <Select label="Target" value={clip.target} options={targets.map((target) => [target.id, target.name])} onChange={(target) => onChange({ target })} />
     <Select label="Effect" value={clip.effect} options={Object.values(effects).map((item) => [item.id, item.label])} onChange={(effectId) => onChange({ effect: effectId, params: defaultParams(effects[effectId]) })} />
     <Select label="Space" value={clip.coordinateSpace ?? "local"} options={[["serial", "Serial"], ["local", "Local target"], ["global", "Global sign"]]} onChange={(coordinateSpace) => onChange({ coordinateSpace: coordinateSpace as ClipForm["coordinateSpace"] })} />
     {definition ? <div className="space-y-2 border-t border-border-2 pt-3">{Object.entries(definition.parameters).map(([key, parameter]) => <ParameterInput key={key} name={key} definition={parameter} value={clip.params[key]} onChange={(value) => onChange({ params: { ...clip.params, [key]: value } })} />)}</div> : null}

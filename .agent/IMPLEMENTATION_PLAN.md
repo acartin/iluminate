@@ -222,8 +222,10 @@ UX direction after starting the Designer branch:
 - [ ] Resize clip duration with a timeline UI.
 - [ ] Add playback head in scene timeline.
 - [ ] Simulate LEDs over the uploaded SVG/image.
-- [ ] Make clips target canonical zones/groups resolved from pixelMap.
-- [ ] Formalize effect coordinate space: `serial`, `local`, and `global`.
+- [x] Make clips target canonical zones/groups resolved from pixelMap.
+- [x] Formalize effect coordinate space: `serial`, `local`, and `global`.
+- [x] Keep clip names unique per scene and select the clip target (zone or group)
+  from the Animate clip inspector.
 - [ ] Add deterministic simulator fixtures.
 - [ ] Compare web simulator output against expected effect cases.
 - [ ] Improve effect library enough for convincing demos before prioritizing firmware parity.

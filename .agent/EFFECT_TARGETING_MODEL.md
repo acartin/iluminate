@@ -90,3 +90,28 @@ primary entity, UI workflow, or required partitura target type.
 4. Resolve groups recursively and deduplicate their pixels.
 5. Make simulator and firmware-facing artifacts consume the same resolved pixel
    targets. Do not maintain a separate manual `zone -> segment` assignment.
+
+## Effect Implementation Structure
+
+Effects are modular in `services/lighting-core/domain/effects/`. Each effect is
+one file that exports an `EffectModule` (`{ definition, render }`), co-locating
+its metadata and its pixel renderer:
+
+```text
+domain/effects/
+  module.ts    # EffectModule, EffectRenderContext, EffectRenderer, EffectPixel, Rgb
+  color.ts     # parseColor, mixColors, scaleColor
+  math.ts      # clamp, clampByte, lerp, modulo, smoothstep, fbm, noise
+  <effect>.ts  # one file per effect
+  catalog.ts   # effectModules, effectCatalog, effectRenderers, isSupportedEffect
+```
+
+`render(context)` receives `{ params, progress, localTimeMs, index, total, pixel }`
+and returns an `Rgb`. `scene-player.ts` dispatches through `effectRenderers`; it
+must not hold per-effect logic.
+
+To add an effect: add the id to `EffectId`, create `domain/effects/<id>.ts`,
+register it in `effectModules`, and add a deterministic reference case. The
+`Record<EffectId, EffectModule>` type is exhaustive, so a missing module fails
+the build. Keep `effectCatalog` and `isSupportedEffect` as the public contract for
+the validator and the web API.

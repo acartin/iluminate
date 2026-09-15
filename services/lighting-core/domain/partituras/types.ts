@@ -7,7 +7,7 @@ export type LogicalOutput = (typeof LOGICAL_OUTPUTS)[number];
 export type TargetType = "installation" | "zone" | "group";
 export type EffectCoordinateSpace = "serial" | "local" | "global";
 export type BlendMode = "replace" | "add" | "max" | "multiply" | "alpha" | "mask";
-export type EffectId = "off" | "solid" | "fade" | "pulse" | "chase" | "toggle" | "flame" | "spatial_fill" | "spatial_wave";
+export type EffectId = "off" | "solid" | "fade" | "pulse" | "chase" | "toggle" | "flame" | "spatial_fill" | "spatial_wave" | "aurora";
 export type RgbColor = `#${string}`;
 
 export type PartituraTarget = { type: "installation" } | { type: "zone"; id: string } | { type: "group"; id: string };

@@ -109,6 +109,8 @@ The Designer separates four persisted visual layers:
 
 Each layer has `visible`, `locked` and `opacity`. Hidden layers do not render or receive selection. Locked layers remain visible but cannot be edited from the canvas/toolbox/top properties. Do not expose per-object visibility, lock or opacity controls in the layer tree.
 
+`Groups` are not a canvas layer and have no geometry. They are authored in a dedicated `Groups` section of the Layers panel: a named, cycle-free composition of zones and/or other groups. A clip that targets a group applies its effect to the union of the member zones' pixels, respecting each zone's geometry, and behaves as one composition when the clip uses `coordinateSpace: "global"`. Groups persist in `designer.groups` and compile into `compiledLayout.groups`.
+
 The right Layers panel is the active-plane selector. Exactly one layer is active at a time, and the active layer must have a clearly different background. Visibility and lock buttons are secondary controls, not the active selection state. Canvas editing only applies to the active layer: artwork image placement edits only when `Artwork` is active; build area/reference edits only when `Reference` is active; zones edit only when `Zones` is active; routes/controller edit only when `Strings` is active. Tools must not switch the active layer. The toolbox should show only the tools that apply to the active layer, plus global navigation/actions such as select, pan, zoom and delete.
 
 `Build Areas` are editable reference geometries. They are not containers and do not own/delete zones or strings. Multiple build areas may exist. They currently support rectangle, ellipse and polygon. The overall canvas can be larger to leave room for controller, cables and notes. Artwork image references should be positioned/scaled into a build area, not forced to occupy the whole canvas.
@@ -269,6 +271,13 @@ Layer panel:
   such as "Rotulo completo" behind smaller letter/logo zones.
 - The controller is fixed in the Strings layer; only data cables and LED strings
   are sortable.
+- A dedicated `Groups` section below `Zones` authors effect-target groups. It is
+  not a work plane: creating groups never changes the active layer. A new group
+  starts with every current zone as a member; uncheck the ones to exclude.
+  Checking a zone, or clicking its name, selects that zone on the canvas (and
+  activates the Zones plane) so it can be located. The member list also offers
+  nested groups; options that would create a cycle are disabled, and the
+  compiler also rejects cycles, unknown members and duplicate members.
 - The `Strings` layer may show visual subfolders such as `Data cables` and
   `LED strings` for clarity. These folders are not separate work planes and do
   not change the active layer. Reordering is allowed only within the same route
