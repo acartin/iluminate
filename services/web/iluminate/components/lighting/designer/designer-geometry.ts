@@ -330,7 +330,6 @@ export function pickDesignerHit(designer: DesignerForm, activeLayer: DesignerAct
   const tolerance = worldHitTolerance(viewport, canvasSize);
   if (activeLayer === "artwork" && designer.layers.artwork.visible && !designer.layers.artwork.locked) {
     for (const artwork of [...designer.artwork].reverse()) {
-      if (!artwork.visible || artwork.locked) continue;
       const resizeHit = pickResizeHandleHit(artwork, point, tolerance, "artwork_resize");
       if (resizeHit) return resizeHit;
       if (pointInsideRect(artwork, point, tolerance)) return { type: "artwork", id: artwork.id };
@@ -346,8 +345,7 @@ export function pickDesignerHit(designer: DesignerForm, activeLayer: DesignerAct
     }
   }
   if (activeLayer === "zones" && designer.layers.zones.visible && !designer.layers.zones.locked) {
-    for (const zone of [...designer.zones].reverse()) {
-      if (!zone.visible || zone.locked) continue;
+    for (const zone of designer.zones) {
       const pointHit = zone.shape === "polygon" && zone.points ? pickPolygonPointHit(zone.id, zone.points, point, tolerance, "zone_point") : null;
       if (pointHit) return pointHit;
       const resizeHit = pickResizeHandleHit(zone, point, tolerance, "zone_resize");
@@ -357,7 +355,6 @@ export function pickDesignerHit(designer: DesignerForm, activeLayer: DesignerAct
   }
   if (activeLayer === "reference" && designer.layers.reference.visible && !designer.layers.reference.locked) {
     for (const buildArea of [...designer.buildAreas].reverse()) {
-      if (!buildArea.visible || buildArea.locked) continue;
       const pointHit = buildArea.shape === "polygon" && buildArea.points ? pickPolygonPointHit(buildArea.id, buildArea.points, point, tolerance, "build_area_point") : null;
       if (pointHit) return pointHit;
       const resizeHit = pickResizeHandleHit(buildArea, point, tolerance, "build_area_resize");

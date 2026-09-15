@@ -93,6 +93,15 @@ Primary use:
 
 Iluminate does not model partitura revisions. When a user wants a variant, the application duplicates the partitura as a separate record in the same project. A project may therefore hold normal, seasonal or proposal programs, but only one is active at a time. The partitura JSON remains declarative. It must not contain firmware code, physical pin maps, credentials or FastLED array names.
 
+Authoritative data rule:
+
+```text
+document_json is the only editable partitura truth.
+document_json.compiledLayout and generated_json are derived.
+```
+
+`Save` persists `document_json` without compiling. `Compile` derives `document_json.compiledLayout` from the current Designer graph and persists the compiled document. `generated_json` is created only by a generate/publish flow from the current `document_json` plus a fresh `compiledLayout`; if authoring data changes afterward, `generated_json` is stale and must be cleared or regenerated.
+
 Current direction for `document_json`:
 
 - project construction settings;

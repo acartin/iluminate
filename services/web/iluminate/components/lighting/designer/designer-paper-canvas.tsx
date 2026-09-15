@@ -42,6 +42,8 @@ export type DesignerAnimationPixel = {
   color: { r: number; g: number; b: number };
 };
 
+export type DesignerAnimationDiffuser = "none" | "milky_white" | "day_night";
+
 export function DesignerStudioCanvas({
   designer,
   activeLayer,
@@ -69,6 +71,7 @@ export function DesignerStudioCanvas({
   presentation = "design",
   compiledLayout,
   animationPixels,
+  animationDiffusers,
   showRulers = designer.rulerVisible
 }: {
   designer: DesignerForm;
@@ -97,6 +100,7 @@ export function DesignerStudioCanvas({
   presentation?: "design" | "animate";
   compiledLayout?: CompiledDesignerLayout;
   animationPixels?: DesignerAnimationPixel[];
+  animationDiffusers?: Record<string, DesignerAnimationDiffuser>;
   showRulers?: boolean;
 }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -184,7 +188,7 @@ export function DesignerStudioCanvas({
 
     loadedPaper.setup(canvas);
     loadedPaper.view.viewSize = new loadedPaper.Size(canvasSize.width, canvasSize.height);
-    if (presentation === "animate" && compiledLayout) drawPaperAnimationMap({ designer, layout: compiledLayout, viewport, selectedZoneId, canvasSize, colorMode, animationPixels });
+    if (presentation === "animate" && compiledLayout) drawPaperAnimationMap({ designer, layout: compiledLayout, viewport, selectedZoneId, canvasSize, colorMode, animationPixels, animationDiffusers });
     else drawPaperDesigner({
       designer,
       activeLayer,
@@ -203,7 +207,7 @@ export function DesignerStudioCanvas({
       colorMode
     });
     loadedPaper.view.update();
-  }, [activeLayer, animationPixels, canvasSize, colorMode, compiledLayout, designer, measurement, paperReady, presentation, routeDraft, selectedBuildAreaId, selectedBuildAreaPointIndex, selectedController, selectedRouteId, selectedRoutePointIndex, selectedZoneId, selectedZonePointIndex, shapeDraft, viewport]);
+  }, [activeLayer, animationDiffusers, animationPixels, canvasSize, colorMode, compiledLayout, designer, measurement, paperReady, presentation, routeDraft, selectedBuildAreaId, selectedBuildAreaPointIndex, selectedController, selectedRouteId, selectedRoutePointIndex, selectedZoneId, selectedZonePointIndex, shapeDraft, viewport]);
 
   useEffect(() => {
     if (activeLayer !== "strings" || (tool !== "led_string" && tool !== "data_cable")) setRouteDraft(null);
@@ -501,7 +505,7 @@ export function DesignerStudioCanvas({
   }
 
   function snapTerminalPoint(routeId: string, pointIndex: number, point: DesignerPoint) {
-    const captureRadiusCm = 10 * viewport.width / Math.max(1, canvasSize.width);
+    const captureRadiusCm = 16 * viewport.width / Math.max(1, canvasSize.width);
     const route = designer.routes.find((entry) => entry.id === routeId);
     const controllerPort = route ? findNearbyControllerPort(designer.controller, route, pointIndex, point, captureRadiusCm, designer.snapCm) : null;
     const solderTarget = !controllerPort ? findNearbySolderTerminal(designer.routes, routeId, pointIndex, point, captureRadiusCm) : null;
@@ -512,7 +516,7 @@ export function DesignerStudioCanvas({
     if (presentation === "animate") {
       const point = eventPoint(event);
       const tolerance = worldHitTolerance(viewport, canvasSize) * 2;
-      const zone = [...designer.zones].reverse().find((candidate) => candidate.visible && (pointInsideDesignerShape(candidate, point) || pointNearShapeStroke(candidate, point, tolerance)));
+      const zone = designer.zones.find((candidate) => pointInsideDesignerShape(candidate, point) || pointNearShapeStroke(candidate, point, tolerance));
       if (zone) { onSelect({ type: "zone", id: zone.id }); return; }
       onSelect(null);
       startPanDrag(event);
@@ -696,7 +700,6 @@ export function DesignerStudioCanvas({
         {presentation === "design" && designer.layers.artwork.visible ? (
           <div className="pointer-events-none absolute inset-0">
             {designer.artwork.map((artwork) => {
-              if (!artwork.visible) return null;
               const url = artworkUrls[artwork.assetId];
               if (!url) return null;
               const left = ((artwork.x - viewport.x) / viewport.width) * 100;
@@ -707,7 +710,7 @@ export function DesignerStudioCanvas({
                 <div
                   key={artwork.id}
                   className={`absolute overflow-hidden ${selectedArtworkId === artwork.id ? "ring-2 ring-cyan-300" : "ring-1 ring-white/15"}`}
-                  style={{ left: `${left}%`, top: `${top}%`, width: `${width}%`, height: `${height}%`, opacity: designer.layers.artwork.opacity * artwork.opacity }}
+                  style={{ left: `${left}%`, top: `${top}%`, width: `${width}%`, height: `${height}%`, opacity: designer.layers.artwork.opacity }}
                 >
                   <img src={url} alt={artwork.name} className="h-full w-full object-contain" draggable={false} />
                   {selectedArtworkId === artwork.id ? (

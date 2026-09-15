@@ -20,4 +20,6 @@ The current firmware-facing generated artifact is stored as JSON:
 iluminate.partituras.generated_json
 ```
 
-Segments, zones, scenes and clips remain nested inside the partitura document at this stage. See `docs/partitura-lifecycle.md`.
+`document_json` is the only editable source of truth. `document_json.compiledLayout` is derived by the Designer `Compile` action, and `generated_json` is derived later for firmware download. Neither derived value should be edited directly or treated as the source for UI authoring.
+
+Designer objects, zones, groups, scenes and clips remain nested inside the partitura document at this stage. See `docs/partitura-lifecycle.md`.

@@ -143,17 +143,22 @@ Iluminate does not model partitura revisions.
 
 ## Persistence Implication
 
-Continuing with in-memory partitura state will cause UI rework later. Before
-building more simulator/editor surface, introduce a stable persistence model:
+The partitura editor is backed by PostgreSQL. The stable persistence model is:
 
 - `iluminate.projects`: client-scoped installation/project.
 - `iluminate.partituras`: one editable current partitura per project.
-- Child configuration may be persisted either as normalized child tables or as a
-  JSON document while the editor model stabilizes, but the API contract must
-  expose resources in the same shape used by the workspace grids.
+- `iluminate.partituras.document_json`: the only editable partitura source of
+  truth.
+- `document_json.compiledLayout`: derived by explicit `Compile`; not edited
+  directly.
+- `iluminate.partituras.generated_json`: derived firmware artifact; not edited
+  directly.
 
-The web should stop treating the Partitura Generator as a temporary local-only
-workbench. It should become the partitura workspace backed by API/storage.
+`Save` persists `document_json` and must not silently compile. `Compile`
+regenerates `compiledLayout`, clears stale preview/generated artifacts and saves
+the compiled document. Scene/clip/effect edits do not require physical compile
+when the Designer signature is still current, but they do invalidate preview and
+generated firmware artifacts.
 
 ## Implementation Mandate
 
@@ -167,4 +172,3 @@ Before changing Iluminate UI:
 6. Use shared CRUD dialogs/actions.
 7. Add persistence when the screen edits business resources that must survive
    navigation or later deployment.
-

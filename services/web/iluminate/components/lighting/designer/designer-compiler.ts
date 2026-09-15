@@ -1,5 +1,5 @@
 import type { DesignerForm, DesignerPoint, DesignerRouteForm, PartituraDocument } from "@/lib/lighting/partitura-model";
-import { controllerPortPoint, pointInsideDesignerShape, sameSnapPoint, sampleRouteLedDots } from "./designer-geometry";
+import { controllerPortPoint, pointInsideDesignerShape, pointNearShapeStroke, sameSnapPoint, sampleRouteLedDots } from "./designer-geometry";
 
 export type CompiledDesignerLayout = {
   outputs: Array<{ id: string; name: string; output: 1 | 2 | 3; pixelCount: number }>;
@@ -42,20 +42,43 @@ export function compileDesignerLayout(designer: DesignerForm): CompiledDesignerL
     });
   });
 
-  designer.routes.filter((route) => route.kind === "led_string" && !ordered.some((entry) => entry.route.id === route.id)).forEach((route) => {
-    warnings.push(`${route.name} has no valid controller signal path and is excluded.`);
-  });
+  const routedLedStringIds = new Set(ordered.filter((entry) => entry.route.kind === "led_string").map((entry) => entry.route.id));
+  const disconnectedLedStrings = designer.routes.filter((route) => route.kind === "led_string" && !routedLedStringIds.has(route.id));
+  if (disconnectedLedStrings.length) {
+    warnings.push(`${disconnectedLedStrings.length} LED string${disconnectedLedStrings.length === 1 ? "" : "s"} are not connected to a controller output and will be ignored: ${disconnectedLedStrings.map((route) => route.name).join(", ")}.`);
+  }
+  if (!pixelMap.length) {
+    errors.push("No mapped pixels were generated. At least one LED string must be connected to a controller output through a soldered data path.");
+  }
 
+  const pixelFootprintRadiusCm = Math.max(0.25, Math.min(1.25, 100 / Math.max(1, designer.addressablePixelsPerMeter) * 0.55));
   const zones = designer.zones.map((zone) => ({
     id: zone.id,
     name: zone.name,
-    pixelIds: pixelMap.filter((pixel) => pointInsideDesignerShape(zone, { x: pixel.x, y: pixel.y })).map((pixel) => pixel.id)
+    pixelIds: pixelMap.filter((pixel) => pixelTouchesZone(zone, { x: pixel.x, y: pixel.y }, pixelFootprintRadiusCm)).map((pixel) => pixel.id)
   }));
   zones.filter((zone) => !zone.pixelIds.length).forEach((zone) => warnings.push(`${zone.name} contains no mapped pixels.`));
   const groups = [...designer.groups];
   if (zones.length) groups.push({ id: "full_sign", name: "Full sign", members: zones.map((zone) => ({ type: "zone" as const, id: zone.id })) });
   const outputs: CompiledDesignerLayout["outputs"] = ([1, 2, 3] as const).map((output) => ({ id: `output_${output}`, name: `Output ${output}`, output, pixelCount: serialStarts[output] }));
   return { outputs, pixelMap, zones, groups, validation: { errors, warnings } };
+}
+
+function pixelTouchesZone(zone: DesignerForm["zones"][number], point: DesignerPoint, radiusCm: number) {
+  if (pointInsideDesignerShape(zone, point)) return true;
+  if (pointNearShapeStroke(zone, point, radiusCm)) return true;
+  const diagonal = radiusCm * 0.7071;
+  const samples = [
+    { x: point.x - radiusCm, y: point.y },
+    { x: point.x + radiusCm, y: point.y },
+    { x: point.x, y: point.y - radiusCm },
+    { x: point.x, y: point.y + radiusCm },
+    { x: point.x - diagonal, y: point.y - diagonal },
+    { x: point.x + diagonal, y: point.y - diagonal },
+    { x: point.x + diagonal, y: point.y + diagonal },
+    { x: point.x - diagonal, y: point.y + diagonal }
+  ];
+  return samples.some((sample) => pointInsideDesignerShape(zone, sample));
 }
 
 /** Retained only as a temporary compile command return shape for the Designer UI. */
@@ -71,12 +94,17 @@ export function buildDocumentFromDesigner(document: PartituraDocument): Partitur
 function orderedRoutesByOutput(designer: DesignerForm, errors: string[], warnings: string[]): Array<{ output: 1 | 2 | 3; route: DesignerRouteForm }> {
   const result: Array<{ output: 1 | 2 | 3; route: DesignerRouteForm }> = [];
   const visited = new Set<string>();
+  let rootedOutputs = 0;
   for (let portIndex = 0; portIndex < designer.controller.dataOutputs; portIndex += 1) {
     const output = (portIndex + 1) as 1 | 2 | 3;
     const port = controllerPortPoint(designer.controller, portIndex, designer.snapCm);
     const roots = designer.routes.filter((route) => route.kind === "data_cable" && terminalMatches(route.points[0], port, designer.snapCm));
     if (roots.length > 1) errors.push(`Output ${output} has multiple data-cable starts.`);
+    if (roots.length) rootedOutputs += 1;
     roots.forEach((route) => walk(route, output));
+  }
+  if (!rootedOutputs && designer.routes.some((route) => route.kind === "led_string")) {
+    errors.push("No controller output has a soldered data cable. Move a green cable start exactly onto a red controller output terminal until it snaps/solders.");
   }
   return result;
 

@@ -32,6 +32,8 @@ The Designer is intentionally fabrication-oriented. It is not a raw matrix edito
   - `designer-geometry.ts`: snap, bounds, hit testing, route sampling, solder/wiring helpers and ruler math.
   - `designer-compiler.ts`: compiles visual routes into the physical pixelMap and resolves visual targets from zones/groups.
   - `designer-ui.tsx`: toolbox buttons, contextual fields, layers panel and rulers.
+  - `designer-webgl-player.tsx`: Animate player surface; owns viewport, Pixi mounting and zone selection.
+  - `rendering/designer-player-renderers.ts`: isolated Animate renderers for direct LED pixels and acrylic diffuser preview.
 - Grid wrapper: `services/web/iluminate/components/lighting/partitura-designer-workbench.tsx`
 - Model/defaults/normalization: `services/web/iluminate/lib/lighting/partitura-model.ts`
 - Server persistence: `services/web/iluminate/lib/server/partituras.ts`
@@ -91,7 +93,7 @@ Do not put default zones/routes underneath the controller. If a screenshot shows
 
 Do not assume one addressable pixel is always one physical LED.
 
-- `Pixels/m` means addressable WS281x pixels per meter. This is the density used to compile segments, chain counts, pixel indices and firmware frames.
+- `Pixels/m` means addressable WS281x pixels per meter. This is the density used to sample LED routes, output counts, serial indices, pixelMap rows and firmware frames.
 - `LEDs/m` means physical light emitters per meter. This is used by the Designer/simulator to preview how a real 5V, 12V or 24V strip may look.
 - `LEDs/px` is derived from `LEDs/m / Pixels/m`. Examples: WS2812B 5V is normally `1 LED/px`; many WS2811 12V strips are around `3 LEDs/px`; some 24V strips may be around `6 LEDs/px`.
 - The firmware still emits WS281x frames by addressable pixel. Electrical implementation beyond the data output is not part of the partitura contract.
@@ -100,12 +102,12 @@ Do not assume one addressable pixel is always one physical LED.
 
 The Designer separates four persisted visual layers:
 
-- `Artwork`: imported client/project image assets placed on the canvas. It renders image references only, does not duplicate/upload assets, and does not generate LEDs. Each item persists `assetId`, name, rectangle, visibility, lock and opacity.
+- `Artwork`: imported client/project image assets placed on the canvas. It renders image references only, does not duplicate/upload assets, and does not generate LEDs. Each item persists `assetId`, name and rectangle. Older JSON may still contain item-level visibility/lock/opacity fields, but the UI/rendering policy is to control visibility, lock and opacity at the layer/category level only.
 - `Reference`: measured construction/reference geometry such as build areas. It does not generate LEDs.
 - `Zones`: visual targets such as letters, logos, background and full sign.
 - `Strings`: physical fabrication plane containing LED strings, data cables, terminals, joints and the controller.
 
-Each layer has `visible`, `locked` and `opacity`. Hidden layers do not render or receive selection. Locked layers remain visible but cannot be edited from the canvas/toolbox/top properties.
+Each layer has `visible`, `locked` and `opacity`. Hidden layers do not render or receive selection. Locked layers remain visible but cannot be edited from the canvas/toolbox/top properties. Do not expose per-object visibility, lock or opacity controls in the layer tree.
 
 The right Layers panel is the active-plane selector. Exactly one layer is active at a time, and the active layer must have a clearly different background. Visibility and lock buttons are secondary controls, not the active selection state. Canvas editing only applies to the active layer: artwork image placement edits only when `Artwork` is active; build area/reference edits only when `Reference` is active; zones edit only when `Zones` is active; routes/controller edit only when `Strings` is active. Tools must not switch the active layer. The toolbox should show only the tools that apply to the active layer, plus global navigation/actions such as select, pan, zoom and delete.
 
@@ -147,6 +149,11 @@ No tolerance-based soldering.
 No hidden auto-moving terminals.
 Only exact same grid snap point solders.
 ```
+
+The canvas may use proximity only as an editing aid while dragging, so the
+moving terminal lands exactly on the target snap point. The compiler must never
+infer electrical continuity from nearby points. Compilation reads only persisted
+coordinates plus `joint: true`.
 
 Route-to-route soldering:
 
@@ -241,11 +248,108 @@ Top command/context bars:
 - Canvas settings: ruler unit, ruler visibility, width, height, LED density, snap.
 - Selected object properties appear in the contextual bar.
 
+Layer panel:
+
+- Uses `@dnd-kit/core` and `@dnd-kit/sortable` for drag/reorder.
+- Main categories are containers only: `Artwork`, `Reference`, `Zones`, and
+  `Strings`. Do not add "new category" actions there. Creation tools operate
+  inside the currently active category/layer.
+- Visibility, lock and opacity are category-level controls only. Do not add
+  per-object eye/lock/opacity controls in the layer tree; that made the UI noisy
+  and hid the object names.
+- Object rows should prioritize the complete object name. Keep inline row
+  actions minimal: reorder grip, rename, and open details. The details action
+  opens a modal/popup where large object metadata can live without crowding the
+  layer tree.
+- The order persisted in the existing arrays is the visual/editing order:
+  `artwork`, `buildAreas`, `zones`, and `routes`.
+- The layer panel order is front-to-back. Items at the top of a category are
+  visually in front and receive hit-testing first. Items at the bottom are in
+  the background. Reordering a zone is the intended way to place broad shapes
+  such as "Rotulo completo" behind smaller letter/logo zones.
+- The controller is fixed in the Strings layer; only data cables and LED strings
+  are sortable.
+- The `Strings` layer may show visual subfolders such as `Data cables` and
+  `LED strings` for clarity. These folders are not separate work planes and do
+  not change the active layer. Reordering is allowed only within the same route
+  kind; do not drag data cables into LED strings or vice versa.
+- Layer ordering is an authoring/selection concern. It must not change the
+  physical wiring graph, generated serial order or firmware protocol.
+
+## Source Of Truth And Runtime Cache Rules
+
+The canonical editable state is `iluminate.partituras.document_json`.
+
+Derived state:
+
+- `document_json.compiledLayout`: generated by `Compile`; never edited directly.
+- `iluminate.partituras.generated_json`: generated firmware/device artifact; never edited directly.
+- Animate/player results: temporary browser/runtime cache only; never source of truth.
+
+Required behavior:
+
+- `Save` persists the current `document_json` only. It must not silently compile.
+- `Compile` regenerates `compiledLayout`, clears stale animation preview/generated artifacts, and saves the compiled document.
+- `Compile` belongs to Design mode. Do not show it inside Animate.
+- Animate/Preview must use the current `document_json` plus a fresh `compiledLayout`. It must not reuse an old generated partitura after Designer or clip edits.
+- Designer physical edits invalidate `compiledLayout`, animation preview and generated firmware artifact.
+- Scene/clip/effect edits do not invalidate the physical compile when the Designer signature is unchanged, but they do invalidate animation preview and generated firmware artifact.
+- `generated_json` is for firmware download only. Designer must never reload or edit from `generated_json`.
+
+## Animate Rendering Architecture
+
+Animate rendering is intentionally separated from Designer authoring and from
+timeline state.
+
+```text
+Designer document_json
+-> Compile creates compiledLayout.pixelMap
+-> Animate/effects create frame colors per pixel
+-> Player surface handles viewport, pan/zoom and selection
+-> Renderer module draws direct LED pixels or diffuser simulation
+```
+
+`designer-webgl-player.tsx` must remain a thin surface/container. Do not place
+optical diffusion math, material presets or pixel drawing algorithms directly in
+that component. Renderer implementations live under:
+
+```text
+services/web/iluminate/components/lighting/designer/rendering/
+```
+
+Current renderer module:
+
+- `renderDirectLedFrame`: Pixi/WebGL direct pixel renderer.
+- `renderDiffuserFrame`: canvas-based acrylic diffuser renderer.
+- `DiffuserRenderSettings`: temporary calibration controls for distance,
+  intensity and after-zone glow. Intensity is intentionally rendered with extra
+  gain so the maximum slider value reaches a visibly saturated acrylic
+  simulation. After-zone glow is measured in real centimeters and is allowed to
+  spill softly outside the zone only when the user raises that control.
+
+Diffuser rendering must behave like a light field, not a zone color wash. Each
+active LED contributes local energy around its physical `pixelMap` position.
+Those contributions accumulate and are clipped by the zone geometry. A single
+LED near the bottom of a large zone must not illuminate the entire zone. Uniform
+coverage should emerge only when enough LED contributions overlap because of
+physical spacing, diffuser distance and material scatter.
+
+Overlapping zones need special handling in diffuser mode. A large "full sign"
+zone is useful as an effect target, but it must not visually double-paint light
+over smaller letter/logo zones. The current renderer assigns each mapped pixel
+to the smallest visible zone containing it for diffuser drawing. This keeps
+global effects usable without producing a full-canvas blur when a broad target
+overlaps detailed zones.
+
+Future renderer experiments may replace the canvas diffuser renderer with a
+Pixi/WebGL shader or render-texture implementation, but they must consume the
+same `compiledLayout`, frame colors, viewport and diffuser settings contract.
+
 ## Current Limitations
 
 - Reference image import is still pending. The product should support SVG plus raster image references such as JPG, PNG, BMP and WebP.
 - Freehand trace is pending. AI trace is intentionally out of scope for now.
-- The first electrical validation covers missing controller signal paths, multiple output roots and serial branches. It must pass before Animate is enabled.
+- The first electrical validation covers missing controller signal paths, disconnected LED strings, multiple output roots and serial branches. Missing controller roots, multiple roots and serial branches are blocking errors. Disconnected LED strings are summarized as warnings while the operator is still drafting. The UI must show concrete validation messages on demand instead of a permanent, canvas-blocking error panel.
 - Cutting welded joints needs a future UX decision.
 - LED density changes do not yet reset/recompute routing with a warning.
 - Raw pixelMap should remain hidden from normal operators.

@@ -129,6 +129,7 @@ export type SceneForm = {
   name: string;
   loop: boolean;
   durationMs: number;
+  laneCount?: number;
   clips: ClipForm[];
 };
 
@@ -173,6 +174,7 @@ export function createDefaultPartituraDocument(projectId = "web_test_partitura")
         name: "Normal",
         loop: true,
         durationMs: 4000,
+        laneCount: 3,
         clips: [
           {
             id: "clip_zone_1_solid",
@@ -229,6 +231,7 @@ export function createDefaultPartituraDocument(projectId = "web_test_partitura")
         name: "Calibration",
         loop: true,
         durationMs: 10000,
+        laneCount: 1,
         clips: [
           { id: "cal_red", name: "Red", target: "full_sign", effect: "solid", blend: "replace", startMs: 0, durationMs: 1000, layer: 0, params: { color: "#FF0000" } },
           { id: "cal_green", name: "Green", target: "full_sign", effect: "solid", blend: "replace", startMs: 1000, durationMs: 1000, layer: 0, params: { color: "#00FF00" } },
@@ -266,6 +269,7 @@ export function normalizeDefaultSignLayout(document: PartituraDocument) {
     projectId: source.projectId || fallback.projectId,
     scenes: scenes.map((scene) => ({
       ...scene,
+      laneCount: Math.max(1, Math.round(positiveNumber(scene.laneCount, inferSceneLaneCount(scene.clips ?? [])))),
       clips: (scene.clips ?? []).map((clip) => ({
         ...clip,
         target: targetIds.has(clip.target) ? clip.target : "full_sign",
@@ -517,6 +521,10 @@ function normalizeController(controller: DesignerControllerForm | undefined, fal
 
 function positiveNumber(value: number | undefined, fallback: number) {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function inferSceneLaneCount(clips: ClipForm[]) {
+  return Math.max(1, ...clips.map((clip) => Math.max(0, Math.round(clip.layer)) + 1));
 }
 
 function nonNegativeNumber(value: number | undefined, fallback: number) {

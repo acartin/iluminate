@@ -67,12 +67,11 @@ export function drawPaperDesigner({
 
   if (designer.layers.reference.visible) {
     const layerOpacity = designer.layers.reference.opacity;
-    designer.buildAreas.forEach((buildArea) => {
-      if (!buildArea.visible) return;
+    [...designer.buildAreas].reverse().forEach((buildArea) => {
       drawPaperBuildArea(buildArea, {
         selected: selectedBuildAreaId === buildArea.id,
         selectedPointIndex: selectedBuildAreaId === buildArea.id ? selectedBuildAreaPointIndex : undefined,
-        opacity: layerOpacity * buildArea.opacity,
+        opacity: layerOpacity,
         toScreen,
         rectToScreen
       });
@@ -81,12 +80,11 @@ export function drawPaperDesigner({
 
   if (designer.layers.zones.visible) {
     const layerOpacity = designer.layers.zones.opacity;
-    designer.zones.forEach((zone) => {
-      if (!zone.visible) return;
+    [...designer.zones].reverse().forEach((zone) => {
       drawPaperZone(zone, {
         selected: selectedZoneId === zone.id,
         selectedPointIndex: selectedZoneId === zone.id ? selectedZonePointIndex : undefined,
-        opacity: layerOpacity * zone.opacity,
+        opacity: layerOpacity,
         toScreen,
         rectToScreen
       });
@@ -109,6 +107,7 @@ export function drawPaperDesigner({
     drawPaperController(designer.controller, {
       selected: selectedController,
       connectedPorts: controllerConnectedPorts(designer.controller, designer.routes, designer.snapCm),
+      snapCm: designer.snapCm,
       toScreen,
       rectToScreen,
       lengthToScreen
@@ -120,7 +119,7 @@ export function drawPaperDesigner({
 }
 
 /** Animation presentation: same Paper geometry and viewport as Designer, without fabrication layers. */
-export function drawPaperAnimationMap({ designer, layout, viewport, selectedZoneId, canvasSize, colorMode, animationPixels = [] }: {
+export function drawPaperAnimationMap({ designer, layout, viewport, selectedZoneId, canvasSize, colorMode, animationPixels = [], animationDiffusers = {} }: {
   designer: DesignerForm;
   layout: CompiledDesignerLayout;
   viewport: DesignerViewport;
@@ -128,6 +127,7 @@ export function drawPaperAnimationMap({ designer, layout, viewport, selectedZone
   canvasSize: { width: number; height: number };
   colorMode: "day" | "night";
   animationPixels?: Array<{ output: number; serialIndex: number; color: { r: number; g: number; b: number } }>;
+  animationDiffusers?: Record<string, "none" | "milky_white" | "day_night">;
 }) {
   const colors = colorMode === "night" ? { workspace: "#020617", document: "#090d16", documentStroke: "#1e293b", grid: "#334155", label: "#94a3b8" } : { workspace: "#e2e8f0", document: "#ffffff", documentStroke: "#94a3b8", grid: "#94a3b8", label: "#475569" };
   paperScope.project.clear();
@@ -135,20 +135,48 @@ export function drawPaperAnimationMap({ designer, layout, viewport, selectedZone
   const rectToScreen = (shape: { x: number; y: number; width: number; height: number }) => new paperScope.Rectangle(toScreen({ x: shape.x, y: shape.y }), toScreen({ x: shape.x + shape.width, y: shape.y + shape.height }));
   new paperScope.Path.Rectangle({ rectangle: new paperScope.Rectangle(0, 0, canvasSize.width, canvasSize.height), fillColor: colors.workspace });
   new paperScope.Path.Rectangle({ rectangle: rectToScreen({ x: 0, y: 0, width: designer.canvasWidthCm, height: designer.canvasHeightCm }), fillColor: colors.document, strokeColor: colors.documentStroke, strokeWidth: 1.2 });
-  designer.zones.filter((zone) => zone.visible).forEach((zone) => {
+  [...designer.zones].reverse().forEach((zone) => {
     const selected = zone.id === selectedZoneId;
     const path = drawPaperClosedShape(zone, { fillColor: selected ? "rgba(37,99,235,0.25)" : "rgba(100,116,139,0.11)", strokeColor: selected ? "#60a5fa" : "#475569", strokeWidth: selected ? 2.2 : 1.15, toScreen, rectToScreen });
-    path.opacity = zone.opacity;
+    path.opacity = designer.layers.zones.opacity;
     new paperScope.PointText({ point: toScreen({ x: zone.x + 1.2, y: zone.y + 2.5 }), content: zone.name, fillColor: selected ? "#bfdbfe" : colors.label, fontFamily: "sans-serif", fontSize: selected ? 13 : 11, opacity: selected ? 1 : 0.8 });
   });
   const renderedColors = new Map(animationPixels.map((pixel) => [`${pixel.output}:${pixel.serialIndex}`, pixel.color]));
+  const designerZones = new Map(designer.zones.map((zone) => [zone.id, zone]));
+  const zonesByPixel = new Map<string, DesignerZoneForm[]>();
+  layout.zones.forEach((zone) => {
+    const designerZone = designerZones.get(zone.id);
+    if (!designerZone) return;
+    zone.pixelIds.forEach((pixelId) => {
+      const zones = zonesByPixel.get(pixelId) ?? [];
+      zones.push(designerZone);
+      zonesByPixel.set(pixelId, zones);
+    });
+  });
   layout.pixelMap.forEach((pixel) => {
     const point = toScreen(pixel);
     const selected = selectedZoneId ? designer.zones.some((zone) => zone.id === selectedZoneId && pointInsideDesignerShape(zone, pixel)) : false;
     const dotSize = Math.max(3, Math.min(9, (100 / Math.max(1, designer.addressablePixelsPerMeter)) * canvasSize.width / viewport.width * 1.35));
     const rendered = renderedColors.get(`${pixel.output}:${pixel.serialIndex}`);
     const fillColor = rendered ? `rgb(${rendered.r}, ${rendered.g}, ${rendered.b})` : selected ? "#60a5fa" : "#64748b";
-    new paperScope.Path.Rectangle({ rectangle: new paperScope.Rectangle(point.x - dotSize / 2, point.y - dotSize / 2, dotSize, dotSize), radius: Math.min(2, dotSize / 4), fillColor, strokeColor: selected ? "#dbeafe" : "#1e293b", strokeWidth: 0.75 });
+    const zone = (zonesByPixel.get(pixel.id) ?? []).find((entry) => entry.id === selectedZoneId) ?? zonesByPixel.get(pixel.id)?.[0];
+    const diffuser = zone ? animationDiffusers[zone.id] ?? animationDiffusers.full_sign ?? "none" : animationDiffusers.full_sign ?? "none";
+    if (diffuser !== "none") {
+      const glowSize = dotSize * (diffuser === "day_night" ? 4.4 : 5.2);
+      const color = rendered ?? { r: 70, g: 85, b: 105 };
+      new paperScope.Path.Circle({
+        center: point,
+        radius: glowSize,
+        fillColor: `rgba(${color.r}, ${color.g}, ${color.b}, ${rendered ? 0.22 : 0.08})`
+      });
+      new paperScope.Path.Circle({
+        center: point,
+        radius: glowSize * 0.42,
+        fillColor: `rgba(${color.r}, ${color.g}, ${color.b}, ${rendered ? 0.55 : 0.14})`
+      });
+    } else {
+      new paperScope.Path.Rectangle({ rectangle: new paperScope.Rectangle(point.x - dotSize / 2, point.y - dotSize / 2, dotSize, dotSize), radius: Math.min(2, dotSize / 4), fillColor, strokeColor: selected ? "#dbeafe" : "#1e293b", strokeWidth: 0.75 });
+    }
   });
   new paperScope.PointText({ point: new paperScope.Point(18, canvasSize.height - 16), content: `${layout.pixelMap.length} mapped pixels`, fillColor: colors.label, fontFamily: "monospace", fontSize: 11 });
 }
@@ -438,14 +466,26 @@ function drawPaperRoute(route: DesignerRouteForm, options: {
   toScreen: (point: DesignerPoint) => PaperPoint;
   lengthToScreen: (cm: number) => number;
 }) {
+  const strokeColor = options.selected ? routeSelectedColor(route.kind) : routeColor(route);
+  const mainWidth = route.kind === "data_cable" ? (options.selected ? 3.2 : 2.2) : (options.selected ? 3.4 : 1.8);
+  const shadowWidth = mainWidth + 2.2;
+  const shadow = new paperScope.Path({
+    strokeColor: "#020617",
+    strokeWidth: shadowWidth,
+    strokeCap: "round",
+    strokeJoin: "round"
+  });
+  route.points.forEach((point) => shadow.add(options.toScreen(point)));
+  shadow.opacity = Math.min(0.45, Math.max(0.22, options.opacity * 0.38));
+
   const path = new paperScope.Path({
-    strokeColor: options.selected ? routeSelectedColor(route.kind) : routeColor(route),
-    strokeWidth: route.kind === "data_cable" ? (options.selected ? 2.8 : 1.4) : (options.selected ? 3 : 1.1),
+    strokeColor,
+    strokeWidth: mainWidth,
     strokeCap: "round",
     strokeJoin: "round"
   });
   route.points.forEach((point) => path.add(options.toScreen(point)));
-  path.opacity = options.opacity;
+  path.opacity = Math.max(0.88, options.opacity);
   if (route.kind === "led_string") {
     // WS2812B "5050" packages are approximately 5 x 5 mm.
     const packageSide = Math.max(1.5, options.lengthToScreen(0.5));
@@ -453,10 +493,10 @@ function drawPaperRoute(route: DesignerRouteForm, options: {
       const center = options.toScreen(dot);
       const ledPackage = new paperScope.Path.Rectangle({
         rectangle: new paperScope.Rectangle(center.x - packageSide / 2, center.y - packageSide / 2, packageSide, packageSide),
-        fillColor: options.selected ? "#f0abfc" : "#f59e0b",
-        strokeColor: options.selected ? "#831843" : dot.addressableIndex % 2 === 0 ? "#020617" : "#78350f",
+        fillColor: options.selected ? "#f0abfc" : "#fbbf24",
+        strokeColor: options.selected ? "#831843" : "#92400e",
         strokeWidth: options.selected ? 1.3 : 0.8,
-        opacity: options.selected ? 1 : dot.addressableIndex % 2 === 0 ? 1 : 0.82
+        opacity: 1
       });
       ledPackage.rotate(dot.angle, center);
     });
@@ -514,6 +554,7 @@ function drawPaperArrowMarker(marker: { x: number; y: number; angle: number }, k
 function drawPaperController(controller: DesignerControllerForm, options: {
   selected: boolean;
   connectedPorts: Set<number>;
+  snapCm: number;
   toScreen: (point: DesignerPoint) => PaperPoint;
   rectToScreen: (shape: { x: number; y: number; width: number; height: number }) => PaperRectangle;
   lengthToScreen: (cm: number) => number;
@@ -535,7 +576,7 @@ function drawPaperController(controller: DesignerControllerForm, options: {
   });
   const portSpacing = controller.height / (controller.dataOutputs + 1);
   for (let portIndex = 0; portIndex < controller.dataOutputs; portIndex += 1) {
-    const port = controllerPortPoint(controller, portIndex, 0.1);
+    const port = controllerPortPoint(controller, portIndex, options.snapCm);
     new paperScope.Path.Circle({
       center: options.toScreen(port),
       radius: 3.3,
@@ -543,14 +584,14 @@ function drawPaperController(controller: DesignerControllerForm, options: {
       strokeColor: "#020617",
       strokeWidth: 0.8
     });
-    const textPoint = options.toScreen({ x: controller.x + controller.width - 2.4, y: controller.y + portSpacing * (portIndex + 1) + 0.5 });
+    const textPoint = options.toScreen({ x: controller.x + controller.width - 2.4, y: port.y + 0.5 });
     new paperScope.PointText({
       point: textPoint,
       content: String(portIndex + 1),
       fillColor: "#ecfeff",
       fontSize: 9
     });
-    drawPaperArrowMarker({ x: controller.x + controller.width - 3, y: controller.y + portSpacing * (portIndex + 1), angle: 0 }, "data_cable", false, options.toScreen);
+    drawPaperArrowMarker({ x: controller.x + controller.width - 3, y: port.y, angle: 0 }, "data_cable", false, options.toScreen);
   }
 }
 
