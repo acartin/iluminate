@@ -1,9 +1,9 @@
 # AI Context Pack
 
-- Generated UTC: `2026-09-15T18:54:10Z`
+- Generated UTC: `2026-09-15T21:22:58Z`
 - Repo root: `/srv/iluminate`
 - Git branch: `HETZNER-DEV-2026-Setiembre-15`
-- Git commit: `be138a4`
+- Git commit: `c09ffc0`
 - Policy: high-signal only; enfocado en Iluminate.
 
 ## Contexto Maestro
@@ -13,10 +13,10 @@
 ```
 # BRAIN_MAP
 
-- Generated UTC: `2026-09-15T18:54:10Z`
+- Generated UTC: `2026-09-15T21:22:58Z`
 - Repo root: `/srv/iluminate`
 - Git branch: `HETZNER-DEV-2026-Setiembre-15`
-- Git commit: `be138a4`
+- Git commit: `c09ffc0`
 
 ## 1. MAPA DE INTENCIONES (ILUMINATE)
 
