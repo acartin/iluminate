@@ -1,4 +1,4 @@
-import type { DesignerBuildAreaForm, DesignerControllerForm, DesignerForm, DesignerPoint, DesignerPointNodeType, DesignerRouteForm, DesignerRouteKind, DesignerZoneForm } from "@/lib/lighting/partitura-model";
+import type { DesignerBuildAreaForm, DesignerChannelForm, DesignerControllerForm, DesignerForm, DesignerPoint, DesignerPointNodeType, DesignerRouteForm, DesignerRouteKind, DesignerZoneForm } from "@/lib/lighting/partitura-model";
 import type { DesignerActiveLayer, DesignerCanvasHit, DesignerRouteTerminal, DesignerViewport, ResizeHandle } from "./types";
 
 export function resizedZone(
@@ -149,6 +149,17 @@ export function smoothBezierPoints(points: DesignerPoint[]): DesignerPoint[] {
     const previous = points[(index - 1 + points.length) % points.length];
     const next = points[(index + 1) % points.length];
     const factor = 0.22;
+    const handle = { x: (next.x - previous.x) * factor, y: (next.y - previous.y) * factor };
+    return { ...point, nodeType: "smooth" as const, handleIn: { x: -handle.x, y: -handle.y }, handleOut: handle };
+  });
+}
+
+/** Smooth handles for an open path, without wrapping the first/last neighbors. */
+export function smoothOpenBezierPoints(points: DesignerPoint[]): DesignerPoint[] {
+  return points.map((point, index) => {
+    const previous = points[index - 1] ?? point;
+    const next = points[index + 1] ?? point;
+    const factor = index === 0 || index === points.length - 1 ? 0.18 : 0.22;
     const handle = { x: (next.x - previous.x) * factor, y: (next.y - previous.y) * factor };
     return { ...point, nodeType: "smooth" as const, handleIn: { x: -handle.x, y: -handle.y }, handleOut: handle };
   });
@@ -326,19 +337,25 @@ export function routePointFill(route: DesignerRouteForm, pointIndex: number, poi
   return selected ? "#c084fc" : "#a78bfa";
 }
 
-export function pickDesignerHit(designer: DesignerForm, activeLayer: DesignerActiveLayer, point: DesignerPoint, viewport: DesignerViewport, canvasSize: { width: number; height: number }): DesignerCanvasHit {
+export function pickDesignerHit(designer: DesignerForm, activeLayer: DesignerActiveLayer | null, point: DesignerPoint, viewport: DesignerViewport, canvasSize: { width: number; height: number }): DesignerCanvasHit {
   const tolerance = worldHitTolerance(viewport, canvasSize);
   if (activeLayer === "artwork" && designer.layers.artwork.visible && !designer.layers.artwork.locked) {
     for (const artwork of [...designer.artwork].reverse()) {
+      if (artwork.visible === false) continue;
       const resizeHit = pickResizeHandleHit(artwork, point, tolerance, "artwork_resize");
       if (resizeHit) return resizeHit;
       if (pointInsideRect(artwork, point, tolerance)) return { type: "artwork", id: artwork.id };
     }
   }
+  if (activeLayer === "hardware" && designer.layers.hardware.visible && !designer.layers.hardware.locked) {
+    if (designer.controller.visible !== false) {
+      const controllerHit = pickControllerHit(designer.controller, point, tolerance);
+      if (controllerHit) return controllerHit;
+    }
+  }
   if (activeLayer === "strings" && designer.layers.strings.visible && !designer.layers.strings.locked) {
-    const controllerHit = pickControllerHit(designer.controller, point, tolerance);
-    if (controllerHit) return controllerHit;
     for (const route of [...designer.routes].reverse()) {
+      if (route.visible === false) continue;
       const pointHit = pickRoutePointHit(route, point, tolerance);
       if (pointHit) return pointHit;
       if (distanceToPolyline(route.points, point) <= tolerance) return { type: "route", id: route.id };
@@ -346,15 +363,23 @@ export function pickDesignerHit(designer: DesignerForm, activeLayer: DesignerAct
   }
   if (activeLayer === "zones" && designer.layers.zones.visible && !designer.layers.zones.locked) {
     for (const zone of designer.zones) {
+      if (zone.visible === false) continue;
       const pointHit = zone.shape === "polygon" && zone.points ? pickPolygonPointHit(zone.id, zone.points, point, tolerance, "zone_point") : null;
       if (pointHit) return pointHit;
       const resizeHit = pickResizeHandleHit(zone, point, tolerance, "zone_resize");
       if (resizeHit) return resizeHit;
       if (pointInsideDesignerShape(zone, point) || pointNearShapeStroke(zone, point, tolerance * 2)) return { type: "zone", id: zone.id };
     }
+    for (const channel of designer.channels) {
+      if (channel.visible === false) continue;
+      const pointHit = pickPolygonPointHit(channel.id, channel.points, point, tolerance, "channel_point");
+      if (pointHit) return pointHit;
+      if (channelContainsPoint(channel, point, tolerance)) return { type: "channel", id: channel.id };
+    }
   }
-  if (activeLayer === "reference" && designer.layers.reference.visible && !designer.layers.reference.locked) {
+  if ((activeLayer === "reference" || activeLayer === "artwork") && designer.layers.artwork.visible && !designer.layers.artwork.locked) {
     for (const buildArea of [...designer.buildAreas].reverse()) {
+      if (buildArea.visible === false) continue;
       const pointHit = buildArea.shape === "polygon" && buildArea.points ? pickPolygonPointHit(buildArea.id, buildArea.points, point, tolerance, "build_area_point") : null;
       if (pointHit) return pointHit;
       const resizeHit = pickResizeHandleHit(buildArea, point, tolerance, "build_area_resize");
@@ -392,7 +417,7 @@ export function pickRoutePointHit(route: DesignerRouteForm, point: DesignerPoint
   return null;
 }
 
-export function pickPolygonPointHit(id: string, points: DesignerPoint[], point: DesignerPoint, tolerance: number, type: "build_area_point" | "zone_point"): DesignerCanvasHit {
+export function pickPolygonPointHit(id: string, points: DesignerPoint[], point: DesignerPoint, tolerance: number, type: "build_area_point" | "zone_point" | "channel_point"): DesignerCanvasHit {
   for (let index = points.length - 1; index >= 0; index -= 1) {
     if (distanceBetweenPoints(points[index], point) <= tolerance) return { type, id, pointIndex: index };
   }
@@ -467,7 +492,7 @@ export function shapeOutlinePoints(shape: Pick<DesignerZoneForm, "shape" | "path
   return outline;
 }
 
-function cubicBezierPoint(start: DesignerPoint, end: DesignerPoint, t: number): DesignerPoint {
+export function cubicBezierPoint(start: DesignerPoint, end: DesignerPoint, t: number): DesignerPoint {
   const startControl = start.handleOut ? { x: start.x + start.handleOut.x, y: start.y + start.handleOut.y } : start;
   const endControl = end.handleIn ? { x: end.x + end.handleIn.x, y: end.y + end.handleIn.y } : end;
   const inverse = 1 - t;
@@ -520,6 +545,265 @@ export function nearestShapeInsertIndex(shape: Pick<DesignerZoneForm, "shape" | 
     }
   });
   return nearest.insertIndex;
+}
+
+export function channelWidthCm(channel: DesignerChannelForm) {
+  return Math.max(0.1, (Number.isFinite(channel.widthMm) ? channel.widthMm : 10) / 10);
+}
+
+export function channelIsClosed(channel: DesignerChannelForm) {
+  return channel.cap === "closed" && (channel.points?.length ?? 0) >= 3;
+}
+
+/** Samples the editable center line of a channel into a polyline (cm). */
+export function channelCenterPolyline(channel: DesignerChannelForm, stepsPerSegment = 18): DesignerPoint[] {
+  const points = channel.points ?? [];
+  if (points.length < 2) return points.slice();
+  const closed = channelIsClosed(channel);
+  const hasHandles = channel.pathMode === "bezier" && points.some((point) => point.handleIn || point.handleOut);
+  if (hasHandles) {
+    const outline: DesignerPoint[] = [];
+    const segmentCount = closed ? points.length : points.length - 1;
+    for (let index = 0; index < segmentCount; index += 1) {
+      const start = points[index];
+      const end = points[(index + 1) % points.length];
+      const from = index === 0 ? 0 : 1;
+      for (let step = from; step <= stepsPerSegment; step += 1) {
+        outline.push(cubicBezierPoint(start, end, step / stepsPerSegment));
+      }
+    }
+    return outline;
+  }
+  return filletPolyline(points, closed);
+}
+
+/** Builds a polygonal center line, replacing filleted corner nodes with tangent arcs (cm). */
+function filletPolyline(points: DesignerPoint[], closed: boolean): DesignerPoint[] {
+  const count = points.length;
+  const result: DesignerPoint[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const point = points[index];
+    const isEndpoint = !closed && (index === 0 || index === count - 1);
+    const radiusCm = (typeof point.radiusMm === "number" ? point.radiusMm : 0) / 10;
+    if (isEndpoint || !(radiusCm > 0)) {
+      result.push({ x: point.x, y: point.y });
+      continue;
+    }
+    const previous = points[(index - 1 + count) % count];
+    const next = points[(index + 1) % count];
+    const inLength = Math.hypot(point.x - previous.x, point.y - previous.y);
+    const outLength = Math.hypot(next.x - point.x, next.y - point.y);
+    if (inLength < 1e-6 || outLength < 1e-6) {
+      result.push({ x: point.x, y: point.y });
+      continue;
+    }
+    const inDir = { x: (point.x - previous.x) / inLength, y: (point.y - previous.y) / inLength };
+    const outDir = { x: (next.x - point.x) / outLength, y: (next.y - point.y) / outLength };
+    const turn = Math.acos(clamp(inDir.x * outDir.x + inDir.y * outDir.y, -1, 1));
+    if (!(turn > 1e-4)) {
+      result.push({ x: point.x, y: point.y });
+      continue;
+    }
+    const tanHalf = Math.tan(turn / 2);
+    const tangent = Math.min(radiusCm * tanHalf, Math.min(inLength, outLength) / 2);
+    if (!(tangent > 1e-4)) {
+      result.push({ x: point.x, y: point.y });
+      continue;
+    }
+    const radius = tangent / tanHalf;
+    const start = { x: point.x - inDir.x * tangent, y: point.y - inDir.y * tangent };
+    const end = { x: point.x + outDir.x * tangent, y: point.y + outDir.y * tangent };
+    const bisectorX = -inDir.x + outDir.x;
+    const bisectorY = -inDir.y + outDir.y;
+    const bisectorLength = Math.hypot(bisectorX, bisectorY) || 1;
+    const center = {
+      x: point.x + (bisectorX / bisectorLength) * (radius / Math.sin((Math.PI - turn) / 2)),
+      y: point.y + (bisectorY / bisectorLength) * (radius / Math.sin((Math.PI - turn) / 2))
+    };
+    const startAngle = Math.atan2(start.y - center.y, start.x - center.x);
+    let sweep = Math.atan2(end.y - center.y, end.x - center.x) - startAngle;
+    while (sweep > Math.PI) sweep -= Math.PI * 2;
+    while (sweep < -Math.PI) sweep += Math.PI * 2;
+    const steps = Math.max(3, Math.ceil(Math.abs(sweep) / (Math.PI / 18)));
+    for (let step = 0; step <= steps; step += 1) {
+      const angle = startAngle + sweep * (step / steps);
+      result.push({ x: center.x + Math.cos(angle) * radius, y: center.y + Math.sin(angle) * radius });
+    }
+  }
+  return result;
+}
+
+export function distanceToChannelCenter(channel: DesignerChannelForm, point: DesignerPoint) {
+  const center = channelCenterPolyline(channel);
+  if (center.length < 2) return Number.POSITIVE_INFINITY;
+  const polyline = channelIsClosed(channel) ? [...center, center[0]] : center;
+  return distanceToPolyline(polyline, point);
+}
+
+export function channelContainsPoint(channel: DesignerChannelForm, point: DesignerPoint, toleranceCm = 0) {
+  return distanceToChannelCenter(channel, point) <= channelWidthCm(channel) / 2 + toleranceCm;
+}
+
+export function pointNearChannelStroke(channel: DesignerChannelForm, point: DesignerPoint, tolerance: number) {
+  return distanceToChannelCenter(channel, point) <= channelWidthCm(channel) / 2 + tolerance;
+}
+
+/** Derives the two parallel borders and caps as a closed outline (cm). */
+export function channelOutline(channel: DesignerChannelForm, stepsPerSegment = 18): DesignerPoint[] {
+  const center = channelCenterPolyline(channel, stepsPerSegment);
+  if (center.length < 2) return center;
+  const half = channelWidthCm(channel) / 2;
+  const closed = channelIsClosed(channel);
+  const left: DesignerPoint[] = [];
+  const right: DesignerPoint[] = [];
+  for (let index = 0; index < center.length; index += 1) {
+    const point = center[index];
+    const hasPrevious = closed || index > 0;
+    const hasNext = closed || index < center.length - 1;
+    const previous = center[(index - 1 + center.length) % center.length];
+    const next = center[(index + 1) % center.length];
+    const inNormal = hasPrevious ? normalOf(normalizedDirection(previous, point)) : null;
+    const outNormal = hasNext ? normalOf(normalizedDirection(point, next)) : null;
+    let offset: DesignerPoint;
+    if (inNormal && outNormal) {
+      // Miter join: offset along the bisector, extended by 1/cos(half-angle) so
+      // sharp corners get a clean point instead of crossing borders.
+      const sumX = inNormal.x + outNormal.x;
+      const sumY = inNormal.y + outNormal.y;
+      const sumLength = Math.hypot(sumX, sumY);
+      if (sumLength < 1e-6) {
+        offset = { x: inNormal.x * half, y: inNormal.y * half };
+      } else {
+        const miter = { x: sumX / sumLength, y: sumY / sumLength };
+        const scale = half / Math.max(0.2, miter.x * inNormal.x + miter.y * inNormal.y);
+        offset = { x: miter.x * scale, y: miter.y * scale };
+      }
+    } else {
+      const normal = inNormal ?? outNormal ?? { x: 0, y: 0 };
+      offset = { x: normal.x * half, y: normal.y * half };
+    }
+    left.push({ x: point.x + offset.x, y: point.y + offset.y });
+    right.push({ x: point.x - offset.x, y: point.y - offset.y });
+  }
+  if (closed) return [...left, ...right.slice().reverse()];
+  const outline: DesignerPoint[] = [];
+  outline.push(...left);
+  const end = center[center.length - 1];
+  outline.push(...capArcPoints(end, normalizedDirection(center[center.length - 2] ?? center[0], end), half, channel.cap === "round"));
+  for (let index = right.length - 1; index >= 0; index -= 1) outline.push(right[index]);
+  const start = center[0];
+  outline.push(...capArcPoints(start, normalizedDirection(center[1] ?? end, start), half, channel.cap === "round"));
+  return outline;
+}
+
+export function nearestChannelInsertIndex(channel: DesignerChannelForm, point: DesignerPoint) {
+  const points = channel.points ?? [];
+  if (points.length < 2) return null;
+  const closed = channelIsClosed(channel);
+  const segmentCount = closed ? points.length : points.length - 1;
+  let nearest = { distance: Number.POSITIVE_INFINITY, insertIndex: 1 };
+  for (let index = 0; index < segmentCount; index += 1) {
+    const start = points[index];
+    const end = points[(index + 1) % points.length];
+    if (channel.pathMode !== "bezier") {
+      const distance = pointToSegmentDistance(point, start, end);
+      if (distance < nearest.distance) nearest = { distance, insertIndex: index + 1 };
+      continue;
+    }
+    let previous = cubicBezierPoint(start, end, 0);
+    for (let step = 1; step <= 16; step += 1) {
+      const current = cubicBezierPoint(start, end, step / 16);
+      const distance = pointToSegmentDistance(point, previous, current);
+      if (distance < nearest.distance) nearest = { distance, insertIndex: index + 1 };
+      previous = current;
+    }
+  }
+  return nearest.insertIndex;
+}
+
+export function movedChannel(channel: DesignerChannelForm, deltaX: number, deltaY: number, snapCm: number): DesignerChannelForm {
+  const anchor = channel.points[0];
+  if (!anchor) return channel;
+  const x = snapValue(anchor.x + deltaX, snapCm);
+  const y = snapValue(anchor.y + deltaY, snapCm);
+  const pointDeltaX = x - anchor.x;
+  const pointDeltaY = y - anchor.y;
+  return { ...channel, points: channel.points.map((point) => ({ ...point, x: point.x + pointDeltaX, y: point.y + pointDeltaY })) };
+}
+
+export function updateChannelPoint(channel: DesignerChannelForm, pointIndex: number, point: DesignerPoint, snapCm: number): DesignerChannelForm {
+  if (!channel.points[pointIndex]) return channel;
+  const points = channel.points.map((entry, index) => (index === pointIndex ? { ...entry, x: snapValue(point.x, snapCm), y: snapValue(point.y, snapCm) } : entry));
+  return { ...channel, points };
+}
+
+export function updateChannelBezierHandle(channel: DesignerChannelForm, pointIndex: number, handle: "in" | "out", absolutePoint: DesignerPoint, snapCm: number): DesignerChannelForm {
+  const anchor = channel.points[pointIndex];
+  if (!anchor) return channel;
+  const vector = { x: snapValue(absolutePoint.x, snapCm) - anchor.x, y: snapValue(absolutePoint.y, snapCm) - anchor.y };
+  const primary = handle === "in" ? "handleIn" : "handleOut";
+  const opposite = handle === "in" ? "handleOut" : "handleIn";
+  const currentOpposite = anchor[opposite];
+  const vectorLength = Math.hypot(vector.x, vector.y);
+  const oppositeLength = anchor.nodeType === "smooth" && currentOpposite ? Math.hypot(currentOpposite.x, currentOpposite.y) : vectorLength;
+  const oppositeVector = vectorLength > 0.0001 ? { x: (-vector.x / vectorLength) * oppositeLength, y: (-vector.y / vectorLength) * oppositeLength } : { x: 0, y: 0 };
+  const nodeType: DesignerPointNodeType = anchor.nodeType === "smooth" ? "smooth" : "symmetric";
+  const points: DesignerPoint[] = channel.points.map((point, index) => index === pointIndex ? { ...point, nodeType, [primary]: vector, [opposite]: oppositeVector } : point);
+  return { ...channel, points };
+}
+
+export function insertChannelPoint(channel: DesignerChannelForm, insertIndex: number, point: DesignerPoint, snapCm: number): DesignerChannelForm {
+  const nextPoint = { x: snapValue(point.x, snapCm), y: snapValue(point.y, snapCm) };
+  const clamped = clamp(Math.round(insertIndex), 0, channel.points.length);
+  const points = [...channel.points.slice(0, clamped), nextPoint, ...channel.points.slice(clamped)];
+  return { ...channel, points };
+}
+
+export function deleteChannelPoint(channel: DesignerChannelForm, pointIndex: number): DesignerChannelForm {
+  if (channel.points.length <= 2 || !channel.points[pointIndex]) return channel;
+  return { ...channel, points: channel.points.filter((_, index) => index !== pointIndex) };
+}
+
+export function setChannelNodeType(channel: DesignerChannelForm, pointIndex: number, nodeType: DesignerPointNodeType): DesignerChannelForm {
+  const anchor = channel.points[pointIndex];
+  if (!anchor) return channel;
+  const previous = channel.points[(pointIndex - 1 + channel.points.length) % channel.points.length];
+  const next = channel.points[(pointIndex + 1) % channel.points.length];
+  const tangent = { x: (next.x - previous.x) * 0.22, y: (next.y - previous.y) * 0.22 };
+  const points = channel.points.map((point, index) => {
+    if (index !== pointIndex) return point;
+    if (nodeType === "corner" || nodeType === "straight") {
+      const { handleIn: _handleIn, handleOut: _handleOut, ...plainPoint } = point;
+      return { ...plainPoint, nodeType };
+    }
+    return { ...point, nodeType, handleIn: { x: -tangent.x, y: -tangent.y }, handleOut: tangent };
+  });
+  return { ...channel, pathMode: "bezier", points };
+}
+
+function normalizedDirection(from: DesignerPoint, to: DesignerPoint) {
+  const dx = to.x - from.x;
+  const dy = to.y - from.y;
+  const length = Math.hypot(dx, dy) || 1;
+  return { x: dx / length, y: dy / length };
+}
+
+function normalOf(direction: DesignerPoint) {
+  return { x: -direction.y, y: direction.x };
+}
+
+function capArcPoints(center: DesignerPoint, tangent: DesignerPoint, radius: number, round: boolean, steps = 10): DesignerPoint[] {
+  if (!round || steps <= 0) return [];
+  const normal = { x: -tangent.y, y: tangent.x };
+  const startAngle = Math.atan2(normal.y, normal.x);
+  const ccw = { x: -normal.y, y: normal.x };
+  const sweep = ccw.x * tangent.x + ccw.y * tangent.y >= 0 ? Math.PI : -Math.PI;
+  const points: DesignerPoint[] = [];
+  for (let step = 1; step < steps; step += 1) {
+    const angle = startAngle + sweep * (step / steps);
+    points.push({ x: center.x + Math.cos(angle) * radius, y: center.y + Math.sin(angle) * radius });
+  }
+  return points;
 }
 
 export function worldHitTolerance(viewport: DesignerViewport, canvasSize: { width: number; height: number }) {

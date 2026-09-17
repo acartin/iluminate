@@ -54,6 +54,7 @@ export function DesignerAnimateTimeline({
   const targets = [
     { id: "full_sign", name: "Full sign" },
     ...(document.designer?.zones ?? []).map((zone) => ({ id: zone.id, name: zone.name || zone.id })),
+    ...(document.designer?.channels ?? []).map((channel) => ({ id: channel.id, name: channel.name || channel.id })),
     ...(document.designer?.groups ?? []).map((group) => ({ id: group.id, name: group.name || group.id }))
   ];
   const [selectedClipId, setSelectedClipId] = useStatefulClip(activeScene?.clips ?? []);
@@ -63,7 +64,10 @@ export function DesignerAnimateTimeline({
   const timelineViewportRef = React.useRef<HTMLDivElement | null>(null);
   const timelineRef = React.useRef<HTMLDivElement | null>(null);
   const selectedClip = activeScene?.clips.find((clip) => clip.id === selectedClipId) ?? activeScene?.clips[0];
-  const zoneTargetIds = React.useMemo(() => new Set((document.designer?.zones ?? []).map((zone) => zone.id)), [document.designer?.zones]);
+  const zoneTargetIds = React.useMemo(
+    () => new Set([...(document.designer?.zones ?? []).map((zone) => zone.id), ...(document.designer?.channels ?? []).map((channel) => channel.id)]),
+    [document.designer?.zones, document.designer?.channels]
+  );
   const durationMs = Math.max(100, activeScene?.durationMs ?? 4000);
   const laneCount = Math.max(1, activeScene?.laneCount ?? inferLaneCount(activeScene?.clips ?? []));
   const availableAxisWidth = Math.max(320, timelineViewportWidth - 24 - TRACK_GUTTER_WIDTH);
@@ -412,7 +416,6 @@ function ClipInspector({ clip, targets, effect, effects, onChange, onDelete }: {
   return <div className="space-y-2">
     <Select label="Target" value={clip.target} options={targets.map((target) => [target.id, target.name])} onChange={(target) => onChange({ target })} />
     <Select label="Effect" value={clip.effect} options={Object.values(effects).map((item) => [item.id, item.label])} onChange={(effectId) => onChange({ effect: effectId, params: defaultParams(effects[effectId]) })} />
-    <Select label="Space" value={clip.coordinateSpace ?? "local"} options={[["serial", "Serial"], ["local", "Local target"], ["global", "Global sign"]]} onChange={(coordinateSpace) => onChange({ coordinateSpace: coordinateSpace as ClipForm["coordinateSpace"] })} />
     {definition ? <div className="space-y-2 border-t border-border-2 pt-3">{Object.entries(definition.parameters).map(([key, parameter]) => <ParameterInput key={key} name={key} definition={parameter} value={clip.params[key]} onChange={(value) => onChange({ params: { ...clip.params, [key]: value } })} />)}</div> : null}
     <Button type="button" variant="ghost" className="h-8 w-full text-destructive" onPointerDown={stopTimelinePointer} onClick={onDelete}><Trash2 className="h-4 w-4" />Delete clip</Button>
   </div>;

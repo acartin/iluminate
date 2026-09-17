@@ -4,8 +4,8 @@ import { cloneElement, isValidElement, useEffect, useRef, useState, type ReactEl
 import { DndContext, KeyboardSensor, PointerSensor, closestCenter, type DragEndEvent, useSensor, useSensors } from "@dnd-kit/core";
 import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { ChevronDown, ChevronRight, CircleDot, CornerDownRight, Eye, EyeOff, Folder, GripVertical, ImageIcon, Info, Layers, Lock, Minus, Pencil, Plus, Search, Spline, Trash2, Unlock, X } from "lucide-react";
-import type { DesignerArtworkForm, DesignerBuildAreaForm, DesignerForm, DesignerGroupForm, DesignerLayerSettings, DesignerLayersForm, DesignerPointNodeType, DesignerZoneForm } from "@/lib/lighting/partitura-model";
+import { ChevronDown, ChevronRight, CircleDot, CornerDownRight, Eye, EyeOff, Folder, GripVertical, ImageIcon, Info, Layers, Lock, Minus, Pencil, Plus, Search, Spline, Trash2, Unlock, Upload, Waves, X } from "lucide-react";
+import type { DesignerArtworkForm, DesignerBuildAreaForm, DesignerChannelForm, DesignerForm, DesignerGroupForm, DesignerLayerSettings, DesignerLayersForm, DesignerPointNodeType, DesignerZoneForm } from "@/lib/lighting/partitura-model";
 import { formatDecimal, rulerTicks } from "./designer-geometry";
 import type { DesignerActiveLayer, DesignerRouteSummary, DesignerSelection, DesignerViewport } from "./types";
 
@@ -54,7 +54,7 @@ export function DesignerLayersPanel({
   assets,
   onActivateLayer,
   onPatchLayer,
-  onAddArtwork,
+  onUploadArtwork,
   onPatchArtwork,
   onPatchBuildArea,
   onPatchZone,
@@ -63,6 +63,7 @@ export function DesignerLayersPanel({
   onRemoveGroup,
   onToggleGroupMember,
   onSelectZone,
+  onPatchChannel,
   onPatchController,
   onPatchRoute,
   onReorderItems,
@@ -70,14 +71,14 @@ export function DesignerLayersPanel({
   onClose
 }: {
   designer: DesignerForm;
-  activeLayer: DesignerActiveLayer;
+  activeLayer: DesignerActiveLayer | null;
   selection: DesignerSelection;
   routeSummaries: DesignerRouteSummary[];
   routeOutputs: Map<string, number>;
   assets: Array<{ id: string; fileName: string; mimeType: string }>;
   onActivateLayer: (layer: DesignerActiveLayer) => void;
   onPatchLayer: (layer: keyof DesignerLayersForm, patch: Partial<DesignerLayerSettings>) => void;
-  onAddArtwork: (asset: { id: string; fileName: string; mimeType: string }) => void;
+  onUploadArtwork: (file: File) => void | Promise<void>;
   onPatchArtwork: (artworkId: string, patch: Partial<DesignerArtworkForm>) => void;
   onPatchBuildArea: (buildAreaId: string, patch: Partial<Pick<DesignerBuildAreaForm, "name" | "visible" | "locked" | "opacity">>) => void;
   onPatchZone: (zoneId: string, patch: Partial<Pick<DesignerZoneForm, "name" | "visible" | "locked" | "opacity">>) => void;
@@ -86,26 +87,31 @@ export function DesignerLayersPanel({
   onRemoveGroup: (groupId: string) => void;
   onToggleGroupMember: (groupId: string, memberType: "zone" | "group", memberId: string) => void;
   onSelectZone: (zoneId: string) => void;
-  onPatchController: (patch: Pick<DesignerForm["controller"], "name">) => void;
-  onPatchRoute: (routeId: string, patch: Pick<DesignerForm["routes"][number], "name">) => void;
+  onPatchChannel: (channelId: string, patch: Partial<Pick<DesignerChannelForm, "name" | "widthMm" | "cap" | "visible">>) => void;
+  onPatchController: (patch: Partial<Pick<DesignerForm["controller"], "name" | "visible">>) => void;
+  onPatchRoute: (routeId: string, patch: Partial<Pick<DesignerForm["routes"][number], "name" | "visible">>) => void;
   onReorderItems: (layer: "artwork" | "reference" | "zones" | "strings", activeId: string, overId: string) => void;
   onSelect: (selection: DesignerSelection) => void;
   onClose: () => void;
 }) {
-  const [selectedAssetId, setSelectedAssetId] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
   const [details, setDetails] = useState<DesignerLayerDetails | null>(null);
+  const artworkFileInputRef = useRef<HTMLInputElement | null>(null);
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );
   const [expandedLayers, setExpandedLayers] = useState<Record<DesignerActiveLayer, boolean>>({
-    artwork: activeLayer === "artwork",
-    reference: activeLayer === "reference",
-    zones: activeLayer === "zones",
-    strings: activeLayer === "strings"
+    artwork: false,
+    reference: false,
+    zones: false,
+    hardware: false,
+    strings: false
   });
-  const [expandedStringGroups, setExpandedStringGroups] = useState({ data_cables: true, led_strings: true });
+  const didMountRef = useRef(false);
+  const [expandedStringGroups, setExpandedStringGroups] = useState({ data_cables: false, led_strings: false });
+  const [expandedDiffusorGroups, setExpandedDiffusorGroups] = useState({ zones: false, channels: false, groups: false });
+  const [expandedArtworkGroups, setExpandedArtworkGroups] = useState({ images: false, reference: false });
 
   function activateLayer(layer: DesignerActiveLayer) {
     setExpandedLayers((current) => ({ ...current, [layer]: true }));
@@ -117,16 +123,33 @@ export function DesignerLayersPanel({
     setExpandedLayers((current) => ({ ...current, [layer]: !current[layer] }));
   }
 
-  const selectedAsset = assets.find((asset) => asset.id === selectedAssetId) ?? assets[0];
+  const selectedArtwork = selection?.type === "artwork" ? designer.artwork.find((artwork) => artwork.id === selection.id) ?? null : null;
   const normalizedSearch = searchTerm.trim().toLowerCase();
   const matchesSearch = (label: string, detail = "") => !normalizedSearch || `${label} ${detail}`.toLowerCase().includes(normalizedSearch);
 
   useEffect(() => {
+    // Start with every category collapsed; only auto-expand when the active
+    // layer changes after the panel has mounted.
+    if (!didMountRef.current) {
+      didMountRef.current = true;
+      return;
+    }
+    if (!activeLayer) return;
     setExpandedLayers((current) => ({ ...current, [activeLayer]: true }));
   }, [activeLayer]);
 
   useEffect(() => {
     if (!selection) return;
+    if (selection.type === "build_area") {
+      setExpandedLayers((current) => ({ ...current, artwork: true }));
+      setExpandedArtworkGroups((current) => ({ ...current, reference: true }));
+      return;
+    }
+    if (selection.type === "artwork") {
+      setExpandedLayers((current) => ({ ...current, artwork: true }));
+      setExpandedArtworkGroups((current) => ({ ...current, images: true }));
+      return;
+    }
     const layer = layerForSelection(selection);
     if (layer) setExpandedLayers((current) => ({ ...current, [layer]: true }));
     if (selection.type === "route") {
@@ -157,6 +180,17 @@ export function DesignerLayersPanel({
         />
       </div>
       <div className="min-h-0 flex-1 overflow-auto py-1">
+        <input
+          ref={artworkFileInputRef}
+          type="file"
+          accept="image/svg+xml,image/png,image/jpeg,image/webp,image/bmp"
+          className="hidden"
+          onChange={(event) => {
+            const file = event.target.files?.[0];
+            if (file) void onUploadArtwork(file);
+            event.target.value = "";
+          }}
+        />
         <LayerPanelSection
           label="Artwork"
           active={activeLayer === "artwork"}
@@ -166,96 +200,107 @@ export function DesignerLayersPanel({
           onToggle={() => toggleLayer("artwork")}
           onChange={(patch) => onPatchLayer("artwork", patch)}
         >
-          <div className="mb-2 flex items-center gap-1">
-            <select
-              className="h-8 min-w-0 flex-1 rounded border border-input bg-card px-2 text-body-sm text-foreground"
-              value={selectedAsset?.id ?? ""}
-              disabled={!assets.length || designer.layers.artwork.locked}
-              onChange={(event) => setSelectedAssetId(event.target.value)}
-            >
-              {assets.length ? assets.map((asset) => <option key={asset.id} value={asset.id}>{asset.fileName}</option>) : <option value="">No assets</option>}
-            </select>
-            <button
-              type="button"
-              title="Place selected artwork"
-              disabled={!selectedAsset || designer.layers.artwork.locked}
-              className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-border-2 bg-card text-blue-700 hover:bg-surface-hover disabled:cursor-not-allowed disabled:opacity-40"
-              onClick={() => {
-                if (selectedAsset) onAddArtwork(selectedAsset);
-              }}
-            >
-              <ImageIcon className="h-4 w-4" />
-            </button>
-          </div>
-          <SortableLayerList
-            ids={designer.artwork.map((artwork) => artwork.id)}
-            sensors={sensors}
-            disabled={designer.layers.artwork.locked}
-            onReorder={(activeId, overId) => onReorderItems("artwork", activeId, overId)}
+          <RouteFolder
+            label="Images"
+            count={designer.artwork.length}
+            expanded={expandedArtworkGroups.images}
+            onToggle={() => {
+              activateLayer("artwork");
+              setExpandedArtworkGroups((current) => ({ ...current, images: !current.images }));
+            }}
+            action={
+              <button type="button" title="Upload image to assets" className="flex h-6 w-6 items-center justify-center rounded border border-border-2 bg-card text-blue-700 hover:bg-surface-hover" onClick={() => artworkFileInputRef.current?.click()}>
+                <Upload className="h-3.5 w-3.5" />
+              </button>
+            }
           >
-            {designer.artwork.filter((artwork) => matchesSearch(artwork.name, assets.find((entry) => entry.id === artwork.assetId)?.fileName)).map((artwork) => {
-              const asset = assets.find((entry) => entry.id === artwork.assetId);
-              return (
-                <SortableLayerChildRow key={artwork.id} id={artwork.id} disabled={designer.layers.artwork.locked}>
+            <SortableLayerList
+              ids={designer.artwork.map((artwork) => artwork.id)}
+              sensors={sensors}
+              disabled={designer.layers.artwork.locked}
+              onReorder={(activeId, overId) => onReorderItems("artwork", activeId, overId)}
+            >
+              {designer.artwork.filter((artwork) => matchesSearch(artwork.name, assets.find((entry) => entry.id === artwork.assetId)?.fileName)).map((artwork) => {
+                const asset = assets.find((entry) => entry.id === artwork.assetId);
+                return (
+                  <SortableLayerChildRow key={artwork.id} id={artwork.id} disabled={designer.layers.artwork.locked}>
+                    <LayerChildRow
+                      label={artwork.name}
+                      detail={asset ? asset.fileName : "No image assigned"}
+                      selected={selection?.type === "artwork" && selection.id === artwork.id}
+                      color="blue"
+                      icon={ImageIcon}
+                      visible={artwork.visible}
+                      onToggleVisible={() => onPatchArtwork(artwork.id, { visible: artwork.visible === false })}
+                      onClick={() => {
+                        activateLayer("artwork");
+                        onSelect({ type: "artwork", id: artwork.id });
+                      }}
+                      onRename={(name) => onPatchArtwork(artwork.id, { name })}
+                      onOpenDetails={() => setDetails({ type: "artwork", id: artwork.id })}
+                    />
+                  </SortableLayerChildRow>
+                );
+              })}
+            </SortableLayerList>
+            {selectedArtwork ? (
+              <div className="mt-2 rounded border border-border-2 bg-card px-2 py-1.5">
+                <label className="grid gap-1 text-[11px] text-muted-foreground">
+                  <span>Image source</span>
+                  <select
+                    className="h-7 min-w-0 rounded border border-input bg-card px-2 text-body-sm text-foreground"
+                    value={selectedArtwork.assetId}
+                    onChange={(event) => onPatchArtwork(selectedArtwork.id, { assetId: event.target.value })}
+                  >
+                    <option value="">— No image —</option>
+                    {assets.length ? assets.map((asset) => <option key={asset.id} value={asset.id}>{asset.fileName}</option>) : <option value="" disabled>No assets uploaded</option>}
+                  </select>
+                </label>
+              </div>
+            ) : (
+              <p className="mt-1 px-2 py-1 text-[11px] leading-4 text-muted-foreground">Use the Image tool to place a container, then pick its image here.</p>
+            )}
+          </RouteFolder>
+
+          <RouteFolder
+            label="Reference"
+            count={designer.buildAreas.length}
+            expanded={expandedArtworkGroups.reference}
+            onToggle={() => {
+              activateLayer("artwork");
+              setExpandedArtworkGroups((current) => ({ ...current, reference: !current.reference }));
+            }}
+          >
+            <SortableLayerList
+              ids={designer.buildAreas.map((buildArea) => buildArea.id)}
+              sensors={sensors}
+              disabled={designer.layers.artwork.locked}
+              onReorder={(activeId, overId) => onReorderItems("reference", activeId, overId)}
+            >
+              {designer.buildAreas.filter((buildArea) => matchesSearch(buildArea.name, buildArea.shape)).map((buildArea) => (
+                <SortableLayerChildRow key={buildArea.id} id={buildArea.id} disabled={designer.layers.artwork.locked}>
                   <LayerChildRow
-                    label={artwork.name}
-                    detail={asset ? asset.fileName : "Missing asset"}
-                    selected={selection?.type === "artwork" && selection.id === artwork.id}
-                    color="blue"
-                    icon={ImageIcon}
+                    label={buildArea.name}
+                    detail={`${buildArea.shape} · ${formatDecimal(buildArea.width)}x${formatDecimal(buildArea.height)} cm`}
+                    selected={selection?.type === "build_area" && selection.id === buildArea.id}
+                    color="violet"
+                    visible={buildArea.visible}
+                    onToggleVisible={() => onPatchBuildArea(buildArea.id, { visible: buildArea.visible === false })}
                     onClick={() => {
                       activateLayer("artwork");
-                      onSelect({ type: "artwork", id: artwork.id });
+                      onSelect({ type: "build_area", id: buildArea.id });
                     }}
-                    onRename={(name) => onPatchArtwork(artwork.id, { name })}
-                    onOpenDetails={() => setDetails({ type: "artwork", id: artwork.id })}
+                    onRename={(name) => onPatchBuildArea(buildArea.id, { name })}
+                    onOpenDetails={() => setDetails({ type: "build_area", id: buildArea.id })}
                   />
                 </SortableLayerChildRow>
-              );
-            })}
-          </SortableLayerList>
+              ))}
+            </SortableLayerList>
+          </RouteFolder>
         </LayerPanelSection>
 
         <LayerPanelSection
-          label="Reference"
-          active={activeLayer === "reference"}
-          expanded={expandedLayers.reference}
-          layer={designer.layers.reference}
-          onActivate={() => activateLayer("reference")}
-          onToggle={() => toggleLayer("reference")}
-          onChange={(patch) => onPatchLayer("reference", patch)}
-        >
-          <SortableLayerList
-            ids={designer.buildAreas.map((buildArea) => buildArea.id)}
-            sensors={sensors}
-            disabled={designer.layers.reference.locked}
-            onReorder={(activeId, overId) => onReorderItems("reference", activeId, overId)}
-          >
-            {designer.buildAreas.filter((buildArea) => matchesSearch(buildArea.name, buildArea.shape)).map((buildArea) => (
-              <SortableLayerChildRow key={buildArea.id} id={buildArea.id} disabled={designer.layers.reference.locked}>
-                <LayerChildRow
-                  label={buildArea.name}
-                  detail={`${buildArea.shape} · ${formatDecimal(buildArea.width)}x${formatDecimal(buildArea.height)} cm`}
-                  selected={selection?.type === "build_area" && selection.id === buildArea.id}
-                  onClick={() => {
-                    activateLayer("reference");
-                    onSelect({ type: "build_area", id: buildArea.id });
-                  }}
-                  onRename={(name) => onPatchBuildArea(buildArea.id, { name })}
-                  onOpenDetails={() => setDetails({ type: "build_area", id: buildArea.id })}
-                />
-              </SortableLayerChildRow>
-            ))}
-          </SortableLayerList>
-          <LayerChildRow
-            label="Reference Art"
-            detail={designer.sourceSvg ? "Loaded" : "Pending"}
-            onClick={() => activateLayer("reference")}
-          />
-        </LayerPanelSection>
-
-        <LayerPanelSection
-          label="Zones"
+          label="Diffusors"
           active={activeLayer === "zones"}
           expanded={expandedLayers.zones}
           layer={designer.layers.zones}
@@ -263,40 +308,89 @@ export function DesignerLayersPanel({
           onToggle={() => toggleLayer("zones")}
           onChange={(patch) => onPatchLayer("zones", patch)}
         >
-          <SortableLayerList
-            ids={designer.zones.map((zone) => zone.id)}
-            sensors={sensors}
-            disabled={designer.layers.zones.locked}
-            onReorder={(activeId, overId) => onReorderItems("zones", activeId, overId)}
+          <RouteFolder
+            label="Zones"
+            count={designer.zones.length}
+            expanded={expandedDiffusorGroups.zones}
+            onToggle={() => setExpandedDiffusorGroups((current) => ({ ...current, zones: !current.zones }))}
           >
-            {designer.zones.filter((zone) => matchesSearch(zone.name, zone.shape)).map((zone) => (
-              <SortableLayerChildRow key={zone.id} id={zone.id} disabled={designer.layers.zones.locked}>
+            <SortableLayerList
+              ids={designer.zones.map((zone) => zone.id)}
+              sensors={sensors}
+              disabled={designer.layers.zones.locked}
+              onReorder={(activeId, overId) => onReorderItems("zones", activeId, overId)}
+            >
+              {designer.zones.filter((zone) => matchesSearch(zone.name, zone.shape)).map((zone) => (
+                <SortableLayerChildRow key={zone.id} id={zone.id} disabled={designer.layers.zones.locked}>
+                  <LayerChildRow
+                    label={zone.name}
+                    detail={`${zone.shape} · ${formatDecimal(zone.width)}x${formatDecimal(zone.height)} cm`}
+                    selected={selection?.type === "zone" && selection.id === zone.id}
+                    color="blue"
+                    strongColor
+                    visible={zone.visible}
+                    onToggleVisible={() => onPatchZone(zone.id, { visible: zone.visible === false })}
+                    onClick={() => {
+                      activateLayer("zones");
+                      onSelect({ type: "zone", id: zone.id });
+                    }}
+                    onRename={(name) => onPatchZone(zone.id, { name })}
+                    onOpenDetails={() => setDetails({ type: "zone", id: zone.id })}
+                  />
+                </SortableLayerChildRow>
+              ))}
+            </SortableLayerList>
+          </RouteFolder>
+          <RouteFolder
+            label="Channels"
+            count={(designer.channels ?? []).length}
+            expanded={expandedDiffusorGroups.channels}
+            onToggle={() => setExpandedDiffusorGroups((current) => ({ ...current, channels: !current.channels }))}
+          >
+            {(designer.channels ?? []).length ? (
+              (designer.channels ?? []).filter((channel) => matchesSearch(channel.name, "channel")).map((channel) => (
                 <LayerChildRow
-                  label={zone.name}
-                  detail={`${zone.shape} · ${formatDecimal(zone.width)}x${formatDecimal(zone.height)} cm`}
-                  selected={selection?.type === "zone" && selection.id === zone.id}
+                  key={channel.id}
+                  label={channel.name}
+                  detail={`${channel.widthMm} mm · ${channel.cap}`}
+                  selected={selection?.type === "channel" && selection.id === channel.id}
+                  color="amber"
+                  icon={Waves}
+                  visible={channel.visible}
+                  onToggleVisible={() => onPatchChannel(channel.id, { visible: channel.visible === false })}
                   onClick={() => {
                     activateLayer("zones");
-                    onSelect({ type: "zone", id: zone.id });
+                    onSelect({ type: "channel", id: channel.id });
                   }}
-                  onRename={(name) => onPatchZone(zone.id, { name })}
-                  onOpenDetails={() => setDetails({ type: "zone", id: zone.id })}
+                  onRename={(name) => onPatchChannel(channel.id, { name })}
                 />
-              </SortableLayerChildRow>
-            ))}
-          </SortableLayerList>
+              ))
+            ) : (
+              <p className="px-2 py-1 text-[11px] leading-4 text-muted-foreground">Use the Channel tool to trace a 3-20 mm neon-flex channel.</p>
+            )}
+          </RouteFolder>
+          <RouteFolder
+            label="Zones Groups"
+            count={(designer.groups ?? []).length}
+            expanded={expandedDiffusorGroups.groups}
+            onToggle={() => setExpandedDiffusorGroups((current) => ({ ...current, groups: !current.groups }))}
+            action={
+              <button type="button" title="New group" className="flex h-6 w-6 items-center justify-center rounded border border-border-2 bg-card text-blue-700 hover:bg-surface-hover" onClick={onAddGroup}>
+                <Plus className="h-3.5 w-3.5" />
+              </button>
+            }
+          >
+            <GroupPanelSection
+              groups={designer.groups ?? []}
+              zones={designer.zones}
+              selectedZoneId={selection?.type === "zone" ? selection.id : undefined}
+              onPatchGroup={onPatchGroup}
+              onRemoveGroup={onRemoveGroup}
+              onToggleGroupMember={onToggleGroupMember}
+              onSelectZone={onSelectZone}
+            />
+          </RouteFolder>
         </LayerPanelSection>
-
-        <GroupPanelSection
-          groups={designer.groups ?? []}
-          zones={designer.zones}
-          selectedZoneId={selection?.type === "zone" ? selection.id : undefined}
-          onAddGroup={onAddGroup}
-          onPatchGroup={onPatchGroup}
-          onRemoveGroup={onRemoveGroup}
-          onToggleGroupMember={onToggleGroupMember}
-          onSelectZone={onSelectZone}
-        />
 
         <LayerPanelSection
           label="Strings"
@@ -307,17 +401,6 @@ export function DesignerLayersPanel({
           onToggle={() => toggleLayer("strings")}
           onChange={(patch) => onPatchLayer("strings", patch)}
         >
-          <LayerChildRow
-            label={designer.controller.name}
-            detail={`${designer.controller.dataOutputs} outputs`}
-            selected={selection?.type === "controller"}
-            onClick={() => {
-              activateLayer("strings");
-              onSelect({ type: "controller", id: designer.controller.id });
-            }}
-            onRename={(name) => onPatchController({ name })}
-            onOpenDetails={() => setDetails({ type: "controller", id: designer.controller.id })}
-          />
           <RouteFolder
             label="Data cables"
             count={designer.routes.filter((route) => route.kind === "data_cable").length}
@@ -338,6 +421,8 @@ export function DesignerLayersPanel({
                     selected={selection?.type === "route" && selection.id === route.id}
                     color="green"
                     strongColor
+                    visible={route.visible !== false}
+                    onToggleVisible={() => onPatchRoute(route.id, { visible: route.visible === false })}
                     onClick={() => {
                       activateLayer("strings");
                       onSelect({ type: "route", id: route.id });
@@ -369,6 +454,8 @@ export function DesignerLayersPanel({
                     selected={selection?.type === "route" && selection.id === route.id}
                     color="amber"
                     strongColor
+                    visible={route.visible !== false}
+                    onToggleVisible={() => onPatchRoute(route.id, { visible: route.visible === false })}
                     onClick={() => {
                       activateLayer("strings");
                       onSelect({ type: "route", id: route.id });
@@ -380,6 +467,30 @@ export function DesignerLayersPanel({
               ))}
             </SortableLayerList>
           </RouteFolder>
+        </LayerPanelSection>
+
+        <LayerPanelSection
+          label="Hardware"
+          active={activeLayer === "hardware"}
+          expanded={expandedLayers.hardware}
+          layer={designer.layers.hardware}
+          onActivate={() => activateLayer("hardware")}
+          onToggle={() => toggleLayer("hardware")}
+          onChange={(patch) => onPatchLayer("hardware", patch)}
+        >
+          <LayerChildRow
+            label={designer.controller.name}
+            detail={`${designer.controller.dataOutputs} outputs`}
+            selected={selection?.type === "controller"}
+            visible={designer.controller.visible !== false}
+            onToggleVisible={() => onPatchController({ visible: designer.controller.visible === false })}
+            onClick={() => {
+              activateLayer("hardware");
+              onSelect({ type: "controller", id: designer.controller.id });
+            }}
+            onRename={(name) => onPatchController({ name })}
+            onOpenDetails={() => setDetails({ type: "controller", id: designer.controller.id })}
+          />
         </LayerPanelSection>
       </div>
       {details ? (
@@ -409,9 +520,11 @@ type DesignerLayerDetails = {
 function layerForSelection(selection: DesignerSelection): DesignerActiveLayer | null {
   if (!selection) return null;
   if (selection.type === "artwork") return "artwork";
-  if (selection.type === "build_area") return "reference";
+  if (selection.type === "build_area") return "artwork";
   if (selection.type === "zone") return "zones";
-  if (selection.type === "controller" || selection.type === "route") return "strings";
+  if (selection.type === "channel") return "zones";
+  if (selection.type === "controller") return "hardware";
+  if (selection.type === "route") return "strings";
   return null;
 }
 
@@ -469,26 +582,31 @@ function RouteFolder({
   count,
   expanded,
   children,
-  onToggle
+  onToggle,
+  action
 }: {
   label: string;
   count: number;
   expanded: boolean;
   children: React.ReactNode;
   onToggle: () => void;
+  action?: React.ReactNode;
 }) {
   return (
     <div className="mt-1">
-      <button
-        type="button"
-        className="flex h-7 w-full items-center gap-1 rounded px-1.5 text-left text-body-sm font-semibold text-muted-foreground hover:bg-surface-hover hover:text-foreground"
-        onClick={onToggle}
-      >
-        {expanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-        <Folder className="h-3.5 w-3.5" />
-        <span className="min-w-0 flex-1 truncate">{label}</span>
-        <span className="font-mono text-[10px]">{count}</span>
-      </button>
+      <div className="flex h-7 items-center gap-1">
+        <button
+          type="button"
+          className="flex h-7 min-w-0 flex-1 items-center gap-1 rounded px-1.5 text-left text-body-sm font-semibold text-muted-foreground hover:bg-surface-hover hover:text-foreground"
+          onClick={onToggle}
+        >
+          {expanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
+          <Folder className="h-3.5 w-3.5" />
+          <span className="min-w-0 flex-1 truncate">{label}</span>
+          <span className="font-mono text-[10px]">{count}</span>
+        </button>
+        {action ? <div className="flex shrink-0 items-center gap-1 pr-1">{action}</div> : null}
+      </div>
       {expanded ? <div className="pl-2">{children}</div> : null}
     </div>
   );
@@ -498,7 +616,6 @@ function GroupPanelSection({
   groups,
   zones,
   selectedZoneId,
-  onAddGroup,
   onPatchGroup,
   onRemoveGroup,
   onToggleGroupMember,
@@ -507,7 +624,6 @@ function GroupPanelSection({
   groups: DesignerGroupForm[];
   zones: DesignerZoneForm[];
   selectedZoneId?: string;
-  onAddGroup: () => void;
   onPatchGroup: (groupId: string, patch: Partial<Pick<DesignerGroupForm, "name" | "members">>) => void;
   onRemoveGroup: (groupId: string) => void;
   onToggleGroupMember: (groupId: string, memberType: "zone" | "group", memberId: string) => void;
@@ -516,16 +632,7 @@ function GroupPanelSection({
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
 
   return (
-    <section className="border-b border-border/80">
-      <div className="flex h-8 items-center gap-1 px-2 hover:bg-surface-hover">
-        <Folder className="ml-5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-        <span className="min-w-0 flex-1 truncate px-1.5 py-1 text-left text-body-sm font-semibold text-foreground">Groups</span>
-        <span className="font-mono text-[10px] text-muted-foreground">{groups.length}</span>
-        <button type="button" title="New group" className="flex h-6 w-6 items-center justify-center rounded border border-border-2 bg-card text-blue-700 hover:bg-surface-hover" onClick={onAddGroup}>
-          <Plus className="h-3.5 w-3.5" />
-        </button>
-      </div>
-      <div className="pb-2 pl-3 pr-1">
+    <div className="pb-1">
         {!groups.length ? (
           <p className="px-1.5 py-1 text-[11px] leading-4 text-muted-foreground">A group targets several zones as one effect while keeping each zone&apos;s pixel limits.</p>
         ) : null}
@@ -596,8 +703,7 @@ function GroupPanelSection({
             </div>
           );
         })}
-      </div>
-    </section>
+    </div>
   );
 }
 
@@ -668,13 +774,15 @@ type LayerChildRowProps = {
   label: string;
   detail: string;
   selected?: boolean;
-  color?: "slate" | "green" | "amber" | "blue";
+  color?: "slate" | "green" | "amber" | "blue" | "violet";
   strongColor?: boolean;
   icon?: React.ComponentType<{ className?: string }>;
   dragAttributes?: ReturnType<typeof useSortable>["attributes"];
   dragListeners?: ReturnType<typeof useSortable>["listeners"];
   dragging?: boolean;
   dragDisabled?: boolean;
+  visible?: boolean;
+  onToggleVisible?: () => void;
   onClick: () => void;
   onRename?: (name: string) => void;
   onOpenDetails?: () => void;
@@ -691,25 +799,32 @@ function LayerChildRow({
   dragListeners,
   dragging,
   dragDisabled,
+  visible,
+  onToggleVisible,
   onClick,
   onRename,
   onOpenDetails
 }: LayerChildRowProps) {
-  const colorClass = color === "green" ? "bg-emerald-500" : color === "amber" ? "bg-amber-400" : color === "blue" ? "bg-sky-500" : "bg-slate-400";
+  const colorClass = color === "green" ? "bg-emerald-500" : color === "amber" ? "bg-amber-400" : color === "blue" ? "bg-sky-500" : color === "violet" ? "bg-violet-500" : "bg-slate-400";
+  const iconColorClass = color === "green" ? "text-emerald-600" : color === "amber" ? "text-amber-600" : color === "blue" ? "text-sky-600" : color === "violet" ? "text-violet-600" : "text-slate-500";
   const rowToneClass = !strongColor || selected ? "" : color === "green"
     ? "border-l-emerald-500 bg-emerald-50/70 dark:bg-emerald-950/25"
     : color === "amber"
       ? "border-l-amber-500 bg-amber-50/80 dark:bg-amber-950/25"
       : color === "blue"
         ? "border-l-sky-500 bg-sky-50/70 dark:bg-sky-950/25"
-        : "border-l-slate-400";
+        : color === "violet"
+          ? "border-l-violet-500 bg-violet-50/70 dark:bg-violet-950/25"
+          : "border-l-slate-400";
   const strongColorClass = color === "green"
     ? "border-emerald-500 bg-emerald-100 text-emerald-800"
     : color === "amber"
       ? "border-amber-500 bg-amber-100 text-amber-900"
       : color === "blue"
         ? "border-sky-500 bg-sky-100 text-sky-800"
-        : "border-slate-400 bg-slate-100 text-slate-700";
+        : color === "violet"
+          ? "border-violet-500 bg-violet-100 text-violet-800"
+          : "border-slate-400 bg-slate-100 text-slate-700";
   const rowRef = useRef<HTMLDivElement | null>(null);
   const [editingName, setEditingName] = useState(false);
   const [draftName, setDraftName] = useState(label);
@@ -742,7 +857,7 @@ function LayerChildRow({
             <GripVertical className="h-3.5 w-3.5" />
           </button>
         ) : null}
-        {Icon ? <Icon className={`h-3.5 w-3.5 shrink-0 ${selected ? "text-white" : "text-sky-600"}`} /> : strongColor ? (
+        {Icon ? <Icon className={`h-3.5 w-3.5 shrink-0 ${selected ? "text-white" : iconColorClass}`} /> : strongColor ? (
           <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border ${selected ? "border-white bg-white text-blue-700" : strongColorClass}`}>
             <span className={`h-2.5 w-2.5 rounded-full ${selected ? colorClass : colorClass}`} />
           </span>
@@ -769,6 +884,20 @@ function LayerChildRow({
             <span className={`block truncate font-mono text-[10px] uppercase leading-3 ${selected ? "text-white/70" : "text-muted-foreground"}`}>{detail}</span>
           </button>
         )}
+        {onToggleVisible ? (
+          <button
+            type="button"
+            title={visible === false ? `Show ${label}` : `Hide ${label}`}
+            aria-pressed={visible !== false}
+            className={`flex h-6 w-6 shrink-0 items-center justify-center rounded border border-transparent ${selected ? "text-white/80 hover:bg-white/15 hover:text-white" : "text-muted-foreground hover:border-border-2 hover:bg-card hover:text-foreground"}`}
+            onClick={(event) => {
+              event.stopPropagation();
+              onToggleVisible();
+            }}
+          >
+            {visible === false ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+          </button>
+        ) : null}
         {onRename && !editingName ? (
           <button
             type="button"

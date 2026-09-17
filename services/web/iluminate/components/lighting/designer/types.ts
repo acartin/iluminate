@@ -1,5 +1,6 @@
 import type {
   DesignerBuildAreaForm,
+  DesignerChannelForm,
   DesignerControllerForm,
   DesignerArtworkForm,
   DesignerLayersForm,
@@ -9,12 +10,13 @@ import type {
   DesignerZoneForm
 } from "@/lib/lighting/partitura-model";
 
-export type DesignerTool = "select" | "measure" | "build_area_rect" | "build_area_ellipse" | "build_area_polygon" | "build_area_bezier" | "zone_rect" | "zone_ellipse" | "zone_polygon" | "zone_bezier" | "led_string" | "data_cable" | "cut" | "pan";
+export type DesignerTool = "select" | "measure" | "image_place" | "build_area_rect" | "build_area_ellipse" | "build_area_polygon" | "build_area_bezier" | "zone_rect" | "zone_ellipse" | "zone_polygon" | "zone_bezier" | "channel_bezier" | "led_string" | "data_cable" | "cut" | "pan";
 export type DesignerRouteTerminal = { routeId: string; pointIndex: number };
 export type DesignerSelection =
   | { type: "artwork"; id: string }
   | { type: "build_area"; id: string; pointIndex?: number }
   | { type: "zone"; id: string; pointIndex?: number }
+  | { type: "channel"; id: string; pointIndex?: number }
   | { type: "route"; id: string; pointIndex?: number }
   | { type: "controller"; id: string }
   | null;
@@ -22,7 +24,7 @@ export type ResizeHandle = "nw" | "ne" | "sw" | "se";
 export type DesignerViewport = { x: number; y: number; width: number; height: number };
 export type DesignerActiveLayer = keyof DesignerLayersForm;
 export type DesignerRouteDraft = { kind: DesignerRouteKind; points: DesignerPoint[]; routeId?: string };
-export type DesignerShapeDraft = { target: "build_area" | "zone"; mode: "straight" | "bezier"; points: DesignerPoint[] };
+export type DesignerShapeDraft = { target: "build_area" | "zone" | "channel"; mode: "straight" | "bezier"; points: DesignerPoint[] };
 export type DesignerMeasurement = { start: DesignerPoint; end?: DesignerPoint; locked?: boolean };
 export type DesignerDrag =
   | { type: "artwork-move"; artworkId: string; start: { x: number; y: number }; original: DesignerArtworkForm }
@@ -36,6 +38,9 @@ export type DesignerDrag =
   | { type: "zone-resize"; zoneId: string; handle: ResizeHandle; start: { x: number; y: number }; original: DesignerZoneForm }
   | { type: "zone-point"; zoneId: string; pointIndex: number }
   | { type: "zone-handle"; zoneId: string; pointIndex: number; handle: "in" | "out" }
+  | { type: "channel-move"; channelId: string; start: { x: number; y: number }; original: DesignerChannelForm }
+  | { type: "channel-point"; channelId: string; pointIndex: number }
+  | { type: "channel-handle"; channelId: string; pointIndex: number; handle: "in" | "out" }
   | { type: "route-move"; routeId: string; start: { x: number; y: number }; original: DesignerRouteForm }
   | { type: "route-point"; routeId: string; pointIndex: number; jointGroup: DesignerRouteTerminal[] }
   | { type: "pan"; start: { x: number; y: number }; original: DesignerViewport };
@@ -50,6 +55,8 @@ export type DesignerCanvasHit =
   | { type: "zone_point"; id: string; pointIndex: number }
   | { type: "zone_handle"; id: string; pointIndex: number; handle: "in" | "out" }
   | { type: "zone_resize"; id: string; handle: ResizeHandle }
+  | { type: "channel"; id: string }
+  | { type: "channel_point"; id: string; pointIndex: number }
   | { type: "route"; id: string }
   | { type: "route_point"; id: string; pointIndex: number }
   | { type: "controller"; id: string }

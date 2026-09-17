@@ -1,8 +1,8 @@
 "use client";
 
-import type { DesignerForm, DesignerPoint, DesignerZoneForm } from "@/lib/lighting/partitura-model";
+import type { DesignerForm, DesignerPoint, DesignerZoneForm, DesignerChannelForm } from "@/lib/lighting/partitura-model";
 import type { CompiledDesignerLayout } from "../designer-compiler";
-import { clamp, pointInsideDesignerShape } from "../designer-geometry";
+import { channelCenterPolyline, channelOutline, channelWidthCm, clamp, pointInsideDesignerShape } from "../designer-geometry";
 import type { DesignerViewport } from "../types";
 import type { DesignerAnimationDiffuser, DesignerAnimationPixel } from "../designer-paper-canvas";
 
@@ -13,13 +13,15 @@ export type DiffuserRenderSettings = {
   intensity: number;
   afterZoneEffectCm: number;
   afterZoneOpacity: number;
+  showOutlines: boolean;
 };
 
 export const DEFAULT_DIFFUSER_RENDER_SETTINGS: DiffuserRenderSettings = {
   diffuserDistanceCm: 10,
   intensity: 1,
   afterZoneEffectCm: 0,
-  afterZoneOpacity: 0.26
+  afterZoneOpacity: 0.26,
+  showOutlines: true
 };
 
 const STANDARD_WS2812B_VIEW_ANGLE_DEG = 120;
@@ -33,7 +35,9 @@ export function renderDirectLedFrame({
   viewport,
   canvasSize,
   selectedZoneId,
+  selectedChannelId,
   animationPixels,
+  showOutlines = true,
   colorMode
 }: {
   app: InstanceType<PixiModule["Application"]>;
@@ -43,7 +47,9 @@ export function renderDirectLedFrame({
   viewport: DesignerViewport;
   canvasSize: { width: number; height: number };
   selectedZoneId?: string;
+  selectedChannelId?: string;
   animationPixels: DesignerAnimationPixel[];
+  showOutlines?: boolean;
   colorMode: "day" | "night";
 }) {
   app.renderer.resize(canvasSize.width, canvasSize.height);
@@ -57,7 +63,10 @@ export function renderDirectLedFrame({
 
   g.rect(0, 0, canvasSize.width, canvasSize.height).fill({ color: colors.workspace });
   drawDocument(g, designer, viewport, canvasSize, colors, false);
-  drawZones(g, pixi, designer, viewport, canvasSize, selectedZoneId, colors, app.stage, false);
+  if (showOutlines) {
+    drawZones(g, pixi, designer, viewport, canvasSize, selectedZoneId, colors, app.stage, false);
+    drawChannelShapes(g, designer, viewport, canvasSize, colors, selectedChannelId);
+  }
   drawPixels(g, designer, layout, viewport, canvasSize, selectedZoneId, animationPixels, colors);
 
   const text = new pixi.Text({ text: `${layout.pixelMap.length} mapped pixels`, style: { fill: colors.label, fontFamily: "monospace", fontSize: 11 } });
@@ -79,6 +88,7 @@ export function renderDiffuserFrame({
   viewport,
   canvasSize,
   selectedZoneId,
+  selectedChannelId,
   animationPixels,
   diffuser,
   settings,
@@ -90,6 +100,7 @@ export function renderDiffuserFrame({
   viewport: DesignerViewport;
   canvasSize: { width: number; height: number };
   selectedZoneId?: string;
+  selectedChannelId?: string;
   animationPixels: DesignerAnimationPixel[];
   diffuser: DesignerAnimationDiffuser;
   settings: DiffuserRenderSettings;
@@ -120,6 +131,22 @@ export function renderDiffuserFrame({
     });
   });
 
+  const channelPixelIds = new Map<string, Set<string>>();
+  layout.zones.forEach((zone) => {
+    if (designer.channels.some((channel) => channel.id === zone.id)) channelPixelIds.set(zone.id, new Set(zone.pixelIds));
+  });
+  const pixelsByChannel = new Map<string, Array<CompiledDesignerLayout["pixelMap"][number]>>();
+  layout.pixelMap.forEach((pixel) => {
+    const rendered = renderedColors.get(`${pixel.output}:${pixel.serialIndex}`);
+    if (!rendered || lightEnergy(rendered) <= 2) return;
+    channelPixelIds.forEach((pixelIds, channelId) => {
+      if (!pixelIds.has(pixel.id)) return;
+      const pixels = pixelsByChannel.get(channelId) ?? [];
+      pixels.push(pixel);
+      pixelsByChannel.set(channelId, pixels);
+    });
+  });
+
   const optical = resolveDiffuserOptics(designer, diffuser, settings);
   const renderIntensity = settings.intensity * 2;
   const emitterRadiusPx = Math.max(2, screenUniformLength(optical.emitterRadiusCm, viewport, canvasSize));
@@ -133,6 +160,7 @@ export function renderDiffuserFrame({
       const afterZoneStrength = clamp(settings.afterZoneEffectCm / 6, 0, 1);
       const haloRadiusPx = Math.max(afterRadiusPx * 1.35, emitterRadiusPx * 0.8);
       pixelsByZone.forEach((pixels) => drawCanvasEmitters(halo, pixels, renderedColors, viewport, canvasSize, haloRadiusPx, renderIntensity, 0.9));
+      pixelsByChannel.forEach((pixels) => drawCanvasEmitters(halo, pixels, renderedColors, viewport, canvasSize, haloRadiusPx, renderIntensity, 0.9));
       context.save();
       context.globalCompositeOperation = "screen";
       context.filter = `blur(${Math.max(1, afterRadiusPx * 0.45)}px)`;
@@ -143,6 +171,7 @@ export function renderDiffuserFrame({
   }
 
   designer.zones.forEach((zone) => {
+    if (zone.visible === false) return;
     const zonePixels = pixelsByZone.get(zone.id) ?? [];
     const litLayer = createLayerCanvas(canvasSize);
     const lit = litLayer.getContext("2d");
@@ -167,16 +196,42 @@ export function renderDiffuserFrame({
     }
     context.restore();
 
+    if (settings.showOutlines) {
+      context.save();
+      canvasShapePath(context, zone, viewport, canvasSize);
+      context.strokeStyle = zone.id === selectedZoneId ? "#38bdf8" : palette.zoneStroke;
+      context.lineWidth = zone.id === selectedZoneId ? 1.8 : 1;
+      context.stroke();
+      const labelPoint = toScreen({ x: zone.x + 1, y: zone.y + 2.4 }, viewport, canvasSize);
+      context.fillStyle = zone.id === selectedZoneId ? "#0284c7" : palette.label;
+      context.font = `${zone.id === selectedZoneId ? 13 : 11}px sans-serif`;
+      context.fillText(zone.name, labelPoint.x, labelPoint.y);
+      context.restore();
+    }
+  });
+
+  designer.channels.forEach((channel) => {
+    if (channel.visible === false) return;
+    const channelPixels = pixelsByChannel.get(channel.id) ?? [];
+    const litLayer = createLayerCanvas(canvasSize);
+    const lit = litLayer.getContext("2d");
+    if (lit) drawCanvasEmitters(lit, channelPixels, renderedColors, viewport, canvasSize, emitterRadiusPx, renderIntensity, optical.hotspotAlpha);
     context.save();
-    canvasShapePath(context, zone, viewport, canvasSize);
-    context.strokeStyle = zone.id === selectedZoneId ? "#38bdf8" : palette.zoneStroke;
-    context.lineWidth = zone.id === selectedZoneId ? 1.8 : 1;
-    context.stroke();
-    const labelPoint = toScreen({ x: zone.x + 1, y: zone.y + 2.4 }, viewport, canvasSize);
-    context.fillStyle = zone.id === selectedZoneId ? "#0284c7" : palette.label;
-    context.font = `${zone.id === selectedZoneId ? 13 : 11}px sans-serif`;
-    context.fillText(zone.name, labelPoint.x, labelPoint.y);
+    canvasChannelPath(context, channel, viewport, canvasSize);
+    context.clip();
+    context.globalCompositeOperation = "lighter";
+    context.filter = blurPx > 0 ? `blur(${blurPx}px)` : "none";
+    context.drawImage(litLayer, 0, 0);
     context.restore();
+    if (settings.showOutlines) {
+      context.save();
+      canvasChannelPath(context, channel, viewport, canvasSize);
+      context.strokeStyle = channel.id === selectedChannelId ? "#60a5fa" : "#f59e0b";
+      context.lineWidth = channel.id === selectedChannelId ? 1.8 : 1.2;
+      context.globalAlpha = channel.id === selectedChannelId ? 0.95 : 0.6;
+      context.stroke();
+      context.restore();
+    }
   });
 }
 
@@ -237,7 +292,7 @@ function drawDocument(g: any, designer: DesignerForm, viewport: DesignerViewport
 }
 
 function drawZones(g: any, pixi: PixiModule, designer: DesignerForm, viewport: DesignerViewport, canvasSize: { width: number; height: number }, selectedZoneId: string | undefined, colors: Record<string, number>, stage: any, diffused: boolean) {
-  [...designer.zones].reverse().forEach((zone) => {
+  [...designer.zones].filter((zone) => zone.visible !== false).reverse().forEach((zone) => {
     const selected = zone.id === selectedZoneId;
     drawClosedShape(g, zone, viewport, canvasSize);
     g.fill({ color: selected ? colors.selected : colors.zoneFill, alpha: diffused ? 0.035 : selected ? 0.22 : 0.1 * designer.layers.zones.opacity });
@@ -249,6 +304,24 @@ function drawZones(g: any, pixi: PixiModule, designer: DesignerForm, viewport: D
     label.x = labelPoint.x;
     label.y = labelPoint.y;
     stage.addChild(label);
+  });
+}
+
+function drawChannelShapes(g: any, designer: DesignerForm, viewport: DesignerViewport, canvasSize: { width: number; height: number }, colors: Record<string, number>, selectedChannelId?: string) {
+  const scale = canvasSize.width / Math.max(1, viewport.width);
+  designer.channels.forEach((channel) => {
+    if (channel.visible === false) return;
+    const center = channelCenterPolyline(channel);
+    if (center.length < 2) return;
+    const selected = channel.id === selectedChannelId;
+    const first = toScreen(center[0], viewport, canvasSize);
+    g.moveTo(first.x, first.y);
+    center.slice(1).forEach((point) => {
+      const screen = toScreen(point, viewport, canvasSize);
+      g.lineTo(screen.x, screen.y);
+    });
+    g.closePath();
+    g.stroke({ color: selected ? 0x60a5fa : 0xf59e0b, alpha: selected ? 0.5 : 0.26, width: Math.max(1, channelWidthCm(channel) * scale), join: "miter" });
   });
 }
 
@@ -412,6 +485,17 @@ function designerShapeArea(shape: DesignerZoneForm) {
     }, 0)) / 2);
   }
   return Math.max(0.0001, Math.abs(shape.width * shape.height));
+}
+
+function canvasChannelPath(context: CanvasRenderingContext2D, channel: DesignerChannelForm, viewport: DesignerViewport, canvasSize: { width: number; height: number }) {
+  const outline = channelOutline(channel);
+  context.beginPath();
+  outline.forEach((point, index) => {
+    const screen = toScreen(point, viewport, canvasSize);
+    if (index === 0) context.moveTo(screen.x, screen.y);
+    else context.lineTo(screen.x, screen.y);
+  });
+  context.closePath();
 }
 
 function canvasShapePath(context: CanvasRenderingContext2D, shape: DesignerZoneForm, viewport: DesignerViewport, canvasSize: { width: number; height: number }) {

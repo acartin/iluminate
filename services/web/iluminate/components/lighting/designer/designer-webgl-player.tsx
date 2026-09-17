@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { DesignerForm } from "@/lib/lighting/partitura-model";
 import type { CompiledDesignerLayout } from "./designer-compiler";
-import { clamp, pointInsideDesignerShape, pointNearShapeStroke, worldHitTolerance } from "./designer-geometry";
+import { channelContainsPoint, clamp, pointInsideDesignerShape, pointNearShapeStroke, worldHitTolerance } from "./designer-geometry";
 import type { DesignerSelection, DesignerViewport } from "./types";
 import type { DesignerAnimationDiffuser, DesignerAnimationPixel } from "./designer-paper-canvas";
 import {
@@ -23,6 +23,7 @@ export function DesignerWebglPlayer({
   layout,
   viewport,
   selectedZoneId,
+  selectedChannelId,
   animationPixels = [],
   animationDiffuser = "none",
   diffuserSettings = DEFAULT_DIFFUSER_RENDER_SETTINGS,
@@ -33,6 +34,7 @@ export function DesignerWebglPlayer({
   layout: CompiledDesignerLayout;
   viewport: DesignerViewport;
   selectedZoneId?: string;
+  selectedChannelId?: string;
   animationPixels?: DesignerAnimationPixel[];
   animationDiffuser?: DesignerAnimationDiffuser;
   diffuserSettings?: DiffuserRenderSettings;
@@ -132,8 +134,8 @@ export function DesignerWebglPlayer({
       app.render();
       return;
     }
-    renderDirectLedFrame({ app, pixi, designer, layout, viewport: presentationViewport, canvasSize, selectedZoneId, animationPixels, colorMode });
-  }, [animationPixels, canvasSize, colorMode, designer, diffused, layout, presentationViewport, ready, selectedZoneId]);
+    renderDirectLedFrame({ app, pixi, designer, layout, viewport: presentationViewport, canvasSize, selectedZoneId, selectedChannelId, animationPixels, showOutlines: diffuserSettings.showOutlines, colorMode });
+  }, [animationPixels, canvasSize, colorMode, designer, diffused, diffuserSettings, layout, presentationViewport, ready, selectedChannelId, selectedZoneId]);
 
   useEffect(() => {
     const canvas = diffuserCanvasRef.current;
@@ -150,12 +152,13 @@ export function DesignerWebglPlayer({
       viewport: presentationViewport,
       canvasSize,
       selectedZoneId,
+      selectedChannelId,
       animationPixels,
       diffuser: animationDiffuser,
       settings: diffuserSettings,
       colorMode
     });
-  }, [animationPixels, animationDiffuser, canvasSize, colorMode, designer, diffuserSettings, diffused, layout, presentationViewport, selectedZoneId]);
+  }, [animationPixels, animationDiffuser, canvasSize, colorMode, designer, diffuserSettings, diffused, layout, presentationViewport, selectedChannelId, selectedZoneId]);
 
   function screenToWorld(clientX: number, clientY: number) {
     const rect = hostRef.current?.getBoundingClientRect();
@@ -170,10 +173,15 @@ export function DesignerWebglPlayer({
     const point = screenToWorld(event.clientX, event.clientY);
     const tolerance = worldHitTolerance(presentationViewport, canvasSize) * 2.25;
     const pickedZone = designer.zones.find((zone) => (
-      pointInsideDesignerShape(zone, point) || pointNearShapeStroke(zone, point, tolerance)
+      zone.visible !== false && (pointInsideDesignerShape(zone, point) || pointNearShapeStroke(zone, point, tolerance))
     ));
     if (pickedZone) {
       onSelect({ type: "zone", id: pickedZone.id });
+      return;
+    }
+    const pickedChannel = designer.channels.find((channel) => channel.visible !== false && channelContainsPoint(channel, point, tolerance));
+    if (pickedChannel) {
+      onSelect({ type: "channel", id: pickedChannel.id });
       return;
     }
     onSelect(null);

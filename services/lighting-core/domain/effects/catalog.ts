@@ -1,6 +1,7 @@
 import type { EffectDefinition, EffectId } from "../partituras/types.js";
 import { auroraEffect } from "./aurora.js";
 import { chaseEffect } from "./chase.js";
+import { cometEffect } from "./comet.js";
 import { fadeEffect } from "./fade.js";
 import { flameEffect } from "./flame.js";
 import type { EffectModule, EffectRenderer } from "./module.js";
@@ -10,6 +11,7 @@ import { solidEffect } from "./solid.js";
 import { spatialFillEffect } from "./spatial-fill.js";
 import { spatialWaveEffect } from "./spatial-wave.js";
 import { toggleEffect } from "./toggle.js";
+import { wipeEffect } from "./wipe.js";
 
 /**
  * Canonical effect registry.
@@ -26,6 +28,8 @@ export const effectModules: Record<EffectId, EffectModule> = {
   fade: fadeEffect,
   pulse: pulseEffect,
   chase: chaseEffect,
+  comet: cometEffect,
+  wipe: wipeEffect,
   toggle: toggleEffect,
   flame: flameEffect,
   spatial_fill: spatialFillEffect,

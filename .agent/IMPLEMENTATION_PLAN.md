@@ -194,6 +194,9 @@ UX direction after starting the Designer branch:
 - [x] Add toolbox delete action and floating-joint cleanup after route deletion.
 - [x] Keep fabrication nodes separate from LED dots in both visual route rendering and compiled segment start/step math.
 - [x] Add copy, paste and delete actions for selected designer objects.
+- [x] Add a Zones-plane Channel tool: Bezier center line, derived parallel borders,
+  configurable 3-20 mm width and `butt`/`round`/`closed` ends. Channels compile as
+  zones and are selectable clip targets.
 
 ### Exit Criteria
 

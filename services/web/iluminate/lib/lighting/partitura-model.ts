@@ -7,6 +7,8 @@ export type DesignerPoint = {
   nodeType?: DesignerPointNodeType;
   handleIn?: { x: number; y: number };
   handleOut?: { x: number; y: number };
+  /** Parametric corner fillet radius in mm, applied on straight/corner nodes. */
+  radiusMm?: number;
 };
 
 export type DesignerZoneForm = {
@@ -30,6 +32,27 @@ export type DesignerGroupForm = {
   members: Array<{ type: "zone" | "group"; id: string }>;
 };
 
+export type DesignerChannelCap = "butt" | "round" | "closed";
+
+/**
+ * A neon-flex style channel. It reuses the Bezier trajectory (center line) but
+ * carries its own semantics: a configurable width and end treatment. The two
+ * parallel borders are derived, never edited on their own. It behaves as a zone
+ * for pixel mapping and effects. Its JSON keeps the center path and width, not a
+ * generated polygon.
+ */
+export type DesignerChannelForm = {
+  id: string;
+  name: string;
+  points: DesignerPoint[];
+  pathMode: "straight" | "bezier";
+  widthMm: number;
+  cap: DesignerChannelCap;
+  visible: boolean;
+  locked: boolean;
+  opacity: number;
+};
+
 export type DesignerRouteKind = "led_string" | "data_cable";
 
 export type DesignerRouteForm = {
@@ -37,6 +60,7 @@ export type DesignerRouteForm = {
   name: string;
   kind: DesignerRouteKind;
   points: DesignerPoint[];
+  visible?: boolean;
 };
 
 export type DesignerControllerForm = {
@@ -47,6 +71,7 @@ export type DesignerControllerForm = {
   width: number;
   height: number;
   dataOutputs: number;
+  visible?: boolean;
 };
 
 export type DesignerLayerSettings = {
@@ -59,6 +84,7 @@ export type DesignerLayersForm = {
   artwork: DesignerLayerSettings;
   reference: DesignerLayerSettings;
   zones: DesignerLayerSettings;
+  hardware: DesignerLayerSettings;
   strings: DesignerLayerSettings;
 };
 
@@ -106,6 +132,7 @@ export type DesignerForm = {
   controller: DesignerControllerForm;
   zones: DesignerZoneForm[];
   groups: DesignerGroupForm[];
+  channels: DesignerChannelForm[];
   routes: DesignerRouteForm[];
 };
 
@@ -277,7 +304,7 @@ export function normalizeDefaultSignLayout(document: PartituraDocument) {
   const fallback = createDefaultPartituraDocument(document.projectId);
   const source = clonePartituraDocument(document);
   const designer = normalizeDesigner(source.designer);
-  const targetIds = new Set(["full_sign", ...designer.zones.map((zone) => zone.id), ...designer.groups.map((group) => group.id)]);
+  const targetIds = new Set(["full_sign", ...designer.zones.map((zone) => zone.id), ...designer.channels.map((channel) => channel.id), ...designer.groups.map((group) => group.id)]);
   // An empty scene list is a valid authoring state while Animate is being composed.
   const scenes = Array.isArray(source.scenes) ? source.scenes : fallback.scenes;
 
@@ -289,7 +316,7 @@ export function normalizeDefaultSignLayout(document: PartituraDocument) {
       clips: ensureUniqueClipNames((scene.clips ?? []).map((clip) => ({
         ...clip,
         target: targetIds.has(clip.target) ? clip.target : "full_sign",
-        coordinateSpace: clip.coordinateSpace ?? "local"
+        coordinateSpace: "local"
       })))
     })),
     activeSceneId: scenes.some((scene) => scene.id === source.activeSceneId) ? source.activeSceneId : scenes[0]?.id ?? "normal",
@@ -341,6 +368,7 @@ export function createDefaultDesigner(): DesignerForm {
       dataOutputs: 3
     },
     groups: [],
+    channels: [],
     zones: [
       {
         id: "fondo",
@@ -402,10 +430,12 @@ function normalizeDesigner(designer?: DesignerForm): DesignerForm {
     controller: normalizeController(designer.controller, fallback.controller),
     zones: Array.isArray(designer.zones) && designer.zones.length ? designer.zones.map(normalizeDesignerZone) : fallback.zones,
     groups: Array.isArray(designer.groups) ? designer.groups.filter((group) => typeof group.id === "string" && typeof group.name === "string").map((group) => ({ id: group.id, name: group.name, members: Array.isArray(group.members) ? group.members.filter((member) => member?.type === "zone" || member?.type === "group") : [] })) : [],
+    channels: normalizeDesignerChannels(designer.channels),
     routes: Array.isArray(designer.routes) && designer.routes.length ? designer.routes.map((route, index): DesignerRouteForm => ({
       id: typeof route.id === "string" && route.id ? route.id : `route_${index + 1}`,
       name: typeof route.name === "string" && route.name ? route.name : `Route ${index + 1}`,
       kind: route.kind === "data_cable" ? "data_cable" : "led_string",
+      visible: route.visible !== false,
       points: Array.isArray(route.points) ? route.points.filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y)).map((point) => ({ x: point.x, y: point.y, ...(point.joint ? { joint: true } : {}) })) : []
     })).filter((route) => route.points.length >= 2) : fallback.routes
   };
@@ -427,11 +457,44 @@ function normalizeDesignerZone(zone: DesignerZoneForm): DesignerZoneForm {
   };
 }
 
+function normalizeDesignerChannels(channels: DesignerChannelForm[] | undefined): DesignerChannelForm[] {
+  if (!Array.isArray(channels)) return [];
+  return channels
+    .filter((channel) => channel && typeof channel.id === "string" && typeof channel.name === "string")
+    .map((channel): DesignerChannelForm => ({
+      id: channel.id,
+      name: channel.name,
+      points: normalizeChannelPoints(channel.points),
+      pathMode: channel.pathMode === "bezier" ? "bezier" : "straight",
+      widthMm: clampNumber(typeof channel.widthMm === "number" && Number.isFinite(channel.widthMm) ? channel.widthMm : 10, 3, 20),
+      cap: channel.cap === "round" || channel.cap === "closed" ? channel.cap : "butt",
+      visible: typeof channel.visible === "boolean" ? channel.visible : true,
+      locked: typeof channel.locked === "boolean" ? channel.locked : false,
+      opacity: clampNumber(typeof channel.opacity === "number" ? channel.opacity : 1, 0.05, 1)
+    }))
+    .filter((channel) => channel.points.length >= 2);
+}
+
+function normalizeChannelPoints(points: DesignerPoint[] | undefined): DesignerPoint[] {
+  if (!Array.isArray(points)) return [];
+  return points
+    .filter((point) => typeof point.x === "number" && Number.isFinite(point.x) && typeof point.y === "number" && Number.isFinite(point.y))
+    .map((point) => ({
+      x: point.x,
+      y: point.y,
+      ...(isDesignerPointNodeType(point.nodeType) ? { nodeType: point.nodeType } : {}),
+      ...(isDesignerHandle(point.handleIn) ? { handleIn: { x: point.handleIn.x, y: point.handleIn.y } } : {}),
+      ...(isDesignerHandle(point.handleOut) ? { handleOut: { x: point.handleOut.x, y: point.handleOut.y } } : {}),
+      ...(isDesignerRadius(point.radiusMm) ? { radiusMm: point.radiusMm } : {})
+    }));
+}
+
 function defaultDesignerLayers(): DesignerLayersForm {
   return {
     artwork: { visible: true, locked: false, opacity: 1 },
     reference: { visible: true, locked: false, opacity: 0.75 },
     zones: { visible: true, locked: false, opacity: 0.35 },
+    hardware: { visible: true, locked: false, opacity: 1 },
     strings: { visible: true, locked: false, opacity: 1 }
   };
 }
@@ -442,6 +505,7 @@ function normalizeDesignerLayers(layers: (Partial<DesignerLayersForm> & { svg?: 
     artwork: normalizeDesignerLayer(layers?.artwork, fallback.artwork),
     reference: normalizeDesignerLayer(reference, fallback.reference),
     zones: normalizeDesignerLayer(layers?.zones, fallback.zones),
+    hardware: normalizeDesignerLayer(layers?.hardware, fallback.hardware),
     strings: normalizeDesignerLayer(layers?.strings, fallback.strings)
   };
 }
@@ -505,9 +569,14 @@ function normalizeDesignerPoints(points: DesignerPoint[] | undefined) {
       y: point.y,
       ...(isDesignerPointNodeType(point.nodeType) ? { nodeType: point.nodeType } : {}),
       ...(isDesignerHandle(point.handleIn) ? { handleIn: { x: point.handleIn.x, y: point.handleIn.y } } : {}),
-      ...(isDesignerHandle(point.handleOut) ? { handleOut: { x: point.handleOut.x, y: point.handleOut.y } } : {})
+      ...(isDesignerHandle(point.handleOut) ? { handleOut: { x: point.handleOut.x, y: point.handleOut.y } } : {}),
+      ...(isDesignerRadius(point.radiusMm) ? { radiusMm: point.radiusMm } : {})
     }));
   return normalized.length >= 3 ? normalized : undefined;
+}
+
+function isDesignerRadius(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0;
 }
 
 function isDesignerPointNodeType(value: unknown): value is DesignerPointNodeType {
@@ -531,7 +600,8 @@ function normalizeController(controller: DesignerControllerForm | undefined, fal
     y: typeof controller.y === "number" && Number.isFinite(controller.y) ? controller.y : fallback.y,
     width: positiveNumber(controller.width, fallback.width),
     height: positiveNumber(controller.height, fallback.height),
-    dataOutputs: Math.max(1, Math.round(positiveNumber(controller.dataOutputs, fallback.dataOutputs)))
+    dataOutputs: Math.max(1, Math.round(positiveNumber(controller.dataOutputs, fallback.dataOutputs))),
+    visible: typeof controller.visible === "boolean" ? controller.visible : true
   };
 }
 

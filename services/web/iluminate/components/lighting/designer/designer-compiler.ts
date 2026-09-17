@@ -1,5 +1,5 @@
 import type { DesignerForm, DesignerPoint, DesignerRouteForm, PartituraDocument } from "@/lib/lighting/partitura-model";
-import { controllerPortPoint, pointInsideDesignerShape, pointNearShapeStroke, sameSnapPoint, sampleRouteLedDots } from "./designer-geometry";
+import { channelContainsPoint, channelWidthCm, controllerPortPoint, pointInsideDesignerShape, pointNearShapeStroke, sameSnapPoint, sampleRouteLedDots } from "./designer-geometry";
 
 export type CompiledDesignerLayout = {
   outputs: Array<{ id: string; name: string; output: 1 | 2 | 3; pixelCount: number }>;
@@ -57,12 +57,27 @@ export function compileDesignerLayout(designer: DesignerForm): CompiledDesignerL
     name: zone.name,
     pixelIds: pixelMap.filter((pixel) => pixelTouchesZone(zone, { x: pixel.x, y: pixel.y }, pixelFootprintRadiusCm)).map((pixel) => pixel.id)
   }));
-  zones.filter((zone) => !zone.pixelIds.length).forEach((zone) => warnings.push(`${zone.name} contains no mapped pixels.`));
+  const channelZones = designer.channels.map((channel) => ({
+    id: channel.id,
+    name: channel.name,
+    pixelIds: pixelMap.filter((pixel) => channelContainsPoint(channel, { x: pixel.x, y: pixel.y }, pixelFootprintRadiusCm)).map((pixel) => pixel.id)
+  }));
+  const allZones = [...zones, ...channelZones];
+  allZones.filter((zone) => !zone.pixelIds.length).forEach((zone) => warnings.push(`${zone.name} contains no mapped pixels.`));
+  designer.channels.forEach((channel) => {
+    const halfWidthCm = channelWidthCm(channel) / 2;
+    channel.points.forEach((point, index) => {
+      const radiusCm = (point.radiusMm ?? 0) / 10;
+      if (radiusCm > 0 && radiusCm < halfWidthCm) {
+        warnings.push(`${channel.name}: fillet at node ${index + 1} (${point.radiusMm} mm) is smaller than half the channel width (${(halfWidthCm * 10).toFixed(1)} mm); the inner edge may pinch.`);
+      }
+    });
+  });
   const groups = [...designer.groups];
-  if (zones.length) groups.push({ id: "full_sign", name: "Full sign", members: zones.map((zone) => ({ type: "zone" as const, id: zone.id })) });
+  if (allZones.length) groups.push({ id: "full_sign", name: "Full sign", members: allZones.map((zone) => ({ type: "zone" as const, id: zone.id })) });
   validateGroups(designer, groups, errors, warnings);
   const outputs: CompiledDesignerLayout["outputs"] = ([1, 2, 3] as const).map((output) => ({ id: `output_${output}`, name: `Output ${output}`, output, pixelCount: serialStarts[output] }));
-  return { outputs, pixelMap, zones, groups, validation: { errors, warnings } };
+  return { outputs, pixelMap, zones: allZones, groups, validation: { errors, warnings } };
 }
 
 function validateGroups(
@@ -71,7 +86,7 @@ function validateGroups(
   errors: string[],
   warnings: string[]
 ) {
-  const zoneIds = new Set(designer.zones.map((zone) => zone.id));
+  const zoneIds = new Set([...designer.zones.map((zone) => zone.id), ...designer.channels.map((channel) => channel.id)]);
   const groupIds = new Set(groups.map((group) => group.id));
   const membersById = new Map(groups.map((group) => [group.id, group.members]));
 

@@ -100,18 +100,76 @@ Do not assume one addressable pixel is always one physical LED.
 
 ### Canvas Layers
 
-The Designer separates four persisted visual layers:
+The Designer separates five persisted visual layers:
 
 - `Artwork`: imported client/project image assets placed on the canvas. It renders image references only, does not duplicate/upload assets, and does not generate LEDs. Each item persists `assetId`, name and rectangle. Older JSON may still contain item-level visibility/lock/opacity fields, but the UI/rendering policy is to control visibility, lock and opacity at the layer/category level only.
-- `Reference`: measured construction/reference geometry such as build areas. It does not generate LEDs.
+- `Reference`: measured construction/reference geometry such as build areas. It does not generate LEDs. In the panel it is presented as a `Reference` folder inside the `Artwork` category. The folder has no header eye/lock/opacity; the `Artwork` category eye/lock governs the reference plane as its master, and each build area's own eye refines it. Rendered as a violet dashed guide.
 - `Zones`: visual targets such as letters, logos, background and full sign.
-- `Strings`: physical fabrication plane containing LED strings, data cables, terminals, joints and the controller.
+- `Channels`: neon-flex bands belonging to the Zones plane. A channel reuses the
+  Bezier trajectory as an editable center line and derives two parallel borders
+  from a width. It behaves as a zone for pixel mapping and effects.
+- `Hardware`: physical controller. Its `Hardware` category holds the controller
+  row directly (no folders yet) and owns the layer show/lock/opacity. The
+  controller is drawn as a small PCB (board, two cosmetic chips and a status
+  dot); the chips are visual only and do not change behavior.
+- `Strings`: physical fabrication plane containing LED strings, data cables, terminals and joints (no controller).
 
-Each layer has `visible`, `locked` and `opacity`. Hidden layers do not render or receive selection. Locked layers remain visible but cannot be edited from the canvas/toolbox/top properties. Do not expose per-object visibility, lock or opacity controls in the layer tree.
+Each layer has `visible`, `locked` and `opacity`. Hidden layers do not render or receive selection. Locked layers remain visible but cannot be edited from the canvas/toolbox/top properties. Each object row also exposes a per-object visibility eye (like the layer header): hidden objects do not render and are not hit-tested. Per-object lock and opacity remain layer-level only.
 
-`Groups` are not a canvas layer and have no geometry. They are authored in a dedicated `Groups` section of the Layers panel: a named, cycle-free composition of zones and/or other groups. A clip that targets a group applies its effect to the union of the member zones' pixels, respecting each zone's geometry, and behaves as one composition when the clip uses `coordinateSpace: "global"`. Groups persist in `designer.groups` and compile into `compiledLayout.groups`.
+`Groups` are not a canvas layer and have no geometry. They are authored in the `Zones Groups` folder of the `Diffusors` category: a named, cycle-free composition of zones and/or other groups. A clip that targets a group applies its effect to the union of the member zones' pixels, respecting each zone's geometry, and behaves as one composition across the group's bounds. Whole-sign composition is achieved by grouping the desired zones (a group of all zones spans the sign). The clip `coordinateSpace` control was removed from the UI; clips are authored as `"local"` and the core still accepts/validates `serial`/`local`/`global`. Groups persist in `designer.groups` and compile into `compiledLayout.groups`.
 
-The right Layers panel is the active-plane selector. Exactly one layer is active at a time, and the active layer must have a clearly different background. Visibility and lock buttons are secondary controls, not the active selection state. Canvas editing only applies to the active layer: artwork image placement edits only when `Artwork` is active; build area/reference edits only when `Reference` is active; zones edit only when `Zones` is active; routes/controller edit only when `Strings` is active. Tools must not switch the active layer. The toolbox should show only the tools that apply to the active layer, plus global navigation/actions such as select, pan, zoom and delete.
+### Channel Tool
+
+`Channel` is a Zones-plane tool for neon-flex routing. The operator traces the
+center line exactly like the Bezier zone tool, then finishes with a double-click
+or `Enter` (open ends) or by clicking the first node (closed loop). The operator
+only edits the center nodes and Bezier handles; the two parallel borders are
+derived and are never manipulated separately.
+
+- Persisted form is `designer.channels` with the center `points`, `pathMode`,
+  `widthMm` (3-20 mm) and `cap` (`butt` / `round` / `closed`). The generated
+  polygon is never stored, only the center trajectory and the width.
+- `channelOutline` derives the band (parallel borders + caps) for rendering;
+  `channelContainsPoint` selects pixels by distance to the center line.
+- On compile, channels are emitted as zones in `compiledLayout.zones` (and join
+  the `full_sign` group), so clips target them like any zone. They appear in the
+  Animate and Scenes target lists, and are selectable on the Animate canvas
+  (clicking a channel selects it, so `Add clip` targets it).
+- The Layers panel `Channels` section selects, renames, deletes and edits width
+  and ends of each channel. Width and ends also appear in the top contextual bar
+  when a channel is selected.
+- Corner fillet: a corner/straight node can carry a parametric `radiusMm`
+  (`DesignerPoint.radiusMm`). The center line inserts a tangent circular arc
+  (clamped by the neighboring segment lengths) and the two borders follow it, so
+  the tape gets a real, editable bend radius. The selected node exposes a
+  `Fillet` field in the contextual bar. Fillet applies to straight/corner nodes
+  without Bezier handles (i.e. polygonal paths); a node with handles is treated
+  as a free curve. Compile warns when a fillet radius is smaller than half the
+  channel width, because the inner border would pinch.
+
+### Artwork Tool
+
+`Artwork` is the umbrella plane for visual references. Activating the category
+(or either of its `Images` / `Reference` folders) exposes two toolbar groups:
+
+- `Images`: the `Image` tool (`image_place`). Arm it, then click the canvas to
+  place an **empty image container** at that point; the container is selected.
+  Choose its image afterwards from the `Image source` dropdown in the `Images`
+  folder (populated from the project assets). Asset-less containers render as a
+  dashed placeholder on the canvas. Upload lives in the folder (`Upload`
+  action). Shortcut `i`.
+- `Reference`: the build-area tools (rectangle, ellipse, polygon, bezier), the
+  same tools used for reference geometry. Shortcuts `p` (polygon) and `b`
+  (bezier).
+
+Both object kinds are selectable, movable, resizable, insertable (double-click)
+and deletable on the canvas while `Artwork` is active, and panel selection
+mirrors on the canvas. Each object keeps its own visibility eye. Folders have no
+per-folder eye/lock/opacity: the `Artwork` category header owns the plane
+visibility/lock, and the `Reference` folder is standardized to per-object eyes
+only.
+
+The right Layers panel is the active-plane selector. Exactly one layer is active at a time, and the active layer must have a clearly different background. **On open no plane is active** (all categories collapsed): the canvas must not select, drag or draw any object until the operator activates a category, at which point that plane becomes editable. Visibility and lock buttons are secondary controls, not the active selection state. Canvas editing only applies to the active plane: `Artwork` is the umbrella plane for image placement **and** build-area/reference editing; `Diffusors` (internal `zones`) edits zones, channels and groups; `Strings` edits routes (data cables/LED strings); `Hardware` selects the controller. Tools must not switch the active plane. The toolbox should show only the tools that apply to the active plane, plus global navigation/actions such as select, pan, zoom and delete.
 
 `Build Areas` are editable reference geometries. They are not containers and do not own/delete zones or strings. Multiple build areas may exist. They currently support rectangle, ellipse and polygon. The overall canvas can be larger to leave room for controller, cables and notes. Artwork image references should be positioned/scaled into a build area, not forced to occupy the whole canvas.
 
@@ -253,31 +311,53 @@ Top command/context bars:
 Layer panel:
 
 - Uses `@dnd-kit/core` and `@dnd-kit/sortable` for drag/reorder.
-- Main categories are containers only: `Artwork`, `Reference`, `Zones`, and
-  `Strings`. Do not add "new category" actions there. Creation tools operate
-  inside the currently active category/layer.
-- Visibility, lock and opacity are category-level controls only. Do not add
-  per-object eye/lock/opacity controls in the layer tree; that made the UI noisy
-  and hid the object names.
+- Main categories, in order, are `Artwork`, `Diffusors`, `Strings`, and
+  `Hardware`. `Artwork` contains the collapsible folders `Images` (placed image
+  assets, with an upload action; each selected container configures its image
+  from a source dropdown) and `Reference`
+  (build areas); `Reference` is no longer a top-level category. `Diffusors` is
+  the visual-target plane (internally the `zones` layer); it groups three
+  collapsible folders, `Zones` (blue dot), `Channels` (orange Waves icon) and
+  `Zones Groups`. `Hardware` holds the controller and is last. Do not add "new
+  category" actions there. Creation tools operate inside the currently active
+  category/layer.
+- On open, every category (`Artwork`, `Diffusors`, `Strings`, `Hardware`) and
+  every subfolder (`Artwork`'s `Images`/`Reference`, `Diffusors`' `Zones`/
+  `Channels`/`Zones Groups`) start collapsed. The panel auto-expands a category
+  (and the matching subfolder) only when a selected object belongs to it.
+- Visibility is hierarchical (Inkscape/Corel style). A category header eye is the
+  **master switch** for its whole plane: `Artwork` covers both `Images` and the
+  `Reference` build areas, `Diffusors` covers `Zones`/`Channels`/`Zones Groups`,
+  `Strings` covers routes, and `Hardware` covers the controller. A hidden
+  category hides all of its objects regardless of their own eye; when the
+  category is visible, only objects whose own row eye is on are drawn and
+  hit-tested. Lock and opacity stay category-level. Folders have no eye of their
+  own.
+- Lock is consistent with the toolbox: a locked category grays out (disables)
+  its toolbox tools. The `Artwork` category lock gates all of its tools (Images
+  and Reference). Folders have no lock of their own. A hidden layer does not
+  disable tools; using a tool re-shows the layer.
 - Object rows should prioritize the complete object name. Keep inline row
-  actions minimal: reorder grip, rename, and open details. The details action
-  opens a modal/popup where large object metadata can live without crowding the
-  layer tree.
+  actions minimal: reorder grip, visibility eye, rename, and open details. The
+  details action opens a modal/popup where large object metadata can live
+  without crowding the layer tree.
 - The order persisted in the existing arrays is the visual/editing order:
-  `artwork`, `buildAreas`, `zones`, and `routes`.
+  `artwork`, `buildAreas`, `zones`, `channels`, and `routes`.
 - The layer panel order is front-to-back. Items at the top of a category are
   visually in front and receive hit-testing first. Items at the bottom are in
   the background. Reordering a zone is the intended way to place broad shapes
   such as "Rotulo completo" behind smaller letter/logo zones.
 - The controller is fixed in the Strings layer; only data cables and LED strings
   are sortable.
-- A dedicated `Groups` section below `Zones` authors effect-target groups. It is
-  not a work plane: creating groups never changes the active layer. A new group
-  starts with every current zone as a member; uncheck the ones to exclude.
-  Checking a zone, or clicking its name, selects that zone on the canvas (and
-  activates the Zones plane) so it can be located. The member list also offers
-  nested groups; options that would create a cycle are disabled, and the
-  compiler also rejects cycles, unknown members and duplicate members.
+- `Zones Groups` is a collapsible folder inside `Diffusors`, alongside `Zones` and
+  `Channels`. It is not a work plane: creating groups never changes the active
+  layer. A new group starts with every current zone as a member; its expanded
+  list shows all available zones/channels as checkboxes (checked = member),
+  so membership is a simple checklist. Checking a zone, or clicking its name,
+  selects that zone on the canvas (and activates the Diffusors plane) so it can
+  be located. The list also offers nested groups; options that would create a
+  cycle are disabled, and the compiler also rejects cycles, unknown members and
+  duplicate members.
 - The `Strings` layer may show visual subfolders such as `Data cables` and
   `LED strings` for clarity. These folders are not separate work planes and do
   not change the active layer. Reordering is allowed only within the same route
@@ -331,10 +411,14 @@ Current renderer module:
 - `renderDirectLedFrame`: Pixi/WebGL direct pixel renderer.
 - `renderDiffuserFrame`: canvas-based acrylic diffuser renderer.
 - `DiffuserRenderSettings`: temporary calibration controls for distance,
-  intensity and after-zone glow. Intensity is intentionally rendered with extra
-  gain so the maximum slider value reaches a visibly saturated acrylic
-  simulation. After-zone glow is measured in real centimeters and is allowed to
-  spill softly outside the zone only when the user raises that control.
+  intensity, after-zone glow and an `Outlines` toggle. Intensity is intentionally
+  rendered with extra gain so the maximum slider value reaches a visibly
+  saturated acrylic simulation. After-zone glow is measured in real centimeters
+  and is allowed to spill softly outside the zone only when the user raises that
+  control. The after-zone halo is built from both zone and channel emitters, so
+  channels glow outside their band exactly like zones. `showOutlines` (default true) controls whether zone/channel outlines,
+  fills and labels are drawn; turn it off for a clean emulation with only the
+  light output.
 
 Diffuser rendering must behave like a light field, not a zone color wash. Each
 active LED contributes local energy around its physical `pixelMap` position.

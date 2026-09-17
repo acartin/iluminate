@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle, ArrowLeft, Cable, Circle, Copy, Hand, Layers, Maximize2, MousePointer2, Pause, PenLine, Play, Plus, Ruler, Route, RotateCcw, Save, Scissors, Sparkles, Spline, Square, Trash2, ZoomIn, ZoomOut } from "lucide-react";
+import { AlertCircle, ArrowLeft, Cable, Circle, Copy, Hand, Image as ImageIcon, Layers, Maximize2, MousePointer2, Pause, PenLine, Play, Plus, Ruler, Route, RotateCcw, Save, Scissors, Sparkles, Spline, Square, Trash2, Waves, ZoomIn, ZoomOut } from "lucide-react";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -18,12 +18,14 @@ import {
   canSolderRoutes,
   clamp,
   clampViewport,
+  deleteChannelPoint as deleteChannelPointPath,
   deletePolygonPoint,
   findMatchingControllerPort,
   findMatchingSolderTerminal,
   findNearbyControllerPort,
   findNearbySolderTerminal,
   fitViewportToDesigner,
+  insertChannelPoint as insertChannelPointPath,
   insertPolygonPoint,
   isRouteTerminal,
   moveRoutePoint,
@@ -36,10 +38,13 @@ import {
   resizedZone,
   routeLengthCm,
   sameSnapPoint,
+  setChannelNodeType as setChannelNodeTypePath,
   setPolygonNodeType,
   sampleRouteLedDots,
   snapValue,
   summarizeRoute,
+  updateChannelBezierHandle,
+  updateChannelPoint as updateChannelPointPath,
   updatePolygonPoint
 } from "./designer/designer-geometry";
 import { DesignerStudioCanvas, type DesignerAnimationDiffuser, type DesignerAnimationPixel } from "./designer/designer-paper-canvas";
@@ -54,6 +59,7 @@ import {
   ClipForm,
   DesignerArtworkForm,
   DesignerBuildAreaForm,
+  DesignerChannelForm,
   DesignerControllerForm,
   DesignerForm,
   DesignerGroupForm,
@@ -135,9 +141,9 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
   const animationStartRef = useRef<number | null>(null);
   const animationOffsetRef = useRef(0);
   const [tool, setTool] = useState<DesignerTool>("select");
-  // A new design starts by defining its physical reference, not by wiring it.
-  // This also keeps the seeded build area immediately selectable and removable.
-  const [activeLayer, setActiveLayer] = useState<DesignerActiveLayer>("reference");
+  // No work plane is active until the operator picks a category in the Layers
+  // panel. Until then the canvas must not select or drag any object.
+  const [activeLayer, setActiveLayer] = useState<DesignerActiveLayer | null>(null);
   const [selection, setSelection] = useState<DesignerSelection>(null);
   const [clipboard, setClipboard] = useState<DesignerSelection>(null);
   const [fabricationNotice, setFabricationNotice] = useState("Ready");
@@ -148,6 +154,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
   const [animationDiffuser, setAnimationDiffuser] = useState<DesignerAnimationDiffuser>("none");
   const [diffuserSettings, setDiffuserSettings] = useState<DiffuserRenderSettings>(DEFAULT_DIFFUSER_RENDER_SETTINGS);
   const [projectAssets, setProjectAssets] = useState<ProjectAsset[]>([]);
+  const [assetsVersion, setAssetsVersion] = useState(0);
   const artworkUrls = useMemo(() => Object.fromEntries(projectAssets.map((asset) => [asset.id, `/api/lighting/projects/${encodeURIComponent(document.projectId)}/assets/${encodeURIComponent(asset.id)}`])), [document.projectId, projectAssets]);
   const animationPixels = animationResult?.preview?.outputRows.flatMap((row) => row.pixels) ?? [];
 
@@ -208,6 +215,8 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
   const selectedBuildAreaPointIndex = selection?.type === "build_area" ? selection.pointIndex : undefined;
   const selectedZone = selection?.type === "zone" ? designer.zones.find((zone) => zone.id === selection.id) ?? null : null;
   const selectedZonePointIndex = selection?.type === "zone" ? selection.pointIndex : undefined;
+  const selectedChannel = selection?.type === "channel" ? designer.channels.find((channel) => channel.id === selection.id) ?? null : null;
+  const selectedChannelPointIndex = selection?.type === "channel" ? selection.pointIndex : undefined;
   const selectedRoute = selection?.type === "route" ? designer.routes.find((route) => route.id === selection.id) ?? null : null;
   const selectedRoutePointIndex = selection?.type === "route" ? selection.pointIndex : undefined;
   const selectedController = selection?.type === "controller" ? designer.controller : null;
@@ -239,7 +248,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
     return () => {
       cancelled = true;
     };
-  }, [document.projectId]);
+  }, [document.projectId, assetsVersion]);
 
   useEffect(() => {
     let cancelled = false;
@@ -274,8 +283,10 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
       if (activeLayer === "zones" && event.key.toLowerCase() === "e") setTool("zone_ellipse");
       if (activeLayer === "zones" && event.key.toLowerCase() === "p") setTool("zone_polygon");
       if (activeLayer === "zones" && event.key.toLowerCase() === "b") setTool("zone_bezier");
-      if (activeLayer === "reference" && event.key.toLowerCase() === "p") setTool("build_area_polygon");
-      if (activeLayer === "reference" && event.key.toLowerCase() === "b") setTool("build_area_bezier");
+      if (activeLayer === "zones" && event.key.toLowerCase() === "c" && !event.ctrlKey && !event.metaKey) setTool("channel_bezier");
+      if (activeLayer === "artwork" && event.key.toLowerCase() === "i") setTool("image_place");
+      if ((activeLayer === "artwork" || activeLayer === "reference") && event.key.toLowerCase() === "p") setTool("build_area_polygon");
+      if ((activeLayer === "artwork" || activeLayer === "reference") && event.key.toLowerCase() === "b") setTool("build_area_bezier");
       if (activeLayer === "strings" && event.key.toLowerCase() === "l") setTool("led_string");
       if (activeLayer === "strings" && event.key.toLowerCase() === "d") setTool("data_cable");
       if (activeLayer === "strings" && event.key.toLowerCase() === "x") setTool("cut");
@@ -355,6 +366,14 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
     });
   }
 
+  function ensureLayerVisible(layer: keyof DesignerLayersForm) {
+    if (designer.layers[layer].visible) return;
+    updateDesigner({
+      ...designer,
+      layers: { ...designer.layers, [layer]: { ...designer.layers[layer], visible: true } }
+    });
+  }
+
   function reorderDesignerItems(layer: "artwork" | "reference" | "zones" | "strings", activeId: string, overId: string) {
     if (layer === "artwork") {
       if (designer.layers.artwork.locked) return;
@@ -363,7 +382,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
       return;
     }
     if (layer === "reference") {
-      if (designer.layers.reference.locked) return;
+      if (designer.layers.artwork.locked) return;
       updateDesigner({ ...designer, buildAreas: reorderById(designer.buildAreas, activeId, overId) });
       setSelection({ type: "build_area", id: activeId });
       return;
@@ -382,32 +401,64 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
     setSelection({ type: "route", id: activeId });
   }
 
-  function addArtwork(asset: ProjectAsset) {
-    if (designer.layers.artwork.locked) return;
+  function addArtwork(point?: DesignerPoint) {
+    if (designer.layers.artwork.locked) {
+      setFabricationNotice("Artwork layer is locked. Unlock it to add images.");
+      setTool("select");
+      return;
+    }
     const next = designer.artwork.length + 1;
     const width = Math.max(12, Math.round(activeViewport.width * 0.3));
     const height = Math.max(8, Math.round(activeViewport.height * 0.3));
+    const centerX = point?.x ?? activeViewport.x + activeViewport.width / 2;
+    const centerY = point?.y ?? activeViewport.y + activeViewport.height / 2;
     const artwork: DesignerArtworkForm = {
-      id: `artwork_${asset.id}_${Date.now()}`,
-      assetId: asset.id,
-      name: asset.fileName.replace(/\.[^.]+$/, "") || `Artwork ${next}`,
-      x: snapValue(activeViewport.x + activeViewport.width / 2 - width / 2, designer.snapCm),
-      y: snapValue(activeViewport.y + activeViewport.height / 2 - height / 2, designer.snapCm),
+      id: `artwork_${Date.now()}`,
+      assetId: "",
+      name: `Image ${next}`,
+      x: snapValue(centerX - width / 2, designer.snapCm),
+      y: snapValue(centerY - height / 2, designer.snapCm),
       width,
       height,
       visible: true,
       locked: false,
       opacity: 0.85
     };
-    updateDesigner({ ...designer, artwork: [...designer.artwork, artwork] });
+    updateDesigner({
+      ...designer,
+      layers: { ...designer.layers, artwork: { ...designer.layers.artwork, visible: true } },
+      artwork: [...designer.artwork, artwork]
+    });
     setActiveLayer("artwork");
     setSelection({ type: "artwork", id: artwork.id });
     setTool("select");
-    setFabricationNotice("Artwork reference added.");
+    setFabricationNotice("Image container added. Pick its image in the panel.");
+  }
+
+  function placeImageAt(point: DesignerPoint) {
+    addArtwork(point);
+  }
+
+  async function uploadArtwork(file: File) {
+    if (!document.projectId) return;
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      const response = await fetch(`/api/lighting/projects/${encodeURIComponent(document.projectId)}/assets/upload`, { method: "POST", body: form });
+      if (!response.ok) {
+        setFabricationNotice("Image upload failed.");
+        return;
+      }
+      setFabricationNotice(`Uploaded ${file.name}. Pick it in Images and place it.`);
+      setAssetsVersion((version) => version + 1);
+    } catch {
+      setFabricationNotice("Image upload failed.");
+    }
   }
 
   function patchArtwork(artworkId: string, patch: Partial<DesignerArtworkForm>) {
-    if (designer.layers.artwork.locked) return;
+    const touchesGeometry = patch.x !== undefined || patch.y !== undefined || patch.width !== undefined || patch.height !== undefined;
+    if (designer.layers.artwork.locked && touchesGeometry) return;
     updateDesigner({ ...designer, artwork: designer.artwork.map((entry) => (entry.id === artworkId ? { ...entry, ...patch } : entry)) });
   }
 
@@ -420,7 +471,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
   }
 
   function patchBuildArea(buildAreaId: string, patch: Partial<DesignerBuildAreaForm>) {
-    if (designer.layers.reference.locked) return;
+    if (designer.layers.artwork.locked) return;
     const currentBuildArea = designer.buildAreas.find((buildArea) => buildArea.id === buildAreaId);
     const previousId = buildAreaId;
     const nextId = patch.id ?? previousId;
@@ -473,6 +524,21 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
       routes: designer.routes.map((route) => (route.id === routeId ? { ...route, ...patch } : route))
     });
     if (patch.id && patch.id !== routeId) setSelection({ type: "route", id: patch.id });
+  }
+
+  function patchChannel(channelId: string, patch: Partial<DesignerChannelForm>) {
+    if (designer.layers.zones.locked) return;
+    updateDesigner({
+      ...designer,
+      channels: designer.channels.map((channel) => (channel.id === channelId ? { ...channel, ...patch } : channel))
+    });
+    if (patch.id && patch.id !== channelId) setSelection({ type: "channel", id: patch.id });
+  }
+
+  function removeChannel(channelId: string) {
+    updateDesigner({ ...designer, channels: designer.channels.filter((channel) => channel.id !== channelId) });
+    setSelection(null);
+    setFabricationNotice("Channel deleted.");
   }
 
   function addGroup() {
@@ -553,7 +619,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
   }
 
   function addBuildArea(shape: DesignerBuildAreaForm["shape"] = "rect") {
-    if (designer.layers.reference.locked) return;
+    if (designer.layers.artwork.locked) return;
     const next = designer.buildAreas.length + 1;
     const defaultWidth = Math.max(12, Math.round(activeViewport.width * 0.28));
     const defaultHeight = Math.max(8, Math.round(activeViewport.height * 0.28));
@@ -594,7 +660,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
 
   function setBuildAreaNodeType(buildAreaId: string, pointIndex: number, nodeType: DesignerPointNodeType) {
     const buildArea = designer.buildAreas.find((entry) => entry.id === buildAreaId);
-    if (!buildArea || designer.layers.reference.locked) return;
+    if (!buildArea || designer.layers.artwork.locked) return;
     patchBuildArea(buildAreaId, setPolygonNodeType(buildArea, pointIndex, nodeType));
     setSelection({ type: "build_area", id: buildAreaId, pointIndex });
   }
@@ -608,7 +674,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
 
   function insertBuildAreaPoint(buildAreaId: string, insertIndex: number, point: DesignerPoint) {
     const buildArea = designer.buildAreas.find((entry) => entry.id === buildAreaId);
-    if (!buildArea || designer.layers.reference.locked) return;
+    if (!buildArea || designer.layers.artwork.locked) return;
     patchBuildArea(buildAreaId, insertPolygonPoint(buildArea, insertIndex, point, designer.snapCm));
     setSelection({ type: "build_area", id: buildAreaId, pointIndex: insertIndex });
     setFabricationNotice("Reference polygon point inserted.");
@@ -624,7 +690,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
 
   function deleteBuildAreaPoint(buildAreaId: string, pointIndex: number) {
     const buildArea = designer.buildAreas.find((entry) => entry.id === buildAreaId);
-    if (!buildArea || designer.layers.reference.locked) return;
+    if (!buildArea || designer.layers.artwork.locked) return;
     if (!buildArea.points || buildArea.points.length <= 3) {
       setFabricationNotice("Polygon needs at least 3 points.");
       return;
@@ -648,6 +714,51 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
     const nextIndex = Math.min(pointIndex, Math.max(0, (nextZone.points?.length ?? 1) - 1));
     setSelection({ type: "zone", id: zoneId, pointIndex: nextIndex });
     setFabricationNotice("Zone polygon point deleted.");
+  }
+
+  function setChannelNodeType(channelId: string, pointIndex: number, nodeType: DesignerPointNodeType) {
+    const channel = designer.channels.find((entry) => entry.id === channelId);
+    if (!channel || designer.layers.zones.locked) return;
+    patchChannel(channelId, setChannelNodeTypePath(channel, pointIndex, nodeType));
+    setSelection({ type: "channel", id: channelId, pointIndex });
+  }
+
+  function setChannelNodeRadius(channelId: string, pointIndex: number, radiusMm: number) {
+    const channel = designer.channels.find((entry) => entry.id === channelId);
+    if (!channel || designer.layers.zones.locked) return;
+    const value = Math.max(0, Math.round(radiusMm));
+    patchChannel(channelId, { points: channel.points.map((point, index) => (index === pointIndex ? { ...point, radiusMm: value } : point)) });
+    setSelection({ type: "channel", id: channelId, pointIndex });
+    setFabricationNotice(value > 0 ? `Corner fillet ${value} mm.` : "Corner fillet removed.");
+  }
+
+  function insertChannelPoint(channelId: string, insertIndex: number, point: DesignerPoint) {
+    const channel = designer.channels.find((entry) => entry.id === channelId);
+    if (!channel || designer.layers.zones.locked) return;
+    patchChannel(channelId, insertChannelPointPath(channel, insertIndex, point, designer.snapCm));
+    setSelection({ type: "channel", id: channelId, pointIndex: insertIndex });
+    setFabricationNotice("Channel point inserted.");
+  }
+
+  function updateChannelPoint(channelId: string, pointIndex: number, patch: Partial<DesignerPoint>) {
+    const channel = designer.channels.find((entry) => entry.id === channelId);
+    const current = channel?.points[pointIndex];
+    if (!channel || !current) return;
+    patchChannel(channelId, updateChannelPointPath(channel, pointIndex, { ...current, ...patch }, designer.snapCm));
+  }
+
+  function deleteChannelPoint(channelId: string, pointIndex: number) {
+    const channel = designer.channels.find((entry) => entry.id === channelId);
+    if (!channel || designer.layers.zones.locked) return;
+    if (channel.points.length <= 2) {
+      setFabricationNotice("Channel needs at least 2 points.");
+      return;
+    }
+    const nextChannel = deleteChannelPointPath(channel, pointIndex);
+    patchChannel(channelId, nextChannel);
+    const nextIndex = Math.min(pointIndex, Math.max(0, nextChannel.points.length - 1));
+    setSelection({ type: "channel", id: channelId, pointIndex: nextIndex });
+    setFabricationNotice("Channel point deleted.");
   }
 
   function updateRoutePoint(routeId: string, pointIndex: number, patch: Partial<{ x: number; y: number }>) {
@@ -811,7 +922,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
       return;
     }
     if (selection.type === "build_area") {
-      if (designer.layers.reference.locked) return;
+      if (designer.layers.artwork.locked) return;
       if (typeof selection.pointIndex === "number") {
         deleteBuildAreaPoint(selection.id, selection.pointIndex);
         return;
@@ -821,9 +932,14 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
       return;
     }
     if (selection.type === "zone" && designer.layers.zones.locked) return;
+    if (selection.type === "channel" && designer.layers.zones.locked) return;
     if (selection.type === "route" && designer.layers.strings.locked) return;
     if (selection.type === "zone" && typeof selection.pointIndex === "number") {
       deleteZonePoint(selection.id, selection.pointIndex);
+      return;
+    }
+    if (selection.type === "channel" && typeof selection.pointIndex === "number") {
+      deleteChannelPoint(selection.id, selection.pointIndex);
       return;
     }
     if (selection.type === "zone") {
@@ -837,6 +953,10 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
         }))
       });
       setSelection(null);
+    }
+    if (selection.type === "channel") {
+      removeChannel(selection.id);
+      return;
     }
     if (selection.type === "route" && typeof selection.pointIndex === "number") {
       deleteRoutePoint(selection.id, selection.pointIndex);
@@ -1004,7 +1124,8 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
       diffuserDistanceCm: clamp(patch.diffuserDistanceCm ?? current.diffuserDistanceCm, 0.5, 20),
       intensity: clamp(patch.intensity ?? current.intensity, 0, 3),
       afterZoneEffectCm: clamp(patch.afterZoneEffectCm ?? current.afterZoneEffectCm, 0, 6),
-      afterZoneOpacity: clamp(patch.afterZoneOpacity ?? current.afterZoneOpacity, 0, 1)
+      afterZoneOpacity: clamp(patch.afterZoneOpacity ?? current.afterZoneOpacity, 0, 1),
+      showOutlines: patch.showOutlines ?? current.showOutlines
     }));
   }
 
@@ -1017,8 +1138,9 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
   const canDeleteSelection = Boolean(selection)
     && selection?.type !== "controller"
     && !(selection?.type === "artwork" && designer.layers.artwork.locked)
-    && !(selection?.type === "build_area" && designer.layers.reference.locked)
+    && !(selection?.type === "build_area" && designer.layers.artwork.locked)
     && !(selection?.type === "zone" && designer.layers.zones.locked)
+    && !(selection?.type === "channel" && designer.layers.zones.locked)
     && !(selection?.type === "route" && designer.layers.strings.locked);
 
   return (
@@ -1100,7 +1222,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
 
       <div className="flex h-12 shrink-0 items-center overflow-x-auto border-b border-border-2 bg-surface-2 px-3 whitespace-nowrap">
         <div className="flex min-w-max items-center gap-2">
-        {editorMode === "design" ? <Badge className="shrink-0 capitalize">{activeLayer}</Badge> : null}
+        {editorMode === "design" ? <Badge className="shrink-0 capitalize">{activeLayer ?? "No plane"}</Badge> : null}
         <Badge className={compileIsCurrent ? (compileErrors.length ? "border border-destructive/50 bg-destructive/10 text-destructive" : "border border-emerald-500/50 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300") : "border border-amber-500/50 bg-amber-500/10 text-amber-800 dark:text-amber-200"}>
           {compileIsCurrent ? (compileErrors.length ? `Compile errors: ${compileErrors.length}` : `${document.compiledLayout?.pixelMap.length ?? 0} px`) : "Compile required"}
         </Badge>
@@ -1210,6 +1332,33 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
               </>
             )}
           </>
+        ) : editorMode === "design" && selectedChannel ? (
+          <>
+            <Badge>Channel</Badge>
+            <ToolbarNumber label="Width" value={selectedChannel.widthMm} suffix="mm" onChange={(widthMm) => patchChannel(selectedChannel.id, { widthMm: Math.max(3, Math.min(20, Math.round(widthMm))) })} />
+            <ToolbarField label="Ends">
+              <select className="h-8 rounded-md border border-input bg-card px-2 text-body-sm" value={selectedChannel.cap} onChange={(event) => patchChannel(selectedChannel.id, { cap: event.target.value as DesignerChannelForm["cap"] })}>
+                <option value="butt">Straight</option>
+                <option value="round">Round</option>
+                <option value="closed">Closed</option>
+              </select>
+            </ToolbarField>
+            {typeof selectedChannelPointIndex === "number" && selectedChannel.points[selectedChannelPointIndex] ? (
+              <>
+                <Badge>Point {selectedChannelPointIndex + 1}</Badge>
+                <ToolbarField label="Node">
+                  <NodeTypePicker value={selectedChannel.points[selectedChannelPointIndex].nodeType ?? (selectedChannel.pathMode === "bezier" ? "smooth" : "corner")} onChange={(nodeType) => setChannelNodeType(selectedChannel.id, selectedChannelPointIndex, nodeType)} />
+                </ToolbarField>
+                <ToolbarNumber label="PX" value={selectedChannel.points[selectedChannelPointIndex].x} suffix="cm" onChange={(x) => updateChannelPoint(selectedChannel.id, selectedChannelPointIndex, { x })} />
+                <ToolbarNumber label="PY" value={selectedChannel.points[selectedChannelPointIndex].y} suffix="cm" onChange={(y) => updateChannelPoint(selectedChannel.id, selectedChannelPointIndex, { y })} />
+                <ToolbarNumber label="Fillet" value={selectedChannel.points[selectedChannelPointIndex].radiusMm ?? 0} suffix="mm" onChange={(radiusMm) => setChannelNodeRadius(selectedChannel.id, selectedChannelPointIndex, radiusMm)} />
+                <Button type="button" variant="outline" disabled={(selectedChannel.points?.length ?? 0) <= 2} onClick={() => deleteChannelPoint(selectedChannel.id, selectedChannelPointIndex)}>
+                  <Trash2 className="h-4 w-4" />
+                  Point
+                </Button>
+              </>
+            ) : null}
+          </>
         ) : editorMode === "design" && selectedController ? (
           <>
             <ToolbarNumber label="X" value={selectedController.x} onChange={(x) => patchController({ x })} />
@@ -1239,12 +1388,26 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
           </div>
           <div className="mx-3 my-2 h-px shrink-0 bg-border" />
           {editorMode === "design" ? <div className="flex min-h-0 flex-1 flex-col items-center gap-2 overflow-y-auto px-2 pb-2">
-          {activeLayer === "reference" ? (
+          {activeLayer === "artwork" ? (
             <>
-              <ToolButton active={tool === "build_area_rect"} label="Rectangle Build Area" icon={Square} disabled={designer.layers.reference.locked || !designer.layers.reference.visible} onClick={() => addBuildArea("rect")} />
-              <ToolButton active={tool === "build_area_ellipse"} label="Ellipse Build Area" icon={Circle} disabled={designer.layers.reference.locked || !designer.layers.reference.visible} onClick={() => addBuildArea("ellipse")} />
-              <ToolButton active={tool === "build_area_polygon"} label="Polygon Build Area" icon={PenLine} disabled={designer.layers.reference.locked || !designer.layers.reference.visible} onClick={() => setTool("build_area_polygon")} />
-              <ToolButton active={tool === "build_area_bezier"} label="Bezier Build Area" icon={Spline} disabled={designer.layers.reference.locked || !designer.layers.reference.visible} onClick={() => setTool("build_area_bezier")} />
+              <ToolButton
+                active={tool === "image_place"}
+                label="Image (place a container, then pick its image in the panel)"
+                icon={ImageIcon}
+                disabled={designer.layers.artwork.locked}
+                onClick={() => {
+                  ensureLayerVisible("artwork");
+                  setTool("image_place");
+                }}
+              />
+            </>
+          ) : null}
+          {activeLayer === "artwork" || activeLayer === "reference" ? (
+            <>
+              <ToolButton active={tool === "build_area_rect"} label="Rectangle Build Area" icon={Square} disabled={designer.layers.artwork.locked} onClick={() => { ensureLayerVisible("artwork"); addBuildArea("rect"); }} />
+              <ToolButton active={tool === "build_area_ellipse"} label="Ellipse Build Area" icon={Circle} disabled={designer.layers.artwork.locked} onClick={() => { ensureLayerVisible("artwork"); addBuildArea("ellipse"); }} />
+              <ToolButton active={tool === "build_area_polygon"} label="Polygon Build Area" icon={PenLine} disabled={designer.layers.artwork.locked} onClick={() => { ensureLayerVisible("artwork"); setTool("build_area_polygon"); }} />
+              <ToolButton active={tool === "build_area_bezier"} label="Bezier Build Area" icon={Spline} disabled={designer.layers.artwork.locked} onClick={() => { ensureLayerVisible("artwork"); setTool("build_area_bezier"); }} />
             </>
           ) : null}
           {activeLayer === "zones" ? (
@@ -1253,6 +1416,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
               <ToolButton active={tool === "zone_ellipse"} label="Ellipse Zone" icon={Circle} disabled={designer.layers.zones.locked || !designer.layers.zones.visible} onClick={() => addZone("ellipse")} />
               <ToolButton active={tool === "zone_polygon"} label="Polygon Zone" icon={PenLine} disabled={designer.layers.zones.locked || !designer.layers.zones.visible} onClick={() => setTool("zone_polygon")} />
               <ToolButton active={tool === "zone_bezier"} label="Bezier Zone" icon={Spline} disabled={designer.layers.zones.locked || !designer.layers.zones.visible} onClick={() => setTool("zone_bezier")} />
+              <ToolButton active={tool === "channel_bezier"} label="Channel (neon flex trace)" icon={Waves} disabled={designer.layers.zones.locked || !designer.layers.zones.visible} onClick={() => setTool("channel_bezier")} />
             </>
           ) : null}
           {activeLayer === "strings" ? (
@@ -1283,6 +1447,8 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
             selectedBuildAreaPointIndex={selectedBuildAreaPointIndex}
             selectedZoneId={selectedZone?.id}
             selectedZonePointIndex={selectedZonePointIndex}
+            selectedChannelId={selectedChannel?.id}
+            selectedChannelPointIndex={selectedChannelPointIndex}
             selectedRouteId={selectedRoute?.id}
             selectedRoutePointIndex={selectedRoutePointIndex}
             selectedController={Boolean(selectedController)}
@@ -1291,7 +1457,9 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
             onSelect={selectDesignerItem}
             onInsertBuildAreaPoint={insertBuildAreaPoint}
             onInsertZonePoint={insertZonePoint}
+            onInsertChannelPoint={insertChannelPoint}
             onInsertRoutePoint={insertRoutePoint}
+            onPlaceImage={placeImageAt}
             onCutRoutePoint={handleCutRoutePoint}
             onRoutePointDragEnd={autoSolderRoutePoint}
             onSolderedTerminalsDragEnd={moveSolderedTerminals}
@@ -1299,6 +1467,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
             designer={designer}
             viewport={activeViewport}
             selectedZoneId={selection?.type === "zone" ? selection.id : undefined}
+            selectedChannelId={selection?.type === "channel" ? selection.id : undefined}
             onViewportChange={setViewport}
             onSelect={selectDesignerItem}
             layout={document.compiledLayout}
@@ -1317,7 +1486,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
             onActivateLayer={activateDesignerLayer}
             onPatchLayer={patchDesignerLayer}
             assets={projectAssets}
-            onAddArtwork={addArtwork}
+            onUploadArtwork={uploadArtwork}
             onPatchArtwork={patchArtwork}
             onPatchBuildArea={patchBuildAreaVisual}
             onPatchZone={patchZoneVisual}
@@ -1326,6 +1495,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
             onRemoveGroup={removeGroup}
             onToggleGroupMember={toggleGroupMember}
             onSelectZone={selectGroupZone}
+            onPatchChannel={patchChannel}
             onPatchController={patchController}
             onPatchRoute={patchRoute}
             onReorderItems={reorderDesignerItems}
@@ -1340,7 +1510,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
           <DesignerAnimateTimeline
             document={document}
             effects={effectCatalog}
-            selectedTargetId={selection?.type === "zone" ? selection.id : undefined}
+            selectedTargetId={selection?.type === "zone" || selection?.type === "channel" ? selection.id : undefined}
             previewTimeMs={animationResult?.preview?.timeMs ?? document.previewTimeMs}
             height={animationTimelineHeight}
             onChange={updateAnimationDocument}
@@ -1352,7 +1522,13 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
             onSave={() => void save()}
             saving={saving}
             onClipTargetSelect={(targetId) => {
-              setSelection(targetId && designer.zones.some((zone) => zone.id === targetId) ? { type: "zone", id: targetId } : null);
+              if (!targetId) {
+                setSelection(null);
+                return;
+              }
+              if (designer.zones.some((zone) => zone.id === targetId)) setSelection({ type: "zone", id: targetId });
+              else if (designer.channels.some((channel) => channel.id === targetId)) setSelection({ type: "channel", id: targetId });
+              else setSelection(null);
             }}
             onTogglePlayback={() => {
               if (!animationResult?.ok) void previewAnimation();
@@ -1871,7 +2047,6 @@ function ScenesTab({
                     <div className="mt-3 grid gap-2 text-body-sm">
                       <MapRow label="Target" value={target?.name ?? clip.target} />
                       <MapRow label="Map" value={target?.detail ?? "Missing Designer target"} />
-                      <MapRow label="Space" value={clip.coordinateSpace ?? "local"} />
                       <MapRow label="Time" value={`${clip.startMs}-${clip.startMs + clip.durationMs} ms`} />
                       <MapRow label="Effect" value={`${clip.effect} · ${clip.blend}`} />
                     </div>
@@ -1891,11 +2066,13 @@ function buildSceneTargets(document: PartituraDocument) {
   const layout = document.compiledLayout;
   const zoneTargets = document.designer?.zones ?? [];
   const groupTargets = document.designer?.groups ?? [];
+  const channelTargets = document.designer?.channels ?? [];
   const mappedZones = new Map(layout?.zones.map((zone) => [zone.id, zone.pixelIds.length]) ?? []);
 
   return [
     { id: "full_sign", name: "Full sign", detail: `${layout?.pixelMap.length ?? 0} mapped pixels` },
     ...zoneTargets.map((zone) => ({ id: zone.id, name: zone.name || zone.id, detail: `${mappedZones.get(zone.id) ?? 0} mapped pixels` })),
+    ...channelTargets.map((channel) => ({ id: channel.id, name: channel.name || channel.id, detail: `Channel · ${mappedZones.get(channel.id) ?? 0} mapped pixels` })),
     ...groupTargets.map((group) => ({ id: group.id, name: group.name || group.id, detail: `Group · ${group.members.length} member${group.members.length === 1 ? "" : "s"}` }))
   ];
 }
@@ -1928,13 +2105,6 @@ function ClipCommonSettings({ clip, targetOptions, onChange }: { clip: ClipForm;
       <Field label="Target">
         <select className="h-control w-full rounded-md border bg-card px-3 text-body-sm outline-none focus:ring-2 focus:ring-ring" value={clip.target} onChange={(event) => onChange({ target: event.target.value })}>
           {targetOptions.map(([optionValue, label]) => <option key={optionValue} value={optionValue}>{label}</option>)}
-        </select>
-      </Field>
-      <Field label="Coordinate space">
-        <select className="h-control w-full rounded-md border bg-card px-3 text-body-sm outline-none focus:ring-2 focus:ring-ring" value={clip.coordinateSpace ?? "local"} onChange={(event) => onChange({ coordinateSpace: event.target.value as ClipForm["coordinateSpace"] })}>
-          <option value="serial">Serial route</option>
-          <option value="local">Target local</option>
-          <option value="global">Full sign global</option>
         </select>
       </Field>
       <div className="grid grid-cols-2 gap-3">
@@ -2385,6 +2555,16 @@ function DiffuserTuningControls({ settings, onChange }: { settings: DiffuserRend
       <DiffuserSlider label="Distance" value={settings.diffuserDistanceCm} min={1} max={16} step={0.5} suffix="cm" onChange={(diffuserDistanceCm) => onChange({ diffuserDistanceCm })} />
       <DiffuserSlider label="Intensity" value={settings.intensity} min={0.1} max={2.5} step={0.05} onChange={(intensity) => onChange({ intensity })} />
       <DiffuserSlider label="After zone" value={settings.afterZoneEffectCm} min={0} max={6} step={0.25} suffix="cm" onChange={(afterZoneEffectCm) => onChange({ afterZoneEffectCm })} />
+      <button
+        type="button"
+        aria-pressed={settings.showOutlines}
+        title="Show or hide zone and channel outlines"
+        className={`flex h-7 shrink-0 items-center gap-1 rounded border px-2 text-[11px] font-medium transition ${settings.showOutlines ? "border-primary bg-primary/10 text-foreground" : "border-border-2 bg-card text-muted-foreground hover:bg-surface-hover"}`}
+        onClick={() => onChange({ showOutlines: !settings.showOutlines })}
+      >
+        <Square className="h-3.5 w-3.5" />
+        Outlines
+      </button>
     </div>
   );
 }

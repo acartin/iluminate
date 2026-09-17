@@ -1,6 +1,6 @@
-import type { DesignerBuildAreaForm, DesignerControllerForm, DesignerForm, DesignerPoint, DesignerRouteForm, DesignerRouteKind, DesignerZoneForm } from "@/lib/lighting/partitura-model";
+import type { DesignerBuildAreaForm, DesignerChannelForm, DesignerControllerForm, DesignerForm, DesignerPoint, DesignerRouteForm, DesignerRouteKind, DesignerZoneForm } from "@/lib/lighting/partitura-model";
 import type { DesignerActiveLayer, DesignerMeasurement, DesignerRouteDraft, DesignerShapeDraft, DesignerViewport, PaperApi, PaperPoint, PaperRectangle } from "./types";
-import { controllerConnectedPorts, controllerPortPoint, formatDecimal, formatMeasure, pointInsideDesignerShape, routeColor, routeDirectionMarkers, routePointFill, routeSelectedColor, sampleRouteLedDots } from "./designer-geometry";
+import { channelCenterPolyline, channelIsClosed, channelOutline, channelWidthCm, controllerConnectedPorts, controllerPortPoint, formatDecimal, formatMeasure, pointInsideDesignerShape, routeColor, routeDirectionMarkers, routePointFill, routeSelectedColor, sampleRouteLedDots } from "./designer-geometry";
 import type { CompiledDesignerLayout } from "./designer-compiler";
 
 let paperScope: PaperApi;
@@ -17,6 +17,8 @@ export function drawPaperDesigner({
   selectedBuildAreaPointIndex,
   selectedZoneId,
   selectedZonePointIndex,
+  selectedChannelId,
+  selectedChannelPointIndex,
   selectedRouteId,
   selectedRoutePointIndex,
   selectedController,
@@ -27,12 +29,14 @@ export function drawPaperDesigner({
   colorMode
 }: {
   designer: DesignerForm;
-  activeLayer: DesignerActiveLayer;
+  activeLayer: DesignerActiveLayer | null;
   viewport: DesignerViewport;
   selectedBuildAreaId?: string;
   selectedBuildAreaPointIndex?: number;
   selectedZoneId?: string;
   selectedZonePointIndex?: number;
+  selectedChannelId?: string;
+  selectedChannelPointIndex?: number;
   selectedRouteId?: string;
   selectedRoutePointIndex?: number;
   selectedController: boolean;
@@ -65,9 +69,11 @@ export function drawPaperDesigner({
   drawPaperGrid(designer, viewport, canvasSize, toScreen, colors.grid);
   drawPaperShapeDraft(shapeDraft, toScreen);
 
-  if (designer.layers.reference.visible) {
+  // Reference geometry belongs to the Artwork plane: the Artwork category eye is
+  // the master switch, and each build area's own eye refines it.
+  if (designer.layers.artwork.visible) {
     const layerOpacity = designer.layers.reference.opacity;
-    [...designer.buildAreas].reverse().forEach((buildArea) => {
+    [...designer.buildAreas].filter((buildArea) => buildArea.visible !== false).reverse().forEach((buildArea) => {
       drawPaperBuildArea(buildArea, {
         selected: selectedBuildAreaId === buildArea.id,
         selectedPointIndex: selectedBuildAreaId === buildArea.id ? selectedBuildAreaPointIndex : undefined,
@@ -80,7 +86,7 @@ export function drawPaperDesigner({
 
   if (designer.layers.zones.visible) {
     const layerOpacity = designer.layers.zones.opacity;
-    [...designer.zones].reverse().forEach((zone) => {
+    [...designer.zones].filter((zone) => zone.visible !== false).reverse().forEach((zone) => {
       drawPaperZone(zone, {
         selected: selectedZoneId === zone.id,
         selectedPointIndex: selectedZoneId === zone.id ? selectedZonePointIndex : undefined,
@@ -89,10 +95,20 @@ export function drawPaperDesigner({
         rectToScreen
       });
     });
+    [...designer.channels].filter((channel) => channel.visible !== false).reverse().forEach((channel) => {
+      drawPaperChannel(channel, {
+        selected: selectedChannelId === channel.id,
+        selectedPointIndex: selectedChannelId === channel.id ? selectedChannelPointIndex : undefined,
+        opacity: layerOpacity,
+        toScreen,
+        lengthToScreen
+      });
+    });
   }
 
   if (designer.layers.strings.visible) {
     designer.routes.forEach((route) => {
+      if (route.visible === false) return;
       drawPaperRoute(route, {
         selected: selectedRouteId === route.id,
         selectedPointIndex: selectedRouteId === route.id ? selectedRoutePointIndex : undefined,
@@ -104,6 +120,9 @@ export function drawPaperDesigner({
       });
     });
     drawPaperRouteDraft(routeDraft, toScreen);
+  }
+
+  if (designer.layers.hardware.visible && designer.controller.visible !== false) {
     drawPaperController(designer.controller, {
       selected: selectedController,
       connectedPorts: controllerConnectedPorts(designer.controller, designer.routes, designer.snapCm),
@@ -135,7 +154,7 @@ export function drawPaperAnimationMap({ designer, layout, viewport, selectedZone
   const rectToScreen = (shape: { x: number; y: number; width: number; height: number }) => new paperScope.Rectangle(toScreen({ x: shape.x, y: shape.y }), toScreen({ x: shape.x + shape.width, y: shape.y + shape.height }));
   new paperScope.Path.Rectangle({ rectangle: new paperScope.Rectangle(0, 0, canvasSize.width, canvasSize.height), fillColor: colors.workspace });
   new paperScope.Path.Rectangle({ rectangle: rectToScreen({ x: 0, y: 0, width: designer.canvasWidthCm, height: designer.canvasHeightCm }), fillColor: colors.document, strokeColor: colors.documentStroke, strokeWidth: 1.2 });
-  [...designer.zones].reverse().forEach((zone) => {
+  [...designer.zones].filter((zone) => zone.visible !== false).reverse().forEach((zone) => {
     const selected = zone.id === selectedZoneId;
     const path = drawPaperClosedShape(zone, { fillColor: selected ? "rgba(37,99,235,0.25)" : "rgba(100,116,139,0.11)", strokeColor: selected ? "#60a5fa" : "#475569", strokeWidth: selected ? 2.2 : 1.15, toScreen, rectToScreen });
     path.opacity = designer.layers.zones.opacity;
@@ -257,8 +276,9 @@ function drawPaperGrid(designer: DesignerForm, viewport: DesignerViewport, canva
 
 function drawPaperShapeDraft(draft: DesignerShapeDraft | null, toScreen: (point: DesignerPoint) => PaperPoint) {
   if (!draft) return;
+  const draftColor = draft.target === "build_area" ? "#a78bfa" : draft.target === "channel" ? "#f59e0b" : "#38bdf8";
   const path = new paperScope.Path({
-    strokeColor: draft.target === "build_area" ? "#93c5fd" : "#38bdf8",
+    strokeColor: draftColor,
     strokeWidth: 1.5,
     dashArray: [8, 5]
   });
@@ -267,7 +287,7 @@ function drawPaperShapeDraft(draft: DesignerShapeDraft | null, toScreen: (point:
     const closeLine = new paperScope.Path.Line({
       from: toScreen(draft.points[draft.points.length - 1]),
       to: toScreen(draft.points[0]),
-      strokeColor: draft.target === "build_area" ? "#93c5fd" : "#38bdf8",
+      strokeColor: draftColor,
       strokeWidth: 1,
       dashArray: [3, 5]
     });
@@ -278,7 +298,7 @@ function drawPaperShapeDraft(draft: DesignerShapeDraft | null, toScreen: (point:
       center: toScreen(point),
       radius: index === 0 ? 6 : 4.5,
       fillColor: index === 0 ? "#22c55e" : "#f8fafc",
-      strokeColor: draft.target === "build_area" ? "#93c5fd" : "#38bdf8",
+      strokeColor: draftColor,
       strokeWidth: 1.3
     });
   });
@@ -292,8 +312,8 @@ function drawPaperBuildArea(buildArea: DesignerBuildAreaForm, options: {
   rectToScreen: (shape: { x: number; y: number; width: number; height: number }) => PaperRectangle;
 }) {
   const shape = drawPaperClosedShape(buildArea, {
-    fillColor: "rgba(59,130,246,0.08)",
-    strokeColor: options.selected ? "#60a5fa" : "#93c5fd",
+    fillColor: "rgba(167,139,250,0.07)",
+    strokeColor: options.selected ? "#ddd6fe" : "#8b5cf6",
     strokeWidth: options.selected ? 2 : 1.2,
     dashArray: [7, 5],
     toScreen: options.toScreen,
@@ -303,15 +323,15 @@ function drawPaperBuildArea(buildArea: DesignerBuildAreaForm, options: {
   const labelPoint = options.toScreen({ x: buildArea.x + 1.2, y: buildArea.y + 2.5 });
   new paperScope.PointText({
     point: labelPoint,
-    content: `${buildArea.name} ${formatDecimal(buildArea.width)}x${formatDecimal(buildArea.height)} cm`,
-    fillColor: "#bfdbfe",
+    content: `REF · ${buildArea.name} ${formatDecimal(buildArea.width)}x${formatDecimal(buildArea.height)} cm`,
+    fillColor: "#ddd6fe",
     fontFamily: "monospace",
     fontSize: 12
   });
   if (options.selected) drawPaperResizeHandles(buildArea, options);
   if (options.selected && buildArea.shape === "polygon" && buildArea.points) {
-    drawPaperPolygonNodes(buildArea.id, buildArea.points, options.selectedPointIndex, "#2563eb", options.toScreen);
-    if (buildArea.pathMode === "bezier") drawPaperBezierHandles(buildArea.id, buildArea.points, options.selectedPointIndex, "#60a5fa", options.toScreen);
+    drawPaperPolygonNodes(buildArea.id, buildArea.points, options.selectedPointIndex, "#7c3aed", options.toScreen);
+    if (buildArea.pathMode === "bezier") drawPaperBezierHandles(buildArea.id, buildArea.points, options.selectedPointIndex, "#a78bfa", options.toScreen);
   }
 }
 
@@ -343,6 +363,61 @@ function drawPaperZone(zone: DesignerZoneForm, options: {
   if (options.selected && zone.shape === "polygon" && zone.points) {
     drawPaperPolygonNodes(zone.id, zone.points, options.selectedPointIndex, "#2563eb", options.toScreen);
     if (zone.pathMode === "bezier") drawPaperBezierHandles(zone.id, zone.points, options.selectedPointIndex, "#38bdf8", options.toScreen);
+  }
+}
+
+function drawPaperChannel(channel: DesignerChannelForm, options: {
+  selected: boolean;
+  selectedPointIndex?: number;
+  opacity: number;
+  toScreen: (point: DesignerPoint) => PaperPoint;
+  lengthToScreen: (cm: number) => number;
+}) {
+  const center = channelCenterPolyline(channel);
+  if (center.length >= 2) {
+    // Draw the band by stroking the center path with the channel width. This is
+    // always a closed, seamless band (miter joins), unlike a filled offset ring.
+    const band = new paperScope.Path({
+      strokeColor: options.selected ? "rgba(245,158,11,0.30)" : "rgba(148,163,184,0.16)",
+      strokeWidth: Math.max(1, options.lengthToScreen(channelWidthCm(channel))),
+      strokeJoin: "miter",
+      strokeCap: channel.cap === "round" ? "round" : "butt",
+      opacity: options.opacity
+    });
+    center.forEach((point) => band.add(options.toScreen(point)));
+    band.closed = channelIsClosed(channel);
+
+    const border = new paperScope.Path({
+      strokeColor: options.selected ? "#f59e0b" : "#94a3b8",
+      strokeWidth: options.selected ? 1.6 : 1,
+      opacity: options.opacity
+    });
+    channelOutline(channel).forEach((point) => border.add(options.toScreen(point)));
+    border.closed = true;
+
+    const centerLine = new paperScope.Path({
+      strokeColor: options.selected ? "#fbbf24" : "#cbd5e1",
+      strokeWidth: 1,
+      dashArray: [5, 4],
+      opacity: Math.max(0.5, options.opacity)
+    });
+    center.forEach((point) => centerLine.add(options.toScreen(point)));
+    centerLine.closed = channelIsClosed(channel);
+  }
+  const anchor = channel.points[0];
+  if (anchor) {
+    new paperScope.PointText({
+      point: options.toScreen({ x: anchor.x + 1, y: anchor.y - 1.2 }),
+      content: `${channel.name} ${channel.widthMm} mm`,
+      fillColor: options.selected ? "#fde68a" : "#94a3b8",
+      fontFamily: "monospace",
+      fontSize: 11,
+      opacity: Math.max(0.5, options.opacity)
+    });
+  }
+  if (options.selected && channel.points.length) {
+    drawPaperPolygonNodes(channel.id, channel.points, options.selectedPointIndex, "#b45309", options.toScreen);
+    if (channel.pathMode === "bezier") drawPaperBezierHandles(channel.id, channel.points, options.selectedPointIndex, "#f59e0b", options.toScreen);
   }
 }
 
@@ -566,6 +641,7 @@ function drawPaperController(controller: DesignerControllerForm, options: {
     strokeColor: options.selected ? "#67e8f9" : "#34d399",
     strokeWidth: options.selected ? 2.4 : 1.6
   });
+  drawControllerPcbDetails(controller, options);
   const labelPoint = options.toScreen({ x: controller.x + 1.2, y: controller.y - 1 });
   new paperScope.PointText({
     point: labelPoint,
@@ -595,10 +671,62 @@ function drawPaperController(controller: DesignerControllerForm, options: {
   }
 }
 
-function drawPaperActiveLayerLabel(activeLayer: DesignerActiveLayer, canvasSize: { width: number; height: number }) {
+function drawControllerPcbDetails(controller: DesignerControllerForm, options: {
+  toScreen: (point: DesignerPoint) => PaperPoint;
+  rectToScreen: (shape: { x: number; y: number; width: number; height: number }) => PaperRectangle;
+  lengthToScreen: (cm: number) => number;
+}) {
+  const chips = [
+    { x: controller.x + controller.width * 0.16, y: controller.y + controller.height * 0.26, width: controller.width * 0.28, height: controller.height * 0.24 },
+    { x: controller.x + controller.width * 0.48, y: controller.y + controller.height * 0.58, width: controller.width * 0.24, height: controller.height * 0.2 }
+  ];
+  chips.forEach((chip) => {
+    new paperScope.Path.Rectangle({
+      rectangle: options.rectToScreen(chip),
+      radius: 1.5,
+      fillColor: "#0b1220",
+      strokeColor: "#34d399",
+      strokeWidth: 0.7,
+      opacity: 0.92
+    });
+    const pinCount = 3;
+    for (let pin = 0; pin < pinCount; pin += 1) {
+      const y = chip.y + chip.height * ((pin + 1) / (pinCount + 1));
+      new paperScope.Path.Line({
+        from: options.toScreen({ x: chip.x - chip.width * 0.16, y }),
+        to: options.toScreen({ x: chip.x, y }),
+        strokeColor: "#34d399",
+        strokeWidth: 0.6,
+        opacity: 0.75
+      });
+      new paperScope.Path.Line({
+        from: options.toScreen({ x: chip.x + chip.width, y }),
+        to: options.toScreen({ x: chip.x + chip.width * 1.16, y }),
+        strokeColor: "#34d399",
+        strokeWidth: 0.6,
+        opacity: 0.75
+      });
+    }
+    new paperScope.Path.Circle({
+      center: options.toScreen({ x: chip.x + chip.width * 0.2, y: chip.y + chip.height * 0.24 }),
+      radius: Math.max(0.8, options.lengthToScreen(0.22)),
+      fillColor: "#a7f3d0",
+      opacity: 0.9
+    });
+  });
+  new paperScope.Path.Circle({
+    center: options.toScreen({ x: controller.x + controller.width * 0.14, y: controller.y + controller.height * 0.15 }),
+    radius: Math.max(0.8, options.lengthToScreen(0.28)),
+    fillColor: "#22d3ee",
+    strokeColor: "#020617",
+    strokeWidth: 0.5
+  });
+}
+
+function drawPaperActiveLayerLabel(activeLayer: DesignerActiveLayer | null, canvasSize: { width: number; height: number }) {
   new paperScope.PointText({
     point: new paperScope.Point(canvasSize.width - 190, canvasSize.height - 14),
-    content: `PAPER.JS · ${activeLayer.toUpperCase()}`,
+    content: `PAPER.JS · ${activeLayer ? activeLayer.toUpperCase() : "NO PLANE"}`,
     fillColor: "#64748b",
     fontFamily: "monospace",
     fontSize: 11

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { DesignerArtworkForm, DesignerBuildAreaForm, DesignerForm, DesignerPoint, DesignerRouteForm, DesignerRouteKind, DesignerZoneForm } from "@/lib/lighting/partitura-model";
+import type { DesignerArtworkForm, DesignerBuildAreaForm, DesignerChannelForm, DesignerForm, DesignerPoint, DesignerRouteForm, DesignerRouteKind, DesignerZoneForm } from "@/lib/lighting/partitura-model";
 import { drawPaperAnimationMap, drawPaperDesigner, setPaperScope } from "./designer-paper-renderer";
 import type { CompiledDesignerLayout } from "./designer-compiler";
 import { HorizontalRuler, VerticalRuler } from "./designer-ui";
@@ -9,10 +9,14 @@ import {
   clamp,
   clampViewport,
   createRouteFromDraft,
+  deleteChannelPoint,
   findNearbyControllerPort,
   findNearbySolderTerminal,
   findJointGroup,
+  insertChannelPoint,
+  movedChannel,
   movedShape,
+  nearestChannelInsertIndex,
   nearestShapeInsertIndex,
   pickBezierHandle,
   pickDesignerHit,
@@ -24,7 +28,11 @@ import {
   resizedZone,
   sameSnapPoint,
   snapValue,
+  setChannelNodeType,
   smoothBezierPoints,
+  smoothOpenBezierPoints,
+  updateChannelBezierHandle,
+  updateChannelPoint,
   updatePolygonPoint,
   updateBezierHandle,
   worldHitTolerance,
@@ -56,6 +64,8 @@ export function DesignerStudioCanvas({
   selectedBuildAreaPointIndex,
   selectedZoneId,
   selectedZonePointIndex,
+  selectedChannelId,
+  selectedChannelPointIndex,
   selectedRouteId,
   selectedRoutePointIndex,
   selectedController,
@@ -64,6 +74,8 @@ export function DesignerStudioCanvas({
   onSelect,
   onInsertBuildAreaPoint,
   onInsertZonePoint,
+  onInsertChannelPoint,
+  onPlaceImage,
   onInsertRoutePoint,
   onCutRoutePoint,
   onRoutePointDragEnd,
@@ -75,7 +87,7 @@ export function DesignerStudioCanvas({
   showRulers = designer.rulerVisible
 }: {
   designer: DesignerForm;
-  activeLayer: DesignerActiveLayer;
+  activeLayer: DesignerActiveLayer | null;
   tool: DesignerTool;
   onToolChange: (tool: DesignerTool) => void;
   viewport: DesignerViewport;
@@ -85,6 +97,8 @@ export function DesignerStudioCanvas({
   selectedBuildAreaPointIndex?: number;
   selectedZoneId?: string;
   selectedZonePointIndex?: number;
+  selectedChannelId?: string;
+  selectedChannelPointIndex?: number;
   selectedRouteId?: string;
   selectedRoutePointIndex?: number;
   selectedController?: boolean;
@@ -93,6 +107,8 @@ export function DesignerStudioCanvas({
   onSelect: (selection: DesignerSelection) => void;
   onInsertBuildAreaPoint: (buildAreaId: string, insertIndex: number, point: DesignerPoint) => void;
   onInsertZonePoint: (zoneId: string, insertIndex: number, point: DesignerPoint) => void;
+  onInsertChannelPoint: (channelId: string, insertIndex: number, point: DesignerPoint) => void;
+  onPlaceImage: (point: DesignerPoint) => void;
   onInsertRoutePoint: (routeId: string, point: DesignerPoint) => void;
   onCutRoutePoint: (routeId: string, pointIndex: number) => void;
   onRoutePointDragEnd: (routeId: string, pointIndex: number, finalPoint: DesignerPoint) => void;
@@ -197,6 +213,8 @@ export function DesignerStudioCanvas({
       selectedBuildAreaPointIndex,
       selectedZoneId,
       selectedZonePointIndex,
+      selectedChannelId,
+      selectedChannelPointIndex,
       selectedRouteId,
       selectedRoutePointIndex,
       selectedController: Boolean(selectedController),
@@ -207,7 +225,7 @@ export function DesignerStudioCanvas({
       colorMode
     });
     loadedPaper.view.update();
-  }, [activeLayer, animationDiffusers, animationPixels, canvasSize, colorMode, compiledLayout, designer, measurement, paperReady, presentation, routeDraft, selectedBuildAreaId, selectedBuildAreaPointIndex, selectedController, selectedRouteId, selectedRoutePointIndex, selectedZoneId, selectedZonePointIndex, shapeDraft, viewport]);
+  }, [activeLayer, animationDiffusers, animationPixels, canvasSize, colorMode, compiledLayout, designer, measurement, paperReady, presentation, routeDraft, selectedBuildAreaId, selectedBuildAreaPointIndex, selectedChannelId, selectedChannelPointIndex, selectedController, selectedRouteId, selectedRoutePointIndex, selectedZoneId, selectedZonePointIndex, shapeDraft, viewport]);
 
   useEffect(() => {
     if (activeLayer !== "strings" || (tool !== "led_string" && tool !== "data_cable")) setRouteDraft(null);
@@ -218,17 +236,21 @@ export function DesignerStudioCanvas({
   }, [tool]);
 
   useEffect(() => {
-    function handleEscape(event: KeyboardEvent) {
+    function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         setRouteDraft(null);
         setShapeDraft(null);
         setMeasurement(null);
+        return;
+      }
+      if (event.key === "Enter" && shapeDraft?.target === "channel" && shapeDraft.points.length >= 2) {
+        finishChannelDraft(false);
       }
     }
 
-    window.addEventListener("keydown", handleEscape);
-    return () => window.removeEventListener("keydown", handleEscape);
-  }, []);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  });
 
   function eventPoint(event: React.PointerEvent<HTMLCanvasElement> | React.MouseEvent<HTMLCanvasElement>) {
     const canvas = canvasRef.current;
@@ -263,6 +285,33 @@ export function DesignerStudioCanvas({
 
   function patchZone(zoneId: string, patch: Partial<DesignerZoneForm>) {
     onChange({ ...designer, zones: designer.zones.map((zone) => (zone.id === zoneId ? { ...zone, ...patch } : zone)) });
+  }
+
+  function patchChannel(channelId: string, patch: Partial<DesignerChannelForm>) {
+    onChange({ ...designer, channels: designer.channels.map((channel) => (channel.id === channelId ? { ...channel, ...patch } : channel)) });
+  }
+
+  function finishChannelDraft(closed: boolean) {
+    if (!shapeDraft || shapeDraft.target !== "channel" || shapeDraft.points.length < 2) return;
+    const points = shapeDraft.mode === "bezier"
+      ? (closed ? smoothBezierPoints(shapeDraft.points) : smoothOpenBezierPoints(shapeDraft.points))
+      : shapeDraft.points;
+    const next = designer.channels.length + 1;
+    const channel: DesignerChannelForm = {
+      id: `channel_${next}`,
+      name: `Channel ${next}`,
+      points,
+      pathMode: shapeDraft.mode,
+      widthMm: 10,
+      cap: closed ? "closed" : "butt",
+      visible: true,
+      locked: false,
+      opacity: 1
+    };
+    onChange({ ...designer, channels: [...designer.channels, channel] });
+    onSelect({ type: "channel", id: channel.id });
+    setShapeDraft(null);
+    onToolChange("select");
   }
 
   function patchRoute(routeId: string, patch: Partial<DesignerRouteForm>) {
@@ -334,21 +383,28 @@ export function DesignerStudioCanvas({
       ? "build_area"
       : tool === "zone_polygon" || tool === "zone_bezier"
         ? "zone"
-        : null;
-    const mode = tool === "build_area_bezier" || tool === "zone_bezier" ? "bezier" : "straight";
+        : tool === "channel_bezier"
+          ? "channel"
+          : null;
+    const mode = tool === "build_area_bezier" || tool === "zone_bezier" || tool === "channel_bezier" ? "bezier" : "straight";
     if (!target) return;
-    if (target === "build_area" && (activeLayer !== "reference" || designer.layers.reference.locked || !designer.layers.reference.visible)) return;
-    if (target === "zone" && (activeLayer !== "zones" || designer.layers.zones.locked || !designer.layers.zones.visible)) return;
+    if (target === "build_area" && (activeLayer !== "reference" && activeLayer !== "artwork" || !designer.layers.artwork.visible || designer.layers.artwork.locked)) return;
+    if ((target === "zone" || target === "channel") && (activeLayer !== "zones" || designer.layers.zones.locked || !designer.layers.zones.visible)) return;
 
     const rawPoint = eventPoint(event);
     const point = { x: snapValue(rawPoint.x, designer.snapCm), y: snapValue(rawPoint.y, designer.snapCm) };
     const activeDraft = shapeDraft?.target === target ? shapeDraft : null;
     const points = activeDraft?.points ?? [];
     const draftMode = activeDraft?.mode ?? mode;
+    if (points.length && sameSnapPoint(points[points.length - 1], point, designer.snapCm)) return;
     const closesAtVisibleStartNode = points.length >= 3
       && Math.hypot(rawPoint.x - points[0].x, rawPoint.y - points[0].y) <= worldHitTolerance(viewport, canvasSize);
 
     if (closesAtVisibleStartNode) {
+      if (target === "channel") {
+        finishChannelDraft(true);
+        return;
+      }
       const polygonPoints: DesignerPoint[] = draftMode === "bezier"
         ? smoothBezierPoints(points)
         : points.map((entry) => ({ ...entry, nodeType: entry.nodeType ?? "corner" as const }));
@@ -479,6 +535,20 @@ export function DesignerStudioCanvas({
       if (zone) patchZone(drag.zoneId, updateBezierHandle(zone, drag.pointIndex, drag.handle, point, designer.snapCm));
       return;
     }
+    if (drag.type === "channel-move") {
+      patchChannel(drag.channelId, movedChannel(drag.original, point.x - drag.start.x, point.y - drag.start.y, designer.snapCm));
+      return;
+    }
+    if (drag.type === "channel-point") {
+      const channel = designer.channels.find((entry) => entry.id === drag.channelId);
+      if (channel) patchChannel(drag.channelId, updateChannelPoint(channel, drag.pointIndex, point, designer.snapCm));
+      return;
+    }
+    if (drag.type === "channel-handle") {
+      const channel = designer.channels.find((entry) => entry.id === drag.channelId);
+      if (channel) patchChannel(drag.channelId, updateChannelBezierHandle(channel, drag.pointIndex, drag.handle, point, designer.snapCm));
+      return;
+    }
     if (drag.type === "route-move") {
       onChange({
         ...designer,
@@ -516,10 +586,16 @@ export function DesignerStudioCanvas({
     if (presentation === "animate") {
       const point = eventPoint(event);
       const tolerance = worldHitTolerance(viewport, canvasSize) * 2;
-      const zone = designer.zones.find((candidate) => pointInsideDesignerShape(candidate, point) || pointNearShapeStroke(candidate, point, tolerance));
+      const zone = designer.zones.find((candidate) => candidate.visible !== false && (pointInsideDesignerShape(candidate, point) || pointNearShapeStroke(candidate, point, tolerance)));
       if (zone) { onSelect({ type: "zone", id: zone.id }); return; }
       onSelect(null);
       startPanDrag(event);
+      return;
+    }
+    if (tool === "image_place") {
+      if (activeLayer !== "artwork" || designer.layers.artwork.locked || !designer.layers.artwork.visible) return;
+      const rawPoint = eventPoint(event);
+      onPlaceImage({ x: snapValue(rawPoint.x, designer.snapCm), y: snapValue(rawPoint.y, designer.snapCm) });
       return;
     }
     if (tool === "measure") {
@@ -530,7 +606,7 @@ export function DesignerStudioCanvas({
       onSelect(null);
       return;
     }
-    if (tool === "build_area_polygon" || tool === "build_area_bezier" || tool === "zone_polygon" || tool === "zone_bezier") {
+    if (tool === "build_area_polygon" || tool === "build_area_bezier" || tool === "zone_polygon" || tool === "zone_bezier" || tool === "channel_bezier") {
       handleShapeDrawClick(event);
       return;
     }
@@ -541,7 +617,7 @@ export function DesignerStudioCanvas({
 
     const point = eventPoint(event);
     const tolerance = worldHitTolerance(viewport, canvasSize);
-    if (activeLayer === "reference" && selectedBuildAreaId && typeof selectedBuildAreaPointIndex === "number") {
+    if ((activeLayer === "reference" || activeLayer === "artwork") && selectedBuildAreaId && typeof selectedBuildAreaPointIndex === "number") {
       const buildArea = designer.buildAreas.find((entry) => entry.id === selectedBuildAreaId);
       const node = buildArea?.pathMode === "bezier" ? buildArea.points?.[selectedBuildAreaPointIndex] : null;
       const handle = node ? pickBezierHandle(node, point, tolerance) : null;
@@ -560,6 +636,17 @@ export function DesignerStudioCanvas({
         onSelect({ type: "zone", id: selectedZoneId, pointIndex: selectedZonePointIndex });
         event.currentTarget.setPointerCapture(event.pointerId);
         setDrag({ type: "zone-handle", zoneId: selectedZoneId, pointIndex: selectedZonePointIndex, handle });
+        return;
+      }
+    }
+    if (activeLayer === "zones" && selectedChannelId && typeof selectedChannelPointIndex === "number") {
+      const channel = designer.channels.find((entry) => entry.id === selectedChannelId);
+      const node = channel?.pathMode === "bezier" ? channel.points?.[selectedChannelPointIndex] : null;
+      const handle = node ? pickBezierHandle(node, point, tolerance) : null;
+      if (handle) {
+        onSelect({ type: "channel", id: selectedChannelId, pointIndex: selectedChannelPointIndex });
+        event.currentTarget.setPointerCapture(event.pointerId);
+        setDrag({ type: "channel-handle", channelId: selectedChannelId, pointIndex: selectedChannelPointIndex, handle });
         return;
       }
     }
@@ -620,6 +707,16 @@ export function DesignerStudioCanvas({
       onSelect({ type: "zone", id: hit.id, pointIndex: hit.pointIndex });
       setDrag({ type: "zone-point", zoneId: hit.id, pointIndex: hit.pointIndex });
     }
+    if (hit.type === "channel") {
+      const channel = designer.channels.find((entry) => entry.id === hit.id);
+      if (!channel) return;
+      onSelect({ type: "channel", id: channel.id });
+      setDrag({ type: "channel-move", channelId: channel.id, start: point, original: channel });
+    }
+    if (hit.type === "channel_point") {
+      onSelect({ type: "channel", id: hit.id, pointIndex: hit.pointIndex });
+      setDrag({ type: "channel-point", channelId: hit.id, pointIndex: hit.pointIndex });
+    }
     if (hit.type === "route") {
       const route = designer.routes.find((entry) => entry.id === hit.id);
       if (!route) return;
@@ -646,8 +743,12 @@ export function DesignerStudioCanvas({
 
   function handleCanvasDoubleClick(event: React.MouseEvent<HTMLCanvasElement>) {
     if (presentation === "animate") return;
+    if (tool === "channel_bezier" && shapeDraft?.target === "channel" && shapeDraft.points.length >= 2) {
+      finishChannelDraft(false);
+      return;
+    }
     const point = eventPoint(event);
-    if (activeLayer === "reference" && selectedBuildAreaId) {
+    if ((activeLayer === "reference" || activeLayer === "artwork") && selectedBuildAreaId) {
       const buildArea = designer.buildAreas.find((entry) => entry.id === selectedBuildAreaId);
       const insertIndex = buildArea ? nearestShapeInsertIndex(buildArea, point) : null;
       if (buildArea && insertIndex !== null) onInsertBuildAreaPoint(buildArea.id, insertIndex, point);
@@ -657,6 +758,12 @@ export function DesignerStudioCanvas({
       const zone = designer.zones.find((entry) => entry.id === selectedZoneId);
       const insertIndex = zone ? nearestShapeInsertIndex(zone, point) : null;
       if (zone && insertIndex !== null) onInsertZonePoint(zone.id, insertIndex, point);
+      return;
+    }
+    if (activeLayer === "zones" && selectedChannelId) {
+      const channel = designer.channels.find((entry) => entry.id === selectedChannelId);
+      const insertIndex = channel ? nearestChannelInsertIndex(channel, point) : null;
+      if (channel && insertIndex !== null) onInsertChannelPoint(channel.id, insertIndex, point);
       return;
     }
     if (activeLayer === "strings") {
@@ -673,7 +780,7 @@ export function DesignerStudioCanvas({
       <div ref={canvasHostRef} className={`relative min-h-0 min-w-0 overflow-hidden ${colorMode === "night" ? "bg-slate-950" : "bg-slate-100"}`}>
         <canvas
           ref={canvasRef}
-          className={`absolute inset-0 block h-full w-full ${colorMode === "night" ? "bg-slate-950" : "bg-slate-100"} ${drag?.type === "pan" ? "cursor-grabbing" : tool === "pan" ? "cursor-grab" : tool === "measure" || tool === "led_string" || tool === "data_cable" || tool === "build_area_polygon" || tool === "build_area_bezier" || tool === "zone_polygon" || tool === "zone_bezier" ? "cursor-crosshair" : "cursor-default"}`}
+          className={`absolute inset-0 block h-full w-full ${colorMode === "night" ? "bg-slate-950" : "bg-slate-100"} ${drag?.type === "pan" ? "cursor-grabbing" : tool === "pan" ? "cursor-grab" : tool === "measure" || tool === "image_place" || tool === "led_string" || tool === "data_cable" || tool === "build_area_polygon" || tool === "build_area_bezier" || tool === "zone_polygon" || tool === "zone_bezier" || tool === "channel_bezier" ? "cursor-crosshair" : "cursor-default"}`}
           role="img"
           aria-label="Designer studio canvas"
           onPointerDown={handleCanvasPointerDown}
@@ -701,7 +808,7 @@ export function DesignerStudioCanvas({
           <div className="pointer-events-none absolute inset-0">
             {designer.artwork.map((artwork) => {
               const url = artworkUrls[artwork.assetId];
-              if (!url) return null;
+              if (artwork.visible === false) return null;
               const left = ((artwork.x - viewport.x) / viewport.width) * 100;
               const top = ((artwork.y - viewport.y) / viewport.height) * 100;
               const width = (artwork.width / viewport.width) * 100;
@@ -709,10 +816,10 @@ export function DesignerStudioCanvas({
               return (
                 <div
                   key={artwork.id}
-                  className={`absolute overflow-hidden ${selectedArtworkId === artwork.id ? "ring-2 ring-cyan-300" : "ring-1 ring-white/15"}`}
+                  className={`absolute flex items-center justify-center overflow-hidden ${selectedArtworkId === artwork.id ? "ring-2 ring-cyan-300" : "ring-1 ring-white/15"} ${url ? "" : "border border-dashed border-sky-400/70 bg-sky-950/20"}`}
                   style={{ left: `${left}%`, top: `${top}%`, width: `${width}%`, height: `${height}%`, opacity: designer.layers.artwork.opacity }}
                 >
-                  <img src={url} alt={artwork.name} className="h-full w-full object-contain" draggable={false} />
+                  {url ? <img src={url} alt={artwork.name} className="h-full w-full object-contain" draggable={false} /> : <span className="px-1 text-center text-[11px] leading-3 text-sky-300/80">{artwork.name}</span>}
                   {selectedArtworkId === artwork.id ? (
                     <>
                       <span className="absolute left-0 top-0 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full border border-blue-700 bg-white" />

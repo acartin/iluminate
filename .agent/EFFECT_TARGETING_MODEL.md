@@ -69,12 +69,22 @@ For the same selected pixels, an effect states how it interprets them:
 - `global`: use the common canvas/sign coordinate system. Used by a wave, fire,
   or gradient that crosses several letters as one composition.
 
+Current product decision (simplification): the web UI does **not** expose the
+coordinate space. Clips are authored with `coordinateSpace: "local"`, and whole-
+sign composition is achieved by targeting a **group** that contains the desired
+zones (a group of all zones makes `local` equal `global`, since the target's
+bounds are the sign's bounds). Spatial effects (flame, aurora, spatial_fill,
+spatial_wave) therefore work as one composition through grouping. The core still
+accepts `serial`/`local`/`global` for schema/firmware compatibility, and effect
+pixel ordering is always physical `output + serialIndex`.
+
 Examples:
 
 - A chase on `L vertical` follows only that zone's pixels in serial order.
-- Fire on `full sign` samples all selected pixels in global coordinates.
+- Fire on `full sign` (a group of all zones) samples all selected pixels as one
+  composition.
 - A yellow fill on group `CARIBE` can activate each child letter sequentially
-  while using each child's local coordinates.
+  while using each child's coordinates.
 
 ## Advanced Exception
 
