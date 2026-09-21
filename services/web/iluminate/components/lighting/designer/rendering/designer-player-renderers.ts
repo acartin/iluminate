@@ -2,7 +2,7 @@
 
 import type { DesignerForm, DesignerPoint, DesignerZoneForm, DesignerChannelForm } from "@/lib/lighting/partitura-model";
 import type { CompiledDesignerLayout } from "../designer-compiler";
-import { channelCenterPolyline, channelOutline, channelWidthCm, clamp, pointInsideDesignerShape } from "../designer-geometry";
+import { channelBorderPolylines, channelCenterPolyline, channelIsClosed, channelWidthCm, clamp, openChannelOutline, pointInsideDesignerShape } from "../designer-geometry";
 import type { DesignerViewport } from "../types";
 import type { DesignerAnimationDiffuser, DesignerAnimationPixel } from "../designer-paper-canvas";
 
@@ -218,7 +218,7 @@ export function renderDiffuserFrame({
     if (lit) drawCanvasEmitters(lit, channelPixels, renderedColors, viewport, canvasSize, emitterRadiusPx, renderIntensity, optical.hotspotAlpha);
     context.save();
     canvasChannelPath(context, channel, viewport, canvasSize);
-    context.clip();
+    context.clip(channelIsClosed(channel) ? "evenodd" : "nonzero");
     context.globalCompositeOperation = "lighter";
     context.filter = blurPx > 0 ? `blur(${blurPx}px)` : "none";
     context.drawImage(litLayer, 0, 0);
@@ -320,7 +320,7 @@ function drawChannelShapes(g: any, designer: DesignerForm, viewport: DesignerVie
       const screen = toScreen(point, viewport, canvasSize);
       g.lineTo(screen.x, screen.y);
     });
-    g.closePath();
+    if (channelIsClosed(channel)) g.closePath();
     g.stroke({ color: selected ? 0x60a5fa : 0xf59e0b, alpha: selected ? 0.5 : 0.26, width: Math.max(1, channelWidthCm(channel) * scale), join: "miter" });
   });
 }
@@ -488,14 +488,23 @@ function designerShapeArea(shape: DesignerZoneForm) {
 }
 
 function canvasChannelPath(context: CanvasRenderingContext2D, channel: DesignerChannelForm, viewport: DesignerViewport, canvasSize: { width: number; height: number }) {
-  const outline = channelOutline(channel);
   context.beginPath();
-  outline.forEach((point, index) => {
+  if (channelIsClosed(channel)) {
+    const borders = channelBorderPolylines(channel);
+    traceCanvasPolyline(context, borders.left, viewport, canvasSize, true);
+    traceCanvasPolyline(context, [...borders.right].reverse(), viewport, canvasSize, true);
+    return;
+  }
+  traceCanvasPolyline(context, openChannelOutline(channel), viewport, canvasSize, true);
+}
+
+function traceCanvasPolyline(context: CanvasRenderingContext2D, points: DesignerPoint[], viewport: DesignerViewport, canvasSize: { width: number; height: number }, closed: boolean) {
+  points.forEach((point, index) => {
     const screen = toScreen(point, viewport, canvasSize);
     if (index === 0) context.moveTo(screen.x, screen.y);
     else context.lineTo(screen.x, screen.y);
   });
-  context.closePath();
+  if (closed) context.closePath();
 }
 
 function canvasShapePath(context: CanvasRenderingContext2D, shape: DesignerZoneForm, viewport: DesignerViewport, canvasSize: { width: number; height: number }) {

@@ -1,9 +1,9 @@
 # BRAIN_MAP
 
-- Generated UTC: `2026-09-15T21:22:58Z`
+- Generated UTC: `2026-09-21T00:06:29Z`
 - Repo root: `/srv/iluminate`
-- Git branch: `HETZNER-DEV-2026-Setiembre-15`
-- Git commit: `c09ffc0`
+- Git branch: `HETZNER-DEV-2026-Setiembre-16`
+- Git commit: `7127851`
 
 ## 1. MAPA DE INTENCIONES (ILUMINATE)
 
@@ -35,6 +35,7 @@
 ## 3. SERVICIOS DOCKER ACTUALES
 
 ```text
+iluminate-public-web
 iluminate-web
 postgres
 ```
@@ -80,11 +81,25 @@ services/lighting-core/validators
 services/simulator
 services/web
 services/web/iluminate
+services/web/iluminate-public
+services/web/iluminate-public/app
+services/web/iluminate-public/app/about
+services/web/iluminate-public/app/for-sign-makers
+services/web/iluminate-public/app/learn
+services/web/iluminate-public/app/projects
+services/web/iluminate-public/app/technology
+services/web/iluminate-public/app/templates
+services/web/iluminate-public/assets
+services/web/iluminate-public/components
+services/web/iluminate-public/content
+services/web/iluminate-public/public
+services/web/iluminate-public/public/brand
+services/web/iluminate-public/types
 services/web/iluminate/app
+services/web/iluminate/app/[group]
 services/web/iluminate/app/api
 services/web/iluminate/app/console
 services/web/iluminate/app/forgot-password
-services/web/iluminate/app/[group]
 services/web/iluminate/app/login
 services/web/iluminate/app/partituras
 services/web/iluminate/app/projects
@@ -109,69 +124,116 @@ services/web/iluminate/services/web
 ## 5. ARCHIVOS RELEVANTES
 
 ```text
+services/README.md
+services/auth/README.md
 services/auth/api/README.md
 services/auth/contracts/README.md
 services/auth/domain/README.md
+services/auth/migrations/.gitkeep
 services/auth/migrations/2026-08-19_create_auth_password_reset_tokens.sql
 services/auth/migrations/2026-08-19_create_auth_security_baseline.sql
-services/auth/migrations/.gitkeep
-services/auth/README.md
 services/auth/storage/README.md
 services/auth/tests/.gitkeep
 services/device-protocol/README.md
+services/firmware/README.md
+services/firmware/esp32-fastled-spike/README.md
 services/firmware/esp32-fastled-spike/esp32-fastled-spike.ino
 services/firmware/esp32-fastled-spike/fixtures/one-strip-100.partitura.json
-services/firmware/esp32-fastled-spike/README.md
-services/firmware/README.md
+services/lighting-core/README.md
 services/lighting-core/api/README.md
 services/lighting-core/contracts/README.md
+services/lighting-core/domain/README.md
 services/lighting-core/domain/chains/.gitkeep
 services/lighting-core/domain/clips/.gitkeep
 services/lighting-core/domain/controllers/.gitkeep
 services/lighting-core/domain/deployments/.gitkeep
-services/lighting-core/domain/effects/catalog.ts
 services/lighting-core/domain/effects/.gitkeep
+services/lighting-core/domain/effects/aurora.ts
+services/lighting-core/domain/effects/catalog.ts
+services/lighting-core/domain/effects/chase.ts
+services/lighting-core/domain/effects/color.ts
+services/lighting-core/domain/effects/comet.ts
+services/lighting-core/domain/effects/fade.ts
+services/lighting-core/domain/effects/flame.ts
+services/lighting-core/domain/effects/math.ts
+services/lighting-core/domain/effects/module.ts
+services/lighting-core/domain/effects/off.ts
+services/lighting-core/domain/effects/pulse.ts
+services/lighting-core/domain/effects/solid.ts
+services/lighting-core/domain/effects/spatial-fill.ts
+services/lighting-core/domain/effects/spatial-wave.ts
+services/lighting-core/domain/effects/toggle.ts
+services/lighting-core/domain/effects/wipe.ts
 services/lighting-core/domain/partituras/types.ts
-services/lighting-core/domain/README.md
 services/lighting-core/domain/scenes/.gitkeep
 services/lighting-core/domain/segments/.gitkeep
 services/lighting-core/domain/tracks/.gitkeep
 services/lighting-core/domain/zones/.gitkeep
+services/lighting-core/fixtures/README.md
 services/lighting-core/fixtures/partitura-v1-invalid-output.json
 services/lighting-core/fixtures/partitura-v1-invalid-references.json
 services/lighting-core/fixtures/partitura-v1-minimal.json
-services/lighting-core/fixtures/README.md
 services/lighting-core/generators/partitura-generator.ts
 services/lighting-core/index.ts
+services/lighting-core/migrations/.gitkeep
 services/lighting-core/migrations/2026-08-19_create_iluminate_operational_tables.sql
 services/lighting-core/migrations/2026-08-22_create_iluminate_partituras.sql
 services/lighting-core/migrations/2026-08-22_remove_partitura_revisions.sql
 services/lighting-core/migrations/2026-09-09_projects_many_partituras.sql
 services/lighting-core/migrations/2026-09-11_remove_legacy_partitura_layout.sql
-services/lighting-core/migrations/.gitkeep
-services/lighting-core/package.json
 services/lighting-core/package-lock.json
+services/lighting-core/package.json
 services/lighting-core/pixel-map/builders.ts
 services/lighting-core/pixel-map/create-pixel-map.ts
 services/lighting-core/player/scene-player.ts
 services/lighting-core/player/ws2812b-simulator.ts
-services/lighting-core/README.md
-services/lighting-core/schemas/partitura.v1.schema.json
 services/lighting-core/schemas/README.md
+services/lighting-core/schemas/partitura.v1.schema.json
 services/lighting-core/storage/README.md
 services/lighting-core/tests/.gitkeep
 services/lighting-core/tests/validate-fixtures.test.ts
 services/lighting-core/tsconfig.json
-services/lighting-core/validators/partitura-validator.ts
 services/lighting-core/validators/README.md
-services/README.md
+services/lighting-core/validators/partitura-validator.ts
 services/simulator/README.md
+services/web/iluminate-public/Dockerfile
+services/web/iluminate-public/README.md
+services/web/iluminate-public/app/globals.css
+services/web/iluminate-public/app/icon.svg
+services/web/iluminate-public/app/layout.tsx
+services/web/iluminate-public/app/not-found.tsx
+services/web/iluminate-public/app/page.tsx
+services/web/iluminate-public/app/robots.ts
+services/web/iluminate-public/app/sitemap.ts
+services/web/iluminate-public/assets/apple-touch-icon.png
+services/web/iluminate-public/assets/iluminate-brand-master-editable_Emblema Oscuro.svg
+services/web/iluminate-public/assets/iluminate-brand-master-editable_Favicon.svg
+services/web/iluminate-public/assets/iluminate-brand-master-editable_Mark Light.svg
+services/web/iluminate-public/assets/iluminate-brand-master-editable_Wordmark Light.svg
+services/web/iluminate-public/assets/iluminate-brand-master-editable_Wordmark oscuro.svg
+services/web/iluminate-public/components/brand.tsx
+services/web/iluminate-public/components/hero-stage.tsx
+services/web/iluminate-public/components/lesson-list.tsx
+services/web/iluminate-public/components/project-card.tsx
+services/web/iluminate-public/components/project-player.tsx
+services/web/iluminate-public/components/project-visual.tsx
+services/web/iluminate-public/components/reveal.tsx
+services/web/iluminate-public/components/site-footer.tsx
+services/web/iluminate-public/components/site-header.tsx
+services/web/iluminate-public/content/site.ts
+services/web/iluminate-public/eslint.config.mjs
+services/web/iluminate-public/next-env.d.ts
+services/web/iluminate-public/next.config.mjs
+services/web/iluminate-public/package-lock.json
+services/web/iluminate-public/package.json
+services/web/iluminate-public/tsconfig.json
+services/web/iluminate/Dockerfile
+services/web/iluminate/README.md
 services/web/iluminate/app/globals.css
 services/web/iluminate/app/icon.svg
 services/web/iluminate/app/layout.tsx
 services/web/iluminate/app/not-found.tsx
 services/web/iluminate/app/page.tsx
-services/web/iluminate/Dockerfile
 services/web/iluminate/docs/theme-standard.md
 services/web/iluminate/lib/api.ts
 services/web/iluminate/lib/feedback.ts
@@ -179,12 +241,11 @@ services/web/iluminate/lib/modules.ts
 services/web/iluminate/lib/request-url.ts
 services/web/iluminate/lib/types.ts
 services/web/iluminate/lib/utils.ts
-services/web/iluminate/next.config.mjs
 services/web/iluminate/next-env.d.ts
-services/web/iluminate/package.json
+services/web/iluminate/next.config.mjs
 services/web/iluminate/package-lock.json
+services/web/iluminate/package.json
 services/web/iluminate/postcss.config.mjs
-services/web/iluminate/README.md
 services/web/iluminate/tailwind.config.ts
 services/web/iluminate/tsconfig.json
 .agent/AI_CONTEXT_LED_ORCHESTRATION_PLATFORM.md
@@ -199,6 +260,7 @@ services/web/iluminate/tsconfig.json
 .agent/ILUMINATE_UI_STANDARDS.md
 .agent/IMPLEMENTATION_PLAN.md
 .agent/PIXELMAP_COMPOSER_DIRECTION.md
-.agent/regenerar_contexto.sh
+.agent/PUBLIC_SITE_DIRECTION.md
 .agent/RULES.md
+.agent/regenerar_contexto.sh
 ```

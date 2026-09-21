@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Iluminate">
+  <rect width="512" height="512" rx="72" fill="#0b0b0d"/>
+  <g fill="#ff3b30">
+    <rect x="232" y="77" width="48" height="138"/>
+    <rect x="114" y="117" width="48" height="138" transform="rotate(-45 138 186)"/>
+    <rect x="350" y="117" width="48" height="138" transform="rotate(45 374 186)"/>
+  </g>
+  <circle cx="256" cy="331" r="58" fill="#f4f1ea"/>
+</svg>

@@ -1,9 +1,9 @@
 # AI Context Pack
 
-- Generated UTC: `2026-09-15T21:22:58Z`
+- Generated UTC: `2026-09-21T00:06:29Z`
 - Repo root: `/srv/iluminate`
-- Git branch: `HETZNER-DEV-2026-Setiembre-15`
-- Git commit: `c09ffc0`
+- Git branch: `HETZNER-DEV-2026-Setiembre-16`
+- Git commit: `7127851`
 - Policy: high-signal only; enfocado en Iluminate.
 
 ## Contexto Maestro
@@ -13,10 +13,10 @@
 ```
 # BRAIN_MAP
 
-- Generated UTC: `2026-09-15T21:22:58Z`
+- Generated UTC: `2026-09-21T00:06:29Z`
 - Repo root: `/srv/iluminate`
-- Git branch: `HETZNER-DEV-2026-Setiembre-15`
-- Git commit: `c09ffc0`
+- Git branch: `HETZNER-DEV-2026-Setiembre-16`
+- Git commit: `7127851`
 
 ## 1. MAPA DE INTENCIONES (ILUMINATE)
 
@@ -48,6 +48,7 @@
 ## 3. SERVICIOS DOCKER ACTUALES
 
 ```text
+iluminate-public-web
 iluminate-web
 postgres
 ```
@@ -93,11 +94,25 @@ services/lighting-core/validators
 services/simulator
 services/web
 services/web/iluminate
+services/web/iluminate-public
+services/web/iluminate-public/app
+services/web/iluminate-public/app/about
+services/web/iluminate-public/app/for-sign-makers
+services/web/iluminate-public/app/learn
+services/web/iluminate-public/app/projects
+services/web/iluminate-public/app/technology
+services/web/iluminate-public/app/templates
+services/web/iluminate-public/assets
+services/web/iluminate-public/components
+services/web/iluminate-public/content
+services/web/iluminate-public/public
+services/web/iluminate-public/public/brand
+services/web/iluminate-public/types
 services/web/iluminate/app
+services/web/iluminate/app/[group]
 services/web/iluminate/app/api
 services/web/iluminate/app/console
 services/web/iluminate/app/forgot-password
-services/web/iluminate/app/[group]
 services/web/iluminate/app/login
 services/web/iluminate/app/partituras
 services/web/iluminate/app/projects
@@ -122,75 +137,60 @@ services/web/iluminate/services/web
 ## 5. ARCHIVOS RELEVANTES
 
 ```text
+services/README.md
+services/auth/README.md
 services/auth/api/README.md
 services/auth/contracts/README.md
 services/auth/domain/README.md
+services/auth/migrations/.gitkeep
 services/auth/migrations/2026-08-19_create_auth_password_reset_tokens.sql
 services/auth/migrations/2026-08-19_create_auth_security_baseline.sql
-services/auth/migrations/.gitkeep
-services/auth/README.md
 services/auth/storage/README.md
 services/auth/tests/.gitkeep
 services/device-protocol/README.md
+services/firmware/README.md
+services/firmware/esp32-fastled-spike/README.md
 services/firmware/esp32-fastled-spike/esp32-fastled-spike.ino
 services/firmware/esp32-fastled-spike/fixtures/one-strip-100.partitura.json
-services/firmware/esp32-fastled-spike/README.md
-services/firmware/README.md
+services/lighting-core/README.md
 services/lighting-core/api/README.md
 services/lighting-core/contracts/README.md
+services/lighting-core/domain/README.md
 services/lighting-core/domain/chains/.gitkeep
 services/lighting-core/domain/clips/.gitkeep
 services/lighting-core/domain/controllers/.gitkeep
 services/lighting-core/domain/deployments/.gitkeep
-services/lighting-core/domain/effects/catalog.ts
 services/lighting-core/domain/effects/.gitkeep
+services/lighting-core/domain/effects/aurora.ts
+services/lighting-core/domain/effects/catalog.ts
+services/lighting-core/domain/effects/chase.ts
+services/lighting-core/domain/effects/color.ts
+services/lighting-core/domain/effects/comet.ts
+services/lighting-core/domain/effects/fade.ts
+services/lighting-core/domain/effects/flame.ts
+services/lighting-core/domain/effects/math.ts
+services/lighting-core/domain/effects/module.ts
+services/lighting-core/domain/effects/off.ts
+services/lighting-core/domain/effects/pulse.ts
+services/lighting-core/domain/effects/solid.ts
+services/lighting-core/domain/effects/spatial-fill.ts
+services/lighting-core/domain/effects/spatial-wave.ts
+services/lighting-core/domain/effects/toggle.ts
+services/lighting-core/domain/effects/wipe.ts
 services/lighting-core/domain/partituras/types.ts
-services/lighting-core/domain/README.md
 services/lighting-core/domain/scenes/.gitkeep
 services/lighting-core/domain/segments/.gitkeep
 services/lighting-core/domain/tracks/.gitkeep
 services/lighting-core/domain/zones/.gitkeep
+services/lighting-core/fixtures/README.md
 services/lighting-core/fixtures/partitura-v1-invalid-output.json
 services/lighting-core/fixtures/partitura-v1-invalid-references.json
 services/lighting-core/fixtures/partitura-v1-minimal.json
-services/lighting-core/fixtures/README.md
 services/lighting-core/generators/partitura-generator.ts
 services/lighting-core/index.ts
+services/lighting-core/migrations/.gitkeep
 services/lighting-core/migrations/2026-08-19_create_iluminate_operational_tables.sql
 services/lighting-core/migrations/2026-08-22_create_iluminate_partituras.sql
-services/lighting-core/migrations/2026-08-22_remove_partitura_revisions.sql
-services/lighting-core/migrations/2026-09-09_projects_many_partituras.sql
-services/lighting-core/migrations/2026-09-11_remove_legacy_partitura_layout.sql
-services/lighting-core/migrations/.gitkeep
-services/lighting-core/package.json
-services/lighting-core/package-lock.json
-services/lighting-core/pixel-map/builders.ts
-services/lighting-core/pixel-map/create-pixel-map.ts
-services/lighting-core/player/scene-player.ts
-services/lighting-core/player/ws2812b-simulator.ts
-services/lighting-core/README.md
-services/lighting-core/schemas/partitura.v1.schema.json
-services/lighting-core/schemas/README.md
-services/lighting-core/storage/README.md
-services/lighting-core/tests/.gitkeep
-services/lighting-core/tests/validate-fixtures.test.ts
-services/lighting-core/tsconfig.json
-services/lighting-core/validators/partitura-validator.ts
-services/lighting-core/validators/README.md
-services/README.md
-services/simulator/README.md
-services/web/iluminate/app/globals.css
-services/web/iluminate/app/icon.svg
-services/web/iluminate/app/layout.tsx
-services/web/iluminate/app/not-found.tsx
-services/web/iluminate/app/page.tsx
-services/web/iluminate/Dockerfile
-services/web/iluminate/docs/theme-standard.md
-services/web/iluminate/lib/api.ts
-services/web/iluminate/lib/feedback.ts
-services/web/iluminate/lib/modules.ts
-services/web/iluminate/lib/request-url.ts
-services/web/iluminate/lib/types.ts
 ```
 ### `.agent/AI_CONTEXT_LED_ORCHESTRATION_PLATFORM.md`
 
@@ -410,6 +410,7 @@ Do not assume that every directory under `services/` is a daemon.
 ```text
 services/
   web/iluminate      # Next.js UI and authoring surface
+  web/iluminate-public # public site runtime, interactive gallery, templates and learning
   lighting-core      # LED choreography domain and partitura model
   auth               # identity and authorization domain
   simulator          # reusable simulation domain, when it outgrows web
@@ -434,6 +435,25 @@ Does not own:
 - project revision validation,
 - controller protocol rules,
 - firmware-specific LED drivers.
+
+### `services/web/iluminate-public`
+
+Owns:
+
+- Public experience at `iluminate.space`.
+- Project and template discovery pages.
+- Restricted interactive project configurator.
+- Public SEO, editorial content and generated project imagery presentation.
+- Learning pages and curated YouTube tutorials for Designer and Animate.
+
+Does not own:
+
+- Canonical partitura or effect semantics.
+- Full Designer editing behavior.
+- Authentication or tenant authorization.
+- Direct PostgreSQL access.
+- Template cloning authority.
+- Controller, deployment or device credentials.
 
 ### `services/lighting-core`
 
@@ -518,6 +538,11 @@ web/iluminate
   -> lighting-core/contracts
   -> lighting-core/schemas
 
+web/iluminate-public
+  -> lighting-core/contracts
+  -> simulator
+  -> published public API/content only
+
 lighting-core/api
   -> lighting-core/domain
   -> lighting-core/validators
@@ -534,31 +559,6 @@ device-protocol
 external firmware environment
   -> documented partitura schema/contracts
 ```
-
-Avoid:
-
-- `lighting-core` importing React or Next.js.
-- `auth` importing lighting domain internals.
-- `web/iluminate` becoming the source of truth for partituras.
-- API handlers duplicating validation rules that belong in `validators/`.
-- simulator storing its own incompatible partitura format.
-
----
-
-## 4. Domain Vocabulary Is Stable
-
-Use the same names in UI, API, JSON, validators and the external firmware interpreter:
-
-- `chain`
-- `segment`
-- `zone`
-- `partitura`
-- `scene`
-- `track`
-- `clip`
-- `effect`
-- `controller`
-- `deployment`
 ```
 
 ## Reglas Operativas
@@ -579,6 +579,7 @@ Precondicion recomendada al iniciar cada nueva sesion:
    - Leer `.agent/IMPLEMENTATION_PLAN.md` cuando la tarea afecte roadmap, fases o priorizacion.
    - Leer `.agent/EFFECT_TARGETING_MODEL.md` antes de cambiar el compilador, pixelMap, zonas, grupos, efectos o simulador.
    - Leer `.agent/ILUMINATE_UI_STANDARDS.md` si se toca `services/web/iluminate`.
+   - Leer `.agent/PUBLIC_SITE_DIRECTION.md` si se toca el sitio publico, catalogo, templates, configurador publico, SEO o area de aprendizaje.
    - Leer `.agent/AI_CONTEXT_LED_ORCHESTRATION_PLATFORM.md` para decisiones de producto/dominio.
 2. Determinar si se requiere regeneracion de contexto:
    - faltan `.agent/BRAIN_MAP.md` o `.agent/AI_CONTEXT_PACK.md`;
@@ -606,6 +607,7 @@ Regla de precedencia:
 Servicios principales:
 
 - `services/web/iluminate`: frontend Next.js, shell, UI, editor y simulador inicial.
+- `services/web/iluminate-public`: sitio publico Next.js previsto para `iluminate.space`, proyectos, templates, configurador publico y aprendizaje.
 - `services/lighting-core`: dominio LED, partitura, schemas, validadores, API del dominio y persistencia futura.
 - `services/auth`: identidad, organizaciones, membresias, roles, permisos, sesiones y auth API.
 - `services/simulator`: simulacion reusable cuando salga del primer prototipo web.
@@ -667,6 +669,9 @@ Reglas:
 - Compose operativo actual: `compose.yml`.
 - Servicio web actual: `iluminate-web`.
 - Puerto local por defecto: `8420`.
+- Dominio publico registrado: `iluminate.space`.
+- Dominio previsto para dashboard/Designer: `app.iluminate.space`.
+- El sitio publico debe desplegarse en un contenedor independiente `iluminate-public-web`; no debe recibir credenciales de PostgreSQL, escritura R2, sesiones o dispositivos.
 - No cambiar nombres de servicios, puertos o URLs base sin ajustar:
   - `compose.yml`;
   - `.env.example`;
@@ -733,6 +738,7 @@ Este archivo define donde validar cambios segun la ruta afectada. En Iluminate, 
 | `.agent/*.md` | Revision de contenido | no requiere runtime |
 | `.agent/*.sh` | Sintaxis shell | `bash -n .agent/<script>.sh` |
 | `services/web/iluminate/` | Build/smoke de Next via Docker | `docker compose build iluminate-web` y `curl -I http://localhost:${ILUMINATE_WEB_PORT:-8420}` si esta levantado |
+| `services/web/iluminate-public/` | Typecheck, lint, build y smoke del sitio publico via Docker | `docker compose build iluminate-public-web` y `curl -I http://localhost:${ILUMINATE_PUBLIC_WEB_PORT:-8430}` si esta levantado |
 | `services/lighting-core/` | Build y fixtures del dominio | `docker run --rm -v "$PWD/services/lighting-core:/work" -w /work node:22-alpine sh -c "npm ci && npm test"` |
 | `services/lighting-core/pixel-map/` | Build core y validar generation/simulation por API si afecta web | `docker compose up -d --build iluminate-web` |
 | `services/lighting-core/domain/effects/` | Build core/web y smoke de `/api/lighting/effects`; si cambia renderer, generar frame de Lab por API | `docker compose up -d --build iluminate-web` |
@@ -748,6 +754,9 @@ Este archivo define donde validar cambios segun la ruta afectada. En Iluminate, 
 ## Variables clave actuales
 
 - `ILUMINATE_WEB_PORT`
+- `ILUMINATE_PUBLIC_WEB_PORT` (prevista)
+- `ILUMINATE_PUBLIC_SITE_URL` (prevista; produccion `https://iluminate.space`)
+- `ILUMINATE_APP_URL` (prevista; produccion `https://app.iluminate.space`)
 - `ILUMINATE_API_BASE_URL`
 - `ILUMINATE_PLACEHOLDER_AUTH`
 - `ILUMINATE_SECURE_COOKIES`
@@ -834,6 +843,19 @@ physical installation model
 → reported status
 → rollback or scene change
 ```
+
+Public product surface decision:
+
+- Registered public domain: `iluminate.space`.
+- Planned authenticated dashboard/Designer domain: `app.iluminate.space`.
+- The public site will live in `services/web/iluminate-public` and deploy as an
+  independent `iluminate-public-web` container.
+- The public experience is a project-led gallery of Iluminate-created concepts,
+  interactive previews and reusable templates, not fabricated customer case
+  studies.
+- The public learning area will curate YouTube tutorials for Designer and
+  Animate under `/learn`.
+- See `.agent/PUBLIC_SITE_DIRECTION.md` for the canonical direction.
 
 ## Current Product Direction Snapshot
 
@@ -977,19 +999,6 @@ UX direction after starting the Designer branch:
 - [x] Add initial scale model in cm.
 - [x] Add one project-level LED density setting.
 - [ ] Warn and reset routes/cabling when LED density changes.
-- [ ] Add zone drawing tools: rectangle, circle and polygon. Current MVP creates rectangle/ellipse zones from toolbar and edits them on-canvas.
-- [x] Allow zones such as letters, words, logo, background and full sign.
-- [x] Store zone geometry and bounds in the editable document.
-- [x] Add optional rulers/grid/snap guides only as routing aids.
-- [x] Model continuous directional LED strings over the canvas. Current MVP edits route points on-canvas.
-- [x] Model green data cables separately from LED strings. Data cables do not generate LEDs.
-- [x] Add a persistent, movable, non-deletable controller card with 3 default data connectors.
-- [x] Add exact snap connection from controller red output ports to data-cable green input terminal.
-- [x] Keep cables attached when dragging the controller.
-- [x] Draw controller/data-cable/LED-string topology; output assignment is derived from physical connections rather than edited on a route.
-- [x] Sample route points using project LED density.
-- [ ] Generate serial LED indices by traversing the validated electrical graph, not document/route array order.
-- [ ] Show LED points and indices during route editing.
 ```
 ### `.agent/ILUMINATE_UI_STANDARDS.md`
 
@@ -1187,6 +1196,7 @@ Este archivo resume el foco operativo actual. Las reglas autoritativas viven en 
 - `services/lighting-core`: dominio LED, partitura, validacion, revisiones y contratos de despliegue.
 - `services/auth`: identidad, organizaciones, miembros, roles, permisos y sesiones.
 - `services/web/iluminate`: interfaz Next.js para autoria, operacion y administracion.
+- `services/web/iluminate-public`: sitio publico Next.js para proyectos interactivos, templates y tutoriales en `iluminate.space`; se ejecuta en el contenedor independiente `iluminate-public-web`.
 - `services/simulator`: dominio reusable de simulacion cuando salga del prototipo web.
 - `services/device-protocol`: contratos cloud/controlador.
 - `services/firmware`: notas de contrato con el firmware externo; no contiene el build ESP32.
@@ -1198,6 +1208,8 @@ El modelo de dominio vive en `lighting-core`. El web presenta, edita y consume c
 En lo que concierne a este repo, el hardware se modela como un controlador con exactamente tres salidas logicas: `chain.output` 1, 2 y 3.
 
 El sistema es multitenant por diseno. La notacion canonica de tenant en PostgreSQL/backend es `client_id`, alineada con el auth copiado desde `datasyncsa`. PostgreSQL es la base de datos objetivo.
+
+El dominio publico registrado es `iluminate.space`; el dashboard/Designer se publicara en `app.iluminate.space`. Leer `.agent/PUBLIC_SITE_DIRECTION.md` antes de trabajar en la experiencia publica.
 
 ## No convertir
 
@@ -1281,12 +1293,22 @@ For the same selected pixels, an effect states how it interprets them:
 - `global`: use the common canvas/sign coordinate system. Used by a wave, fire,
   or gradient that crosses several letters as one composition.
 
+Current product decision (simplification): the web UI does **not** expose the
+coordinate space. Clips are authored with `coordinateSpace: "local"`, and whole-
+sign composition is achieved by targeting a **group** that contains the desired
+zones (a group of all zones makes `local` equal `global`, since the target's
+bounds are the sign's bounds). Spatial effects (flame, aurora, spatial_fill,
+spatial_wave) therefore work as one composition through grouping. The core still
+accepts `serial`/`local`/`global` for schema/firmware compatibility, and effect
+pixel ordering is always physical `output + serialIndex`.
+
 Examples:
 
 - A chase on `L vertical` follows only that zone's pixels in serial order.
-- Fire on `full sign` samples all selected pixels in global coordinates.
+- Fire on `full sign` (a group of all zones) samples all selected pixels as one
+  composition.
 - A yellow fill on group `CARIBE` can activate each child letter sequentially
-  while using each child's local coordinates.
+  while using each child's coordinates.
 
 ## Advanced Exception
 
@@ -1302,6 +1324,199 @@ primary entity, UI workflow, or required partitura target type.
 4. Resolve groups recursively and deduplicate their pixels.
 5. Make simulator and firmware-facing artifacts consume the same resolved pixel
    targets. Do not maintain a separate manual `zone -> segment` assignment.
+
+## Effect Implementation Structure
+
+Effects are modular in `services/lighting-core/domain/effects/`. Each effect is
+one file that exports an `EffectModule` (`{ definition, render }`), co-locating
+its metadata and its pixel renderer:
+
+```text
+domain/effects/
+  module.ts    # EffectModule, EffectRenderContext, EffectRenderer, EffectPixel, Rgb
+  color.ts     # parseColor, mixColors, scaleColor
+  math.ts      # clamp, clampByte, lerp, modulo, smoothstep, fbm, noise
+  <effect>.ts  # one file per effect
+  catalog.ts   # effectModules, effectCatalog, effectRenderers, isSupportedEffect
+```
+
+`render(context)` receives `{ params, progress, localTimeMs, index, total, pixel }`
+and returns an `Rgb`. `scene-player.ts` dispatches through `effectRenderers`; it
+must not hold per-effect logic.
+
+To add an effect: add the id to `EffectId`, create `domain/effects/<id>.ts`,
+register it in `effectModules`, and add a deterministic reference case. The
+`Record<EffectId, EffectModule>` type is exhaustive, so a missing module fails
+the build. Keep `effectCatalog` and `isSupportedEffect` as the public contract for
+the validator and the web API.
+```
+### `.agent/PUBLIC_SITE_DIRECTION.md`
+
+```
+# Iluminate Public Site Direction
+
+**Status:** canonical product direction for the public web experience
+
+**Official domain:** `iluminate.space`
+
+**Planned dashboard domain:** `app.iluminate.space`
+
+## Purpose
+
+The public site is not a conventional marketing landing page and must not feel
+like a generic WordPress template. It is the public, experiential entrance to
+Iluminate: a curated gallery of lighting concepts, interactive project previews,
+reusable templates and learning material.
+
+The authenticated dashboard and Designer remain in `services/web/iluminate`.
+The public Next.js application lives in:
+
+```text
+services/web/iluminate-public
+```
+
+It runs as its own deployable container named `iluminate-public-web`, so that
+the public site can be deployed, cached, scaled
+and secured independently from the authenticated application.
+
+## Domain And Routing
+
+Canonical production routing:
+
+```text
+https://iluminate.space      -> public site
+https://app.iluminate.space  -> dashboard, Designer and Animate
+```
+
+Do not document or introduce a different production domain without an explicit
+product decision.
+
+Initial public information architecture:
+
+```text
+/
+/projects
+/projects/[slug]
+/templates
+/templates/[slug]
+/learn
+/learn/designer
+/learn/animate
+/technology
+/for-sign-makers
+/about
+```
+
+Login, signup and `Use this template` actions hand off to
+`app.iluminate.space`. Authentication and private editing do not move into the
+public application.
+
+## Public Projects And Templates
+
+The first projects are Iluminate-created concepts, not customer case studies.
+Never imply clients, installations, results, testimonials or commercial success
+that do not exist. Present the collection transparently as concept projects,
+lighting studies or `Iluminate Originals`.
+
+Public projects are experiential demonstrations. Templates are reusable,
+versioned starting points. A public project may have a template, but not every
+showcase must be reusable.
+
+The intended visitor flow is:
+
+```text
+discover project
+-> interact with scenes, effects and colors
+-> choose Use this template
+-> authenticate/register
+-> create a private tenant-owned copy
+-> open it in Designer
+```
+
+The public configurator is deliberately limited. It may expose scene, palette,
+effect, speed, intensity, play/pause and diffuser presentation. It must not
+expose private persistence, deployment, controller credentials, arbitrary
+compilation or the full fabrication workflow.
+
+Template cloning must create a new private document resolved from the trusted
+session `client_id`. It must never edit the public source or copy deployments,
+controllers, credentials, authorship/audit records or stale generated artifacts.
+
+## Simulation And Service Boundaries
+
+- `lighting-core` remains the canonical owner of partitura types, effects,
+  validation and frame semantics.
+- `services/simulator` should own the reusable read-only player/renderer as it
+  leaves the dashboard prototype.
+- The public site may consume published snapshots and use the reusable simulator.
+- The public Next.js application must not connect directly to PostgreSQL.
+- The public container must not receive database credentials, R2 write
+  credentials, session secrets or device tokens.
+- Prefer browser-side frame evaluation for interactive public previews instead
+  of making one server request per animation frame.
+- Large public images and video belong in R2/CDN storage; do not grow the Docker
+  image into a media archive.
+
+## Learning And YouTube
+
+The public site includes a learning area for videos published through the
+official Iluminate YouTube presence. Its initial tracks are:
+
+- `Designer`: canvas, artwork, reference geometry, zones, channels, strings,
+  controller connectivity, compile and common validation issues.
+- `Animate`: scenes, clips, targets, groups, effects, palettes, timing and
+  preview/diffuser behavior.
+
+The public experience should use curated video records and playlists rather
+than treating YouTube as the content database. Store stable metadata such as
+title, slug, track, level, duration, thumbnail, YouTube video id and ordering in
+the public site's content layer. Embed YouTube for playback and link to the
+channel/playlist for subscription.
+
+Planned learning routes:
+
+```text
+/learn                  -> featured lessons and learning tracks
+/learn/designer         -> ordered Designer tutorials
+/learn/animate          -> ordered Animate tutorials
+/learn/[slug]           -> optional lesson detail/transcript/resources
+```
+
+Tutorial cards should distinguish `Beginner`, `Intermediate` and `Advanced`,
+and may link directly to the relevant dashboard route after authentication.
+Do not require a custom video hosting or LMS platform for the first version.
+
+## Visual Direction
+
+- The public home is project-led, motion-led and editorial.
+- A flagship interactive project should carry the hero when performance allows.
+- Project cards may preview real frames produced from Iluminate semantics.
+- Generated imagery provides environments and concept presentation; dynamic
+  lighting should come from the actual partitura/simulator whenever practical.
+- Avoid generic SaaS feature grids, fabricated social proof, decorative neon
+  cyberpunk cliches and stock WordPress composition patterns.
+- Preserve accessibility, reduced-motion behavior, fast mobile fallbacks and
+  static poster images for heavy interactive experiences.
+- The flagship home hero currently uses a self-contained Three.js/WebGL scene
+  that extrudes the canonical brand-mark SVG, with a CSS fallback. Each ray is
+  independently hoverable and switchable; the dot acts as a master switch with
+  a restrained comet-like light burst. A soft, irregular dark field is confined
+  behind the 3D mark to support saturated interactive colors without turning the
+  page into a dark theme. It is an editorial experience, not a second simulator
+  or an alternative partitura renderer.
+
+## Initial Delivery Sequence
+
+1. **Complete:** scaffold `services/web/iluminate-public` as an independent Next.js app.
+2. **Complete:** add an independent `iluminate-public-web` Docker/Compose service.
+3. **Complete:** establish public identity, navigation, SEO and the flagship home experience.
+4. **Initial version complete:** publish the first curated concept projects from local typed content.
+5. Extract a reusable read-only player into `services/simulator`.
+6. Build project detail pages and the restricted public configurator.
+7. Add `/learn`, Designer and Animate YouTube collections.
+8. Add authenticated `Use this template` handoff and safe private cloning.
+9. Introduce persistent publication/template models only after the content and
+   cloning workflow are proven.
 ```
 
 ## Documentacion de Arquitectura
@@ -1496,8 +1711,9 @@ The partitura owns:
 ### Servicios del compose principal
 
 ```text
-iluminate-web
 postgres
+iluminate-public-web
+iluminate-web
 ```
 ### `compose.yml:1-220`
 
@@ -1541,6 +1757,19 @@ services:
       - "${ILUMINATE_WEB_PORT:-8420}:3000"
     restart: unless-stopped
 
+  iluminate-public-web:
+    build:
+      context: .
+      dockerfile: services/web/iluminate-public/Dockerfile
+    image: iluminate-public-web:dev
+    container_name: iluminate-public-web
+    environment:
+      ILUMINATE_PUBLIC_SITE_URL: ${ILUMINATE_PUBLIC_SITE_URL:-http://localhost:8430}
+      NEXT_PUBLIC_ILUMINATE_APP_URL: ${ILUMINATE_APP_URL:-http://localhost:8420}
+    ports:
+      - "${ILUMINATE_PUBLIC_WEB_PORT:-8430}:3000"
+    restart: unless-stopped
+
 networks:
   default:
     name: iluminate-net
@@ -1556,7 +1785,10 @@ volumes:
 
 ILUMINATE_ENV=local
 ILUMINATE_WEB_PORT=8420
-ILUMINATE_PUBLIC_APP_URL=http://localhost:8420
+ILUMINATE_PUBLIC_WEB_PORT=8430
+ILUMINATE_PUBLIC_SITE_URL=http://localhost:8430
+ILUMINATE_APP_URL=http://localhost:8420
+NEXT_PUBLIC_ILUMINATE_APP_URL=http://localhost:8420
 
 # Web/API
 ILUMINATE_API_BASE_URL=
@@ -1623,11 +1855,25 @@ services/lighting-core/validators
 services/simulator
 services/web
 services/web/iluminate
+services/web/iluminate-public
+services/web/iluminate-public/app
+services/web/iluminate-public/app/about
+services/web/iluminate-public/app/for-sign-makers
+services/web/iluminate-public/app/learn
+services/web/iluminate-public/app/projects
+services/web/iluminate-public/app/technology
+services/web/iluminate-public/app/templates
+services/web/iluminate-public/assets
+services/web/iluminate-public/components
+services/web/iluminate-public/content
+services/web/iluminate-public/public
+services/web/iluminate-public/public/brand
+services/web/iluminate-public/types
 services/web/iluminate/app
+services/web/iluminate/app/[group]
 services/web/iluminate/app/api
 services/web/iluminate/app/console
 services/web/iluminate/app/forgot-password
-services/web/iluminate/app/[group]
 services/web/iluminate/app/login
 services/web/iluminate/app/partituras
 services/web/iluminate/app/projects
@@ -1652,69 +1898,116 @@ services/web/iluminate/services/web
 ## Archivos
 
 ```text
+services/README.md
+services/auth/README.md
 services/auth/api/README.md
 services/auth/contracts/README.md
 services/auth/domain/README.md
+services/auth/migrations/.gitkeep
 services/auth/migrations/2026-08-19_create_auth_password_reset_tokens.sql
 services/auth/migrations/2026-08-19_create_auth_security_baseline.sql
-services/auth/migrations/.gitkeep
-services/auth/README.md
 services/auth/storage/README.md
 services/auth/tests/.gitkeep
 services/device-protocol/README.md
+services/firmware/README.md
+services/firmware/esp32-fastled-spike/README.md
 services/firmware/esp32-fastled-spike/esp32-fastled-spike.ino
 services/firmware/esp32-fastled-spike/fixtures/one-strip-100.partitura.json
-services/firmware/esp32-fastled-spike/README.md
-services/firmware/README.md
+services/lighting-core/README.md
 services/lighting-core/api/README.md
 services/lighting-core/contracts/README.md
+services/lighting-core/domain/README.md
 services/lighting-core/domain/chains/.gitkeep
 services/lighting-core/domain/clips/.gitkeep
 services/lighting-core/domain/controllers/.gitkeep
 services/lighting-core/domain/deployments/.gitkeep
-services/lighting-core/domain/effects/catalog.ts
 services/lighting-core/domain/effects/.gitkeep
+services/lighting-core/domain/effects/aurora.ts
+services/lighting-core/domain/effects/catalog.ts
+services/lighting-core/domain/effects/chase.ts
+services/lighting-core/domain/effects/color.ts
+services/lighting-core/domain/effects/comet.ts
+services/lighting-core/domain/effects/fade.ts
+services/lighting-core/domain/effects/flame.ts
+services/lighting-core/domain/effects/math.ts
+services/lighting-core/domain/effects/module.ts
+services/lighting-core/domain/effects/off.ts
+services/lighting-core/domain/effects/pulse.ts
+services/lighting-core/domain/effects/solid.ts
+services/lighting-core/domain/effects/spatial-fill.ts
+services/lighting-core/domain/effects/spatial-wave.ts
+services/lighting-core/domain/effects/toggle.ts
+services/lighting-core/domain/effects/wipe.ts
 services/lighting-core/domain/partituras/types.ts
-services/lighting-core/domain/README.md
 services/lighting-core/domain/scenes/.gitkeep
 services/lighting-core/domain/segments/.gitkeep
 services/lighting-core/domain/tracks/.gitkeep
 services/lighting-core/domain/zones/.gitkeep
+services/lighting-core/fixtures/README.md
 services/lighting-core/fixtures/partitura-v1-invalid-output.json
 services/lighting-core/fixtures/partitura-v1-invalid-references.json
 services/lighting-core/fixtures/partitura-v1-minimal.json
-services/lighting-core/fixtures/README.md
 services/lighting-core/generators/partitura-generator.ts
 services/lighting-core/index.ts
+services/lighting-core/migrations/.gitkeep
 services/lighting-core/migrations/2026-08-19_create_iluminate_operational_tables.sql
 services/lighting-core/migrations/2026-08-22_create_iluminate_partituras.sql
 services/lighting-core/migrations/2026-08-22_remove_partitura_revisions.sql
 services/lighting-core/migrations/2026-09-09_projects_many_partituras.sql
 services/lighting-core/migrations/2026-09-11_remove_legacy_partitura_layout.sql
-services/lighting-core/migrations/.gitkeep
-services/lighting-core/package.json
 services/lighting-core/package-lock.json
+services/lighting-core/package.json
 services/lighting-core/pixel-map/builders.ts
 services/lighting-core/pixel-map/create-pixel-map.ts
 services/lighting-core/player/scene-player.ts
 services/lighting-core/player/ws2812b-simulator.ts
-services/lighting-core/README.md
-services/lighting-core/schemas/partitura.v1.schema.json
 services/lighting-core/schemas/README.md
+services/lighting-core/schemas/partitura.v1.schema.json
 services/lighting-core/storage/README.md
 services/lighting-core/tests/.gitkeep
 services/lighting-core/tests/validate-fixtures.test.ts
 services/lighting-core/tsconfig.json
-services/lighting-core/validators/partitura-validator.ts
 services/lighting-core/validators/README.md
-services/README.md
+services/lighting-core/validators/partitura-validator.ts
 services/simulator/README.md
+services/web/iluminate-public/Dockerfile
+services/web/iluminate-public/README.md
+services/web/iluminate-public/app/globals.css
+services/web/iluminate-public/app/icon.svg
+services/web/iluminate-public/app/layout.tsx
+services/web/iluminate-public/app/not-found.tsx
+services/web/iluminate-public/app/page.tsx
+services/web/iluminate-public/app/robots.ts
+services/web/iluminate-public/app/sitemap.ts
+services/web/iluminate-public/assets/apple-touch-icon.png
+services/web/iluminate-public/assets/iluminate-brand-master-editable_Emblema Oscuro.svg
+services/web/iluminate-public/assets/iluminate-brand-master-editable_Favicon.svg
+services/web/iluminate-public/assets/iluminate-brand-master-editable_Mark Light.svg
+services/web/iluminate-public/assets/iluminate-brand-master-editable_Wordmark Light.svg
+services/web/iluminate-public/assets/iluminate-brand-master-editable_Wordmark oscuro.svg
+services/web/iluminate-public/components/brand.tsx
+services/web/iluminate-public/components/hero-stage.tsx
+services/web/iluminate-public/components/lesson-list.tsx
+services/web/iluminate-public/components/project-card.tsx
+services/web/iluminate-public/components/project-player.tsx
+services/web/iluminate-public/components/project-visual.tsx
+services/web/iluminate-public/components/reveal.tsx
+services/web/iluminate-public/components/site-footer.tsx
+services/web/iluminate-public/components/site-header.tsx
+services/web/iluminate-public/content/site.ts
+services/web/iluminate-public/eslint.config.mjs
+services/web/iluminate-public/next-env.d.ts
+services/web/iluminate-public/next.config.mjs
+services/web/iluminate-public/package-lock.json
+services/web/iluminate-public/package.json
+services/web/iluminate-public/tsconfig.json
+services/web/iluminate/Dockerfile
+services/web/iluminate/README.md
 services/web/iluminate/app/globals.css
 services/web/iluminate/app/icon.svg
 services/web/iluminate/app/layout.tsx
 services/web/iluminate/app/not-found.tsx
 services/web/iluminate/app/page.tsx
-services/web/iluminate/Dockerfile
 services/web/iluminate/docs/theme-standard.md
 services/web/iluminate/lib/api.ts
 services/web/iluminate/lib/feedback.ts
@@ -1722,12 +2015,11 @@ services/web/iluminate/lib/modules.ts
 services/web/iluminate/lib/request-url.ts
 services/web/iluminate/lib/types.ts
 services/web/iluminate/lib/utils.ts
-services/web/iluminate/next.config.mjs
 services/web/iluminate/next-env.d.ts
-services/web/iluminate/package.json
+services/web/iluminate/next.config.mjs
 services/web/iluminate/package-lock.json
+services/web/iluminate/package.json
 services/web/iluminate/postcss.config.mjs
-services/web/iluminate/README.md
 services/web/iluminate/tailwind.config.ts
 services/web/iluminate/tsconfig.json
 ```
@@ -1744,6 +2036,7 @@ In this monorepo, `services` means product capability or bounded domain. A servi
 Current service map:
 
 - `web/iluminate`: Next.js operator and authoring interface.
+- `web/iluminate-public`: public Next.js experience for `iluminate.space`, concept projects, reusable templates and Designer/Animate learning content.
 - `lighting-core`: LED installation, partitura, scene, simulator-facing and deployment-domain core.
 - `auth`: identity, organizations, memberships, roles, sessions and authorization contracts.
 - `firmware`: compatibility notes and temporary ESP32 spikes; the organized PlatformIO firmware lives in `git@github.com:acartin/iluminate-firmware-esp32.git`.
@@ -1811,6 +2104,7 @@ docker compose up --build iluminate-web
   "scripts": {
     "dev": "next dev --hostname 0.0.0.0 --port 3000",
     "build": "next build",
+    "test": "tsx --test components/lighting/designer/designer-geometry.test.ts",
     "start": "next start --hostname 0.0.0.0 --port 3000",
     "lint": "next lint"
   },
@@ -1835,7 +2129,7 @@ docker compose up --build iluminate-web
     "tailwind-merge": "2.5.5"
   },
   "devDependencies": {
-    "@types/node": "20.17.12",
+    "@types/node": "20.19.0",
     "@types/paper": "^0.11.14",
     "@types/pg": "^8.11.11",
     "@types/react": "19.2.8",
@@ -1845,6 +2139,7 @@ docker compose up --build iluminate-web
     "eslint-config-next": "16.2.6",
     "postcss": "8.5.10",
     "tailwindcss": "3.4.17",
+    "tsx": "^4.20.5",
     "typescript": "5.7.2"
   },
   "overrides": {

@@ -7,6 +7,7 @@ Este archivo resume el foco operativo actual. Las reglas autoritativas viven en 
 - `services/lighting-core`: dominio LED, partitura, validacion, revisiones y contratos de despliegue.
 - `services/auth`: identidad, organizaciones, miembros, roles, permisos y sesiones.
 - `services/web/iluminate`: interfaz Next.js para autoria, operacion y administracion.
+- `services/web/iluminate-public`: sitio publico Next.js para proyectos interactivos, templates y tutoriales en `iluminate.space`; se ejecuta en el contenedor independiente `iluminate-public-web`.
 - `services/simulator`: dominio reusable de simulacion cuando salga del prototipo web.
 - `services/device-protocol`: contratos cloud/controlador.
 - `services/firmware`: notas de contrato con el firmware externo; no contiene el build ESP32.
@@ -18,6 +19,8 @@ El modelo de dominio vive en `lighting-core`. El web presenta, edita y consume c
 En lo que concierne a este repo, el hardware se modela como un controlador con exactamente tres salidas logicas: `chain.output` 1, 2 y 3.
 
 El sistema es multitenant por diseno. La notacion canonica de tenant en PostgreSQL/backend es `client_id`, alineada con el auth copiado desde `datasyncsa`. PostgreSQL es la base de datos objetivo.
+
+El dominio publico registrado es `iluminate.space`; el dashboard/Designer se publicara en `app.iluminate.space`. Leer `.agent/PUBLIC_SITE_DIRECTION.md` antes de trabajar en la experiencia publica.
 
 ## No convertir
 

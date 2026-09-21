@@ -1336,11 +1336,16 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
           <>
             <Badge>Channel</Badge>
             <ToolbarNumber label="Width" value={selectedChannel.widthMm} suffix="mm" onChange={(widthMm) => patchChannel(selectedChannel.id, { widthMm: Math.max(3, Math.min(20, Math.round(widthMm))) })} />
+            <ToolbarField label="Path">
+              <select className="h-8 rounded-md border border-input bg-card px-2 text-body-sm" value={selectedChannel.closed ? "closed" : "open"} onChange={(event) => patchChannel(selectedChannel.id, { closed: event.target.value === "closed" })}>
+                <option value="open">Open</option>
+                <option value="closed">Closed</option>
+              </select>
+            </ToolbarField>
             <ToolbarField label="Ends">
-              <select className="h-8 rounded-md border border-input bg-card px-2 text-body-sm" value={selectedChannel.cap} onChange={(event) => patchChannel(selectedChannel.id, { cap: event.target.value as DesignerChannelForm["cap"] })}>
+              <select disabled={selectedChannel.closed} className="h-8 rounded-md border border-input bg-card px-2 text-body-sm disabled:cursor-not-allowed disabled:opacity-50" value={selectedChannel.cap} onChange={(event) => patchChannel(selectedChannel.id, { cap: event.target.value as DesignerChannelForm["cap"] })}>
                 <option value="butt">Straight</option>
                 <option value="round">Round</option>
-                <option value="closed">Closed</option>
               </select>
             </ToolbarField>
             {typeof selectedChannelPointIndex === "number" && selectedChannel.points[selectedChannelPointIndex] ? (

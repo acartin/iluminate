@@ -23,6 +23,19 @@ physical installation model
 → rollback or scene change
 ```
 
+Public product surface decision:
+
+- Registered public domain: `iluminate.space`.
+- Planned authenticated dashboard/Designer domain: `app.iluminate.space`.
+- The public site will live in `services/web/iluminate-public` and deploy as an
+  independent `iluminate-public-web` container.
+- The public experience is a project-led gallery of Iluminate-created concepts,
+  interactive previews and reusable templates, not fabricated customer case
+  studies.
+- The public learning area will curate YouTube tutorials for Designer and
+  Animate under `/learn`.
+- See `.agent/PUBLIC_SITE_DIRECTION.md` for the canonical direction.
+
 ## Current Product Direction Snapshot
 
 The near-term focus is no longer firmware parity or over-polishing individual effects. The priority is to make the web simulator and composer concepts convincing.
@@ -195,8 +208,8 @@ UX direction after starting the Designer branch:
 - [x] Keep fabrication nodes separate from LED dots in both visual route rendering and compiled segment start/step math.
 - [x] Add copy, paste and delete actions for selected designer objects.
 - [x] Add a Zones-plane Channel tool: Bezier center line, derived parallel borders,
-  configurable 3-20 mm width and `butt`/`round`/`closed` ends. Channels compile as
-  zones and are selectable clip targets.
+  configurable 3-20 mm width, explicit open/closed topology and `butt`/`round`
+  endpoint caps. Channels compile as zones and are selectable clip targets.
 
 ### Exit Criteria
 
@@ -238,6 +251,37 @@ UX direction after starting the Designer branch:
 - [ ] A user can create a short scene and preview it.
 - [ ] Simulation uses the same partitura semantics as firmware.
 - [ ] At least the initial five effects have deterministic reference cases.
+
+---
+
+## Public Site And Template Catalog Track
+
+**Objective:** turn `iluminate.space` into a project-led public experience that
+demonstrates real Iluminate simulation, teaches the product and converts a
+concept into a private editable project.
+
+### Deliverables
+
+- [x] Scaffold `services/web/iluminate-public` as an independent Next.js app.
+- [x] Add the independent `iluminate-public-web` Docker/Compose service.
+- [ ] Route `iluminate.space` to the public site and `app.iluminate.space` to the authenticated application.
+- [x] Define the public visual identity, navigation, SEO and accessible motion behavior.
+- [x] Publish initial concept projects transparently as `Iluminate Originals`, not customer case studies.
+- [x] Add `/projects` and initial interactive project detail pages.
+- [ ] Add `/templates` with versioned reusable starting points.
+- [ ] Extract the reusable read-only player/renderer into `services/simulator`.
+- [ ] Evaluate public preview frames in the browser instead of requesting one server frame per animation frame.
+- [ ] Add a restricted configurator for scene, palette, supported effects, speed and intensity.
+- [ ] Add `/learn`, `/learn/designer` and `/learn/animate` with curated YouTube tutorials.
+- [ ] Add authenticated `Use this template` handoff and safe tenant-owned cloning.
+- [x] Keep the public container free of PostgreSQL, R2 write, session and device credentials.
+
+### Exit Criteria
+
+- [x] A visitor can discover and interact with published concept projects without authentication.
+- [ ] A visitor can follow ordered Designer and Animate tutorial tracks.
+- [ ] A registered user can clone an eligible template into a private project without modifying the public source.
+- [x] The public and authenticated web applications can deploy independently.
 
 ---
 

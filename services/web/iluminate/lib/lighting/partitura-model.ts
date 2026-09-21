@@ -32,7 +32,7 @@ export type DesignerGroupForm = {
   members: Array<{ type: "zone" | "group"; id: string }>;
 };
 
-export type DesignerChannelCap = "butt" | "round" | "closed";
+export type DesignerChannelCap = "butt" | "round";
 
 /**
  * A neon-flex style channel. It reuses the Bezier trajectory (center line) but
@@ -47,6 +47,7 @@ export type DesignerChannelForm = {
   points: DesignerPoint[];
   pathMode: "straight" | "bezier";
   widthMm: number;
+  closed: boolean;
   cap: DesignerChannelCap;
   visible: boolean;
   locked: boolean;
@@ -461,17 +462,24 @@ function normalizeDesignerChannels(channels: DesignerChannelForm[] | undefined):
   if (!Array.isArray(channels)) return [];
   return channels
     .filter((channel) => channel && typeof channel.id === "string" && typeof channel.name === "string")
-    .map((channel): DesignerChannelForm => ({
-      id: channel.id,
-      name: channel.name,
-      points: normalizeChannelPoints(channel.points),
-      pathMode: channel.pathMode === "bezier" ? "bezier" : "straight",
-      widthMm: clampNumber(typeof channel.widthMm === "number" && Number.isFinite(channel.widthMm) ? channel.widthMm : 10, 3, 20),
-      cap: channel.cap === "round" || channel.cap === "closed" ? channel.cap : "butt",
-      visible: typeof channel.visible === "boolean" ? channel.visible : true,
-      locked: typeof channel.locked === "boolean" ? channel.locked : false,
-      opacity: clampNumber(typeof channel.opacity === "number" ? channel.opacity : 1, 0.05, 1)
-    }))
+    .map((channel): DesignerChannelForm => {
+      // Documents created before `closed` became an independent topology flag
+      // encoded closure as cap="closed". Read that legacy value, but never
+      // write it back into the normalized document.
+      const legacyCap = channel.cap as DesignerChannelForm["cap"] | "closed";
+      return {
+        id: channel.id,
+        name: channel.name,
+        points: normalizeChannelPoints(channel.points),
+        pathMode: channel.pathMode === "bezier" ? "bezier" : "straight",
+        widthMm: clampNumber(typeof channel.widthMm === "number" && Number.isFinite(channel.widthMm) ? channel.widthMm : 10, 3, 20),
+        closed: typeof channel.closed === "boolean" ? channel.closed : legacyCap === "closed",
+        cap: legacyCap === "round" ? "round" : "butt",
+        visible: typeof channel.visible === "boolean" ? channel.visible : true,
+        locked: typeof channel.locked === "boolean" ? channel.locked : false,
+        opacity: clampNumber(typeof channel.opacity === "number" ? channel.opacity : 1, 0.05, 1)
+      };
+    })
     .filter((channel) => channel.points.length >= 2);
 }
 

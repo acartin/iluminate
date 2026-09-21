@@ -5,6 +5,7 @@ In this monorepo, `services` means product capability or bounded domain. A servi
 Current service map:
 
 - `web/iluminate`: Next.js operator and authoring interface.
+- `web/iluminate-public`: public Next.js experience for `iluminate.space`, concept projects, reusable templates and Designer/Animate learning content.
 - `lighting-core`: LED installation, partitura, scene, simulator-facing and deployment-domain core.
 - `auth`: identity, organizations, memberships, roles, sessions and authorization contracts.
 - `firmware`: compatibility notes and temporary ESP32 spikes; the organized PlatformIO firmware lives in `git@github.com:acartin/iluminate-firmware-esp32.git`.

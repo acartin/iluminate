@@ -87,7 +87,7 @@ export function DesignerLayersPanel({
   onRemoveGroup: (groupId: string) => void;
   onToggleGroupMember: (groupId: string, memberType: "zone" | "group", memberId: string) => void;
   onSelectZone: (zoneId: string) => void;
-  onPatchChannel: (channelId: string, patch: Partial<Pick<DesignerChannelForm, "name" | "widthMm" | "cap" | "visible">>) => void;
+  onPatchChannel: (channelId: string, patch: Partial<Pick<DesignerChannelForm, "name" | "widthMm" | "closed" | "cap" | "visible">>) => void;
   onPatchController: (patch: Partial<Pick<DesignerForm["controller"], "name" | "visible">>) => void;
   onPatchRoute: (routeId: string, patch: Partial<Pick<DesignerForm["routes"][number], "name" | "visible">>) => void;
   onReorderItems: (layer: "artwork" | "reference" | "zones" | "strings", activeId: string, overId: string) => void;
@@ -352,7 +352,7 @@ export function DesignerLayersPanel({
                 <LayerChildRow
                   key={channel.id}
                   label={channel.name}
-                  detail={`${channel.widthMm} mm · ${channel.cap}`}
+                  detail={`${channel.widthMm} mm · ${channel.closed ? "closed" : channel.cap}`}
                   selected={selection?.type === "channel" && selection.id === channel.id}
                   color="amber"
                   icon={Waves}

@@ -29,6 +29,7 @@ Do not assume that every directory under `services/` is a daemon.
 ```text
 services/
   web/iluminate      # Next.js UI and authoring surface
+  web/iluminate-public # public site runtime, interactive gallery, templates and learning
   lighting-core      # LED choreography domain and partitura model
   auth               # identity and authorization domain
   simulator          # reusable simulation domain, when it outgrows web
@@ -53,6 +54,25 @@ Does not own:
 - project revision validation,
 - controller protocol rules,
 - firmware-specific LED drivers.
+
+### `services/web/iluminate-public`
+
+Owns:
+
+- Public experience at `iluminate.space`.
+- Project and template discovery pages.
+- Restricted interactive project configurator.
+- Public SEO, editorial content and generated project imagery presentation.
+- Learning pages and curated YouTube tutorials for Designer and Animate.
+
+Does not own:
+
+- Canonical partitura or effect semantics.
+- Full Designer editing behavior.
+- Authentication or tenant authorization.
+- Direct PostgreSQL access.
+- Template cloning authority.
+- Controller, deployment or device credentials.
 
 ### `services/lighting-core`
 
@@ -137,6 +157,11 @@ web/iluminate
   -> lighting-core/contracts
   -> lighting-core/schemas
 
+web/iluminate-public
+  -> lighting-core/contracts
+  -> simulator
+  -> published public API/content only
+
 lighting-core/api
   -> lighting-core/domain
   -> lighting-core/validators
@@ -159,6 +184,7 @@ Avoid:
 - `lighting-core` importing React or Next.js.
 - `auth` importing lighting domain internals.
 - `web/iluminate` becoming the source of truth for partituras.
+- `web/iluminate-public` connecting directly to PostgreSQL or receiving private service credentials.
 - API handlers duplicating validation rules that belong in `validators/`.
 - simulator storing its own incompatible partitura format.
 

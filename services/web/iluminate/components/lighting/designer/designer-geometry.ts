@@ -552,7 +552,7 @@ export function channelWidthCm(channel: DesignerChannelForm) {
 }
 
 export function channelIsClosed(channel: DesignerChannelForm) {
-  return channel.cap === "closed" && (channel.points?.length ?? 0) >= 3;
+  return channel.closed && (channel.points?.length ?? 0) >= 3;
 }
 
 /** Samples the editable center line of a channel into a polyline (cm). */
@@ -560,19 +560,25 @@ export function channelCenterPolyline(channel: DesignerChannelForm, stepsPerSegm
   const points = channel.points ?? [];
   if (points.length < 2) return points.slice();
   const closed = channelIsClosed(channel);
-  const hasHandles = channel.pathMode === "bezier" && points.some((point) => point.handleIn || point.handleOut);
-  if (hasHandles) {
-    const outline: DesignerPoint[] = [];
+  const hasBezierSegments = channel.pathMode === "bezier" && points.some((point) => point.handleIn || point.handleOut);
+  if (hasBezierSegments) {
+    // Keep one canonical representation: the first point occurs once and a
+    // closed path relies on its topology flag for the final edge. Previously
+    // the Bezier branch duplicated the first point while the polygon branch did
+    // not, which made the outline change topology when the last handle vanished.
+    const center: DesignerPoint[] = [{ x: points[0].x, y: points[0].y }];
     const segmentCount = closed ? points.length : points.length - 1;
     for (let index = 0; index < segmentCount; index += 1) {
       const start = points[index];
       const end = points[(index + 1) % points.length];
-      const from = index === 0 ? 0 : 1;
-      for (let step = from; step <= stepsPerSegment; step += 1) {
-        outline.push(cubicBezierPoint(start, end, step / stepsPerSegment));
+      const curved = Boolean(start.handleOut || end.handleIn);
+      const sampleCount = curved ? Math.max(2, stepsPerSegment) : 1;
+      for (let step = 1; step <= sampleCount; step += 1) {
+        const closesAtFirstPoint = closed && index === segmentCount - 1 && step === sampleCount;
+        if (!closesAtFirstPoint) center.push(cubicBezierPoint(start, end, step / sampleCount));
       }
     }
-    return outline;
+    return center;
   }
   return filletPolyline(points, closed);
 }
@@ -648,10 +654,10 @@ export function pointNearChannelStroke(channel: DesignerChannelForm, point: Desi
   return distanceToChannelCenter(channel, point) <= channelWidthCm(channel) / 2 + tolerance;
 }
 
-/** Derives the two parallel borders and caps as a closed outline (cm). */
-export function channelOutline(channel: DesignerChannelForm, stepsPerSegment = 18): DesignerPoint[] {
+/** Derives the independent left/right borders of the channel band (cm). */
+export function channelBorderPolylines(channel: DesignerChannelForm, stepsPerSegment = 18) {
   const center = channelCenterPolyline(channel, stepsPerSegment);
-  if (center.length < 2) return center;
+  if (center.length < 2) return { left: center.slice(), right: center.slice() };
   const half = channelWidthCm(channel) / 2;
   const closed = channelIsClosed(channel);
   const left: DesignerPoint[] = [];
@@ -685,7 +691,15 @@ export function channelOutline(channel: DesignerChannelForm, stepsPerSegment = 1
     left.push({ x: point.x + offset.x, y: point.y + offset.y });
     right.push({ x: point.x - offset.x, y: point.y - offset.y });
   }
-  if (closed) return [...left, ...right.slice().reverse()];
+  return { left, right };
+}
+
+/** Builds the single closed band polygon used only by open channels. */
+export function openChannelOutline(channel: DesignerChannelForm, stepsPerSegment = 18): DesignerPoint[] {
+  const center = channelCenterPolyline(channel, stepsPerSegment);
+  if (center.length < 2) return center;
+  const half = channelWidthCm(channel) / 2;
+  const { left, right } = channelBorderPolylines(channel, stepsPerSegment);
   const outline: DesignerPoint[] = [];
   outline.push(...left);
   const end = center[center.length - 1];

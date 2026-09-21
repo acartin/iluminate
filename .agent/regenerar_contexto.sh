@@ -189,6 +189,7 @@ append_file_excerpt ".agent/IMPLEMENTATION_PLAN.md"
 append_file_excerpt ".agent/ILUMINATE_UI_STANDARDS.md"
 append_file_excerpt ".agent/ILUMINATE_BOOTSTRAP.md"
 append_file_excerpt ".agent/EFFECT_TARGETING_MODEL.md"
+append_file_excerpt ".agent/PUBLIC_SITE_DIRECTION.md"
 
 append_section "Documentacion de Arquitectura"
 append_file_excerpt "docs/partitura-lifecycle.md"

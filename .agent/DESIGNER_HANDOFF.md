@@ -127,10 +127,15 @@ only edits the center nodes and Bezier handles; the two parallel borders are
 derived and are never manipulated separately.
 
 - Persisted form is `designer.channels` with the center `points`, `pathMode`,
-  `widthMm` (3-20 mm) and `cap` (`butt` / `round` / `closed`). The generated
-  polygon is never stored, only the center trajectory and the width.
-- `channelOutline` derives the band (parallel borders + caps) for rendering;
+  `widthMm` (3-20 mm), explicit `closed` topology and endpoint `cap`
+  (`butt` / `round`). Legacy documents that encoded closure as `cap: "closed"`
+  are normalized to `closed: true` plus `cap: "butt"`. The generated band is
+  never stored, only the center trajectory, topology and width.
+- `channelBorderPolylines` derives independent left/right borders for a closed
+  band; `openChannelOutline` derives the capped polygon for an open band;
   `channelContainsPoint` selects pixels by distance to the center line.
+- Removing the last Bezier handle must never change channel topology. Paper,
+  Pixi and Canvas renderers must all respect the same explicit `closed` flag.
 - On compile, channels are emitted as zones in `compiledLayout.zones` (and join
   the `full_sign` group), so clips target them like any zone. They appear in the
   Animate and Scenes target lists, and are selectable on the Animate canvas

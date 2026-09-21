@@ -11,6 +11,7 @@ Precondicion recomendada al iniciar cada nueva sesion:
    - Leer `.agent/IMPLEMENTATION_PLAN.md` cuando la tarea afecte roadmap, fases o priorizacion.
    - Leer `.agent/EFFECT_TARGETING_MODEL.md` antes de cambiar el compilador, pixelMap, zonas, grupos, efectos o simulador.
    - Leer `.agent/ILUMINATE_UI_STANDARDS.md` si se toca `services/web/iluminate`.
+   - Leer `.agent/PUBLIC_SITE_DIRECTION.md` si se toca el sitio publico, catalogo, templates, configurador publico, SEO o area de aprendizaje.
    - Leer `.agent/AI_CONTEXT_LED_ORCHESTRATION_PLATFORM.md` para decisiones de producto/dominio.
 2. Determinar si se requiere regeneracion de contexto:
    - faltan `.agent/BRAIN_MAP.md` o `.agent/AI_CONTEXT_PACK.md`;
@@ -38,6 +39,7 @@ Regla de precedencia:
 Servicios principales:
 
 - `services/web/iluminate`: frontend Next.js, shell, UI, editor y simulador inicial.
+- `services/web/iluminate-public`: sitio publico Next.js previsto para `iluminate.space`, proyectos, templates, configurador publico y aprendizaje.
 - `services/lighting-core`: dominio LED, partitura, schemas, validadores, API del dominio y persistencia futura.
 - `services/auth`: identidad, organizaciones, membresias, roles, permisos, sesiones y auth API.
 - `services/simulator`: simulacion reusable cuando salga del primer prototipo web.
@@ -99,6 +101,9 @@ Reglas:
 - Compose operativo actual: `compose.yml`.
 - Servicio web actual: `iluminate-web`.
 - Puerto local por defecto: `8420`.
+- Dominio publico registrado: `iluminate.space`.
+- Dominio previsto para dashboard/Designer: `app.iluminate.space`.
+- El sitio publico debe desplegarse en un contenedor independiente `iluminate-public-web`; no debe recibir credenciales de PostgreSQL, escritura R2, sesiones o dispositivos.
 - No cambiar nombres de servicios, puertos o URLs base sin ajustar:
   - `compose.yml`;
   - `.env.example`;

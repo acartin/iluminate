@@ -10,6 +10,7 @@ COPY --from=deps /app/services/web/iluminate/node_modules ./node_modules
 COPY services/lighting-core /app/services/lighting-core
 RUN cd /app/services/lighting-core && npm ci && npm run build
 COPY services/web/iluminate .
+RUN npm test
 RUN npm run build
 
 FROM node:20-alpine AS runner

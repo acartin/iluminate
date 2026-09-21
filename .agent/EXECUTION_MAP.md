@@ -21,6 +21,7 @@ Este archivo define donde validar cambios segun la ruta afectada. En Iluminate, 
 | `.agent/*.md` | Revision de contenido | no requiere runtime |
 | `.agent/*.sh` | Sintaxis shell | `bash -n .agent/<script>.sh` |
 | `services/web/iluminate/` | Build/smoke de Next via Docker | `docker compose build iluminate-web` y `curl -I http://localhost:${ILUMINATE_WEB_PORT:-8420}` si esta levantado |
+| `services/web/iluminate-public/` | Typecheck, lint, build y smoke del sitio publico via Docker | `docker compose build iluminate-public-web` y `curl -I http://localhost:${ILUMINATE_PUBLIC_WEB_PORT:-8430}` si esta levantado |
 | `services/lighting-core/` | Build y fixtures del dominio | `docker run --rm -v "$PWD/services/lighting-core:/work" -w /work node:22-alpine sh -c "npm ci && npm test"` |
 | `services/lighting-core/pixel-map/` | Build core y validar generation/simulation por API si afecta web | `docker compose up -d --build iluminate-web` |
 | `services/lighting-core/domain/effects/` | Build core/web y smoke de `/api/lighting/effects`; si cambia renderer, generar frame de Lab por API | `docker compose up -d --build iluminate-web` |
@@ -36,6 +37,9 @@ Este archivo define donde validar cambios segun la ruta afectada. En Iluminate, 
 ## Variables clave actuales
 
 - `ILUMINATE_WEB_PORT`
+- `ILUMINATE_PUBLIC_WEB_PORT` (prevista)
+- `ILUMINATE_PUBLIC_SITE_URL` (prevista; produccion `https://iluminate.space`)
+- `ILUMINATE_APP_URL` (prevista; produccion `https://app.iluminate.space`)
 - `ILUMINATE_API_BASE_URL`
 - `ILUMINATE_PLACEHOLDER_AUTH`
 - `ILUMINATE_SECURE_COOKIES`

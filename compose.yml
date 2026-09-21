@@ -37,6 +37,19 @@ services:
       - "${ILUMINATE_WEB_PORT:-8420}:3000"
     restart: unless-stopped
 
+  iluminate-public-web:
+    build:
+      context: .
+      dockerfile: services/web/iluminate-public/Dockerfile
+    image: iluminate-public-web:dev
+    container_name: iluminate-public-web
+    environment:
+      ILUMINATE_PUBLIC_SITE_URL: ${ILUMINATE_PUBLIC_SITE_URL:-http://localhost:8430}
+      NEXT_PUBLIC_ILUMINATE_APP_URL: ${ILUMINATE_APP_URL:-http://localhost:8420}
+    ports:
+      - "${ILUMINATE_PUBLIC_WEB_PORT:-8430}:3000"
+    restart: unless-stopped
+
 networks:
   default:
     name: iluminate-net

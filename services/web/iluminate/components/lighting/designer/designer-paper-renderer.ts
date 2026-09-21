@@ -1,6 +1,6 @@
 import type { DesignerBuildAreaForm, DesignerChannelForm, DesignerControllerForm, DesignerForm, DesignerPoint, DesignerRouteForm, DesignerRouteKind, DesignerZoneForm } from "@/lib/lighting/partitura-model";
 import type { DesignerActiveLayer, DesignerMeasurement, DesignerRouteDraft, DesignerShapeDraft, DesignerViewport, PaperApi, PaperPoint, PaperRectangle } from "./types";
-import { channelCenterPolyline, channelIsClosed, channelOutline, channelWidthCm, controllerConnectedPorts, controllerPortPoint, formatDecimal, formatMeasure, pointInsideDesignerShape, routeColor, routeDirectionMarkers, routePointFill, routeSelectedColor, sampleRouteLedDots } from "./designer-geometry";
+import { channelBorderPolylines, channelCenterPolyline, channelIsClosed, channelWidthCm, controllerConnectedPorts, controllerPortPoint, formatDecimal, formatMeasure, openChannelOutline, pointInsideDesignerShape, routeColor, routeDirectionMarkers, routePointFill, routeSelectedColor, sampleRouteLedDots } from "./designer-geometry";
 import type { CompiledDesignerLayout } from "./designer-compiler";
 
 let paperScope: PaperApi;
@@ -283,7 +283,7 @@ function drawPaperShapeDraft(draft: DesignerShapeDraft | null, toScreen: (point:
     dashArray: [8, 5]
   });
   draft.points.forEach((point) => path.add(toScreen(point)));
-  if (draft.points.length > 2) {
+  if (draft.target !== "channel" && draft.points.length > 2) {
     const closeLine = new paperScope.Path.Line({
       from: toScreen(draft.points[draft.points.length - 1]),
       to: toScreen(draft.points[0]),
@@ -387,13 +387,23 @@ function drawPaperChannel(channel: DesignerChannelForm, options: {
     center.forEach((point) => band.add(options.toScreen(point)));
     band.closed = channelIsClosed(channel);
 
-    const border = new paperScope.Path({
+    const borderOptions = {
       strokeColor: options.selected ? "#f59e0b" : "#94a3b8",
       strokeWidth: options.selected ? 1.6 : 1,
       opacity: options.opacity
-    });
-    channelOutline(channel).forEach((point) => border.add(options.toScreen(point)));
-    border.closed = true;
+    };
+    if (channelIsClosed(channel)) {
+      const borders = channelBorderPolylines(channel);
+      [borders.left, borders.right].forEach((points) => {
+        const border = new paperScope.Path(borderOptions);
+        points.forEach((point) => border.add(options.toScreen(point)));
+        border.closed = true;
+      });
+    } else {
+      const border = new paperScope.Path(borderOptions);
+      openChannelOutline(channel).forEach((point) => border.add(options.toScreen(point)));
+      border.closed = true;
+    }
 
     const centerLine = new paperScope.Path({
       strokeColor: options.selected ? "#fbbf24" : "#cbd5e1",
