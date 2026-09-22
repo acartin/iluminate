@@ -1,9 +1,9 @@
 # AI Context Pack
 
-- Generated UTC: `2026-09-21T00:06:29Z`
+- Generated UTC: `2026-09-22T21:34:31Z`
 - Repo root: `/srv/iluminate`
-- Git branch: `HETZNER-DEV-2026-Setiembre-16`
-- Git commit: `7127851`
+- Git branch: `HETZNER-DEV-2026-Setiembre-20`
+- Git commit: `4716411`
 - Policy: high-signal only; enfocado en Iluminate.
 
 ## Contexto Maestro
@@ -13,10 +13,10 @@
 ```
 # BRAIN_MAP
 
-- Generated UTC: `2026-09-21T00:06:29Z`
+- Generated UTC: `2026-09-22T21:34:31Z`
 - Repo root: `/srv/iluminate`
-- Git branch: `HETZNER-DEV-2026-Setiembre-16`
-- Git commit: `7127851`
+- Git branch: `HETZNER-DEV-2026-Setiembre-20`
+- Git commit: `4716411`
 
 ## 1. MAPA DE INTENCIONES (ILUMINATE)
 
@@ -1497,26 +1497,42 @@ Do not require a custom video hosting or LMS platform for the first version.
   cyberpunk cliches and stock WordPress composition patterns.
 - Preserve accessibility, reduced-motion behavior, fast mobile fallbacks and
   static poster images for heavy interactive experiences.
+- On phone layouts, use a solid 72px sticky header, immediate content instead
+  of scroll-triggered reveal gaps, square project media, visible card actions
+  and compact vertical section rhythm. Keep the document free of horizontal
+  overflow down to a 320px viewport.
 - The flagship home hero currently uses a self-contained Three.js/WebGL scene
-  that extrudes the canonical brand-mark SVG, with a CSS fallback. Each ray is
-  independently hoverable and switchable; the dot acts as a master switch with
-  a restrained comet-like light burst. A soft, irregular dark field is confined
-  behind the 3D mark to support saturated interactive colors without turning the
-  page into a dark theme. It is an editorial experience, not a second simulator
-  or an alternative partitura renderer.
-
-## Initial Delivery Sequence
-
-1. **Complete:** scaffold `services/web/iluminate-public` as an independent Next.js app.
-2. **Complete:** add an independent `iluminate-public-web` Docker/Compose service.
-3. **Complete:** establish public identity, navigation, SEO and the flagship home experience.
-4. **Initial version complete:** publish the first curated concept projects from local typed content.
-5. Extract a reusable read-only player into `services/simulator`.
-6. Build project detail pages and the restricted public configurator.
-7. Add `/learn`, Designer and Animate YouTube collections.
-8. Add authenticated `Use this template` handoff and safe private cloning.
-9. Introduce persistent publication/template models only after the content and
-   cloning workflow are proven.
+  that renders the canonical brand-mark SVG as flat graphic geometry, with a
+  CSS fallback. Do not reintroduce extrusion, bevels, cast shadows, pointer
+  perspective or other simulated 3D volume. The sculpture sits in a neutral
+  `#0B0B0D` editorial field on the right side of the light hero, reached through
+  a light-to-black fade with no red or burgundy intermediate stops; on
+  mobile that field becomes a dark upper band behind the mark. The shared
+  breathing cycle starts at its illuminated peak with brand-red `#FF3B30` rays
+  and a black dot, then reaches the single resting/off state with black rays.
+  The dot remains black with a red halo throughout the entire cycle. Every piece has a fine contour and layered glow derived
+  directly from the `SIGNAL` project visual; face color, contour and glow breathe
+  in one synchronized rhythm. The black/white resting state must retain a clearly
+  visible contour and broad halo; light intensity breathes from high to full
+  and never fades away. Keep the resting halo near full power (roughly 84% of
+  its peak opacity), so black rays and the white dot remain visibly illuminated.
+  Build each halo
+  from that piece's exact SVG silhouette, with a centered multi-pass Gaussian
+  falloff; do not approximate diagonal rays with independent rectangles. Keep
+  the halo geometry fixed and breathe only its intensity so the light never
+  appears to slide away from the face. Use one fixed SVG-unit-to-texture scale
+  for every piece so the dot and all three rays cast the same halo radius and
+  intensity. Each ray is independently hoverable; clicking a ray replaces its
+  illuminated-peak color with a solid palette color, while its resting endpoint
+  remains black. The dot acts as a master switch with
+  a restrained comet-like light burst. The earlier dark nebula has been removed.
+  An invisible interaction field preserves the
+  pointer experience against the clean light wall. Keep that field confined to
+  the sculpture so it never crosses the hero title, and reset old trail points
+  on re-entry to prevent long connecting segments. Pointer movement across
+  that field or the mark draws a short-lived red wand trail with fine sparks;
+  avoid large blob-like
+  hover particles. Clicking a ray assigns a new peak color and produces a brief
 ```
 
 ## Documentacion de Arquitectura
@@ -1711,9 +1727,9 @@ The partitura owns:
 ### Servicios del compose principal
 
 ```text
-postgres
 iluminate-public-web
 iluminate-web
+postgres
 ```
 ### `compose.yml:1-220`
 

@@ -12,7 +12,7 @@ export default function HomePage() {
         <div className="hero-shade" />
         <div className="hero-copy">
           <p className="hero-kicker">Coreografía para rótulos físicos</p>
-          <h1>Rótulos con horario<br />y temporada.</h1>
+          <h1>Rótulos con horario<br /><span className="hero-line-nowrap">y&nbsp;temporada.</span></h1>
           <div className="hero-bottom">
             <p>
               Programa cuándo enciende, cómo se mueve y qué escena acompaña cada
