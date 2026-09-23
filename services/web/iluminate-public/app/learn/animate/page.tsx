@@ -11,7 +11,7 @@ export default function AnimateLearnPage() {
         <h1>Compón el<br />comportamiento.</h1>
         <p>De una escena en blanco a una coreografía legible y expresiva.</p>
       </header>
-      <section className="lessons-section page-gutter"><LessonList track="Animate" /></section>
+      <section className="lessons-section page-gutter"><h2 className="sr-only">Lecciones de Animate</h2><LessonList track="Animate" /></section>
     </>
   );
 }

@@ -5,8 +5,6 @@ import * as THREE from "three";
 import { SVGLoader } from "three/examples/jsm/loaders/SVGLoader.js";
 import markAsset from "@/assets/iluminate-brand-master-editable_Mark Light.svg";
 
-const NEON_RED = new THREE.Color("#ff3b30");
-const REST_BLACK = new THREE.Color("#0b0b0d");
 const SOLID_COLORS = ["#ff3b30", "#2675ff", "#ff7a00", "#00c875", "#9b5cff", "#ffd21f"];
 
 type InteractivePart = {
@@ -159,10 +157,51 @@ function getRandomNeonColor() {
   return new THREE.Color(SOLID_COLORS[Math.floor(Math.random() * SOLID_COLORS.length)]);
 }
 
+function readBrandColor(variable: string, fallback: string) {
+  if (typeof document === "undefined") return new THREE.Color(fallback);
+  const value = getComputedStyle(document.documentElement).getPropertyValue(variable).trim();
+  return value ? new THREE.Color(value) : new THREE.Color(fallback);
+}
+
+const MARK_NORMALIZED_HEIGHT = 2.75;
+const MARK_ASPECT_RATIO = 187.9434 / 132.45412;
+
+type HeroFraming = {
+  compact: boolean;
+  fov: number;
+  cameraZ: number;
+  scale: number;
+  position: THREE.Vector3;
+};
+
+// Resolve camera and mark placement from the real container aspect so phones,
+// tablets in portrait and wide desktops all keep the mark on screen.
+function getHeroFraming(width: number, height: number): HeroFraming {
+  const aspect = width / Math.max(1, height);
+  const compact = width <= 700 || aspect <= 1;
+  const fov = compact ? 40 : 34;
+  const cameraZ = compact ? 13 : 11;
+  const distance = cameraZ + 0.4;
+  const visibleHeight = 2 * Math.tan((fov * Math.PI) / 360) * distance;
+  const visibleWidth = visibleHeight * aspect;
+  const iconWidth = MARK_NORMALIZED_HEIGHT * MARK_ASPECT_RATIO;
+  const heightFraction = compact ? 0.3 : 0.45;
+  const widthFraction = compact ? 0.66 : 0.38;
+  const scale = Math.min(
+    (heightFraction * visibleHeight) / MARK_NORMALIZED_HEIGHT,
+    (widthFraction * visibleWidth) / iconWidth,
+  );
+  const position = compact
+    ? new THREE.Vector3(0.5, 2.85, 0)
+    : new THREE.Vector3(0.485 + visibleWidth * 0.3, 0.6, 0);
+  return { compact, fov, cameraZ, scale, position };
+}
+
 function createScene(
   canvas: HTMLCanvasElement,
   container: HTMLDivElement,
   onReady: () => void,
+  onUnsupported: () => void,
 ) {
   let renderer: THREE.WebGLRenderer;
   try {
@@ -176,12 +215,18 @@ function createScene(
     return null;
   }
 
-  let mobile = container.getBoundingClientRect().width <= 700;
+  const initialBounds = container.getBoundingClientRect();
+  let framing = getHeroFraming(
+    initialBounds.width || window.innerWidth,
+    initialBounds.height || window.innerHeight,
+  );
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
   const scene = new THREE.Scene();
+  const NEON_RED = readBrandColor("--signal", "#ff3b30");
+  const REST_BLACK = readBrandColor("--ink", "#0b0b0d");
 
-  const camera = new THREE.PerspectiveCamera(mobile ? 40 : 34, 1, 0.1, 50);
-  camera.position.set(0, 0, mobile ? 13 : 11);
+  const camera = new THREE.PerspectiveCamera(framing.fov, 1, 0.1, 50);
+  camera.position.set(0, 0, framing.cameraZ);
   camera.lookAt(0.5, 0.25, -0.4);
 
   renderer.outputColorSpace = THREE.SRGBColorSpace;
@@ -212,7 +257,7 @@ function createScene(
   // Invisible hit area preserves the magic pointer trail without adding a
   // visual panel or cloud behind the sculpture.
   const interactionField = new THREE.Mesh(
-    new THREE.PlaneGeometry(mobile ? 4.5 : 5.8, mobile ? 3.8 : 4.7),
+    new THREE.PlaneGeometry(framing.compact ? 4.5 : 5.8, framing.compact ? 3.8 : 4.7),
     new THREE.MeshBasicMaterial({
       color: 0xffffff,
       transparent: true,
@@ -220,7 +265,7 @@ function createScene(
       depthWrite: false,
     }),
   );
-  interactionField.position.set(mobile ? -0.65 : 3.9, mobile ? 2.85 : 0.78, -0.18);
+  interactionField.position.set(framing.position.x, framing.position.y, -0.18);
   scene.add(interactionField);
 
   const maxMagicPoints = 48;
@@ -244,7 +289,7 @@ function createScene(
   scene.add(magicLine);
 
   const sculpture = new THREE.Group();
-  const finalPosition = new THREE.Vector3(mobile ? -0.65 : 3.85, mobile ? 2.85 : 0.6, 0);
+  const finalPosition = framing.position.clone();
   sculpture.position.copy(finalPosition);
   scene.add(sculpture);
 
@@ -341,11 +386,12 @@ function createScene(
     const center = bounds.getCenter(new THREE.Vector3());
     rawMark.scale.y = -1;
     rawMark.position.set(-center.x, center.y, -center.z);
-    const normalizedScale = 2.75 / size.y;
+    const normalizedScale = MARK_NORMALIZED_HEIGHT / size.y;
     importedMark.scale.setScalar(normalizedScale);
     breathStartedAt = clock.getElapsedTime();
     markLoaded = true;
-  });
+    if (reducedMotion) render();
+  }, undefined, () => onUnsupported());
 
   const pointerTarget = new THREE.Vector2();
   const raycaster = new THREE.Raycaster();
@@ -362,25 +408,21 @@ function createScene(
   const resize = () => {
     const bounds = container.getBoundingClientRect();
     if (!bounds.width || !bounds.height) return;
-    const nextMobile = bounds.width <= 700;
-    if (nextMobile !== mobile) {
-      mobile = nextMobile;
-      camera.fov = mobile ? 40 : 34;
-      camera.position.set(0, 0, mobile ? 13 : 11);
+    const next = getHeroFraming(bounds.width, bounds.height);
+    if (next.compact !== framing.compact) {
+      camera.fov = next.fov;
+      camera.position.set(0, 0, next.cameraZ);
       camera.lookAt(0.5, 0.25, -0.4);
       interactionField.geometry.dispose();
       interactionField.geometry = new THREE.PlaneGeometry(
-        mobile ? 4.5 : 5.8,
-        mobile ? 3.8 : 4.7,
+        next.compact ? 4.5 : 5.8,
+        next.compact ? 3.8 : 4.7,
       );
-      interactionField.position.set(
-        mobile ? -0.65 : 3.9,
-        mobile ? 2.85 : 0.78,
-        -0.18,
-      );
-      finalPosition.set(mobile ? -0.65 : 3.85, mobile ? 2.85 : 0.6, 0);
     }
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, mobile ? 1.35 : 1.8));
+    framing = next;
+    interactionField.position.set(framing.position.x, framing.position.y, -0.18);
+    finalPosition.copy(framing.position);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, framing.compact ? 1.35 : 1.8));
     renderer.setSize(bounds.width, bounds.height, false);
     camera.aspect = bounds.width / bounds.height;
     camera.updateProjectionMatrix();
@@ -570,7 +612,7 @@ function createScene(
     const delta = Math.min(0.05, elapsed - previousElapsed);
     previousElapsed = elapsed;
     sculpture.position.copy(finalPosition);
-    sculpture.scale.setScalar(mobile ? 0.4 : 1.1);
+    sculpture.scale.setScalar(framing.scale);
     sculpture.rotation.set(0, 0, 0);
     const hit = getIntersection();
     const fieldHit = hit ? undefined : getFieldIntersection();
@@ -701,17 +743,30 @@ function createScene(
 export function HeroStage() {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [ready, setReady] = useState(false);
+  const [status, setStatus] = useState<"loading" | "ready" | "unsupported">("loading");
 
   useEffect(() => {
     const canvas = canvasRef.current;
     const container = containerRef.current;
     if (!canvas || !container) return;
-    return createScene(canvas, container, () => setReady(true)) ?? undefined;
+    const scene = createScene(
+      canvas,
+      container,
+      () => setStatus("ready"),
+      () => setStatus("unsupported"),
+    );
+    if (!scene) setStatus("unsupported");
+    return scene ?? undefined;
   }, []);
 
+  const isReady = status === "ready";
+
   return (
-    <div ref={containerRef} className={`hero-stage ${ready ? "is-webgl-ready" : ""}`} aria-hidden="true">
+    <div
+      ref={containerRef}
+      className={`hero-stage ${isReady ? "is-webgl-ready" : ""} ${status === "unsupported" ? "is-webgl-fallback" : ""}`}
+      aria-hidden="true"
+    >
       <canvas ref={canvasRef} className="hero-canvas" />
       <div className="hero-sculpture-fallback">
         <i className="fallback-ray fallback-ray-left" />
@@ -719,7 +774,7 @@ export function HeroStage() {
         <i className="fallback-ray fallback-ray-right" />
         <b />
       </div>
-      <span className="webgl-caption">Rozar · Click para encender</span>
+      {isReady && <span className="webgl-caption">Rozar · Click para encender</span>}
     </div>
   );
 }

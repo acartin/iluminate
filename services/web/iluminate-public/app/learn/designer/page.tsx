@@ -11,7 +11,7 @@ export default function DesignerLearnPage() {
         <h1>Construye el<br />rótulo digital.</h1>
         <p>Del SVG y la escala real al recorrido de cada LED.</p>
       </header>
-      <section className="lessons-section page-gutter"><LessonList track="Designer" /></section>
+      <section className="lessons-section page-gutter"><h2 className="sr-only">Lecciones de Designer</h2><LessonList track="Designer" /></section>
     </>
   );
 }

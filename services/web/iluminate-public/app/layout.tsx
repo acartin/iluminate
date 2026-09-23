@@ -1,7 +1,14 @@
 import type { Metadata, Viewport } from "next";
+import { Archivo } from "next/font/google";
 import { SiteFooter } from "@/components/site-footer";
 import { SiteHeader } from "@/components/site-header";
 import "./globals.css";
+
+const archivo = Archivo({
+  subsets: ["latin"],
+  display: "swap",
+  variable: "--font-brand",
+});
 
 const siteUrl = process.env.ILUMINATE_PUBLIC_SITE_URL ?? "https://iluminate.space";
 
@@ -31,12 +38,12 @@ export const metadata: Metadata = {
 
 export const viewport: Viewport = {
   themeColor: "#0b0b0d",
-  colorScheme: "dark light",
+  colorScheme: "light",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="es">
+    <html lang="es" className={archivo.variable}>
       <body>
         <a className="skip-link" href="#content">Saltar al contenido</a>
         <SiteHeader />

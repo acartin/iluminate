@@ -184,10 +184,13 @@ Do not require a custom video hosting or LMS platform for the first version.
   not a second simulator or an alternative partitura renderer.
 - Treat the settled sculpture appearance as locked: do not change its background,
   face states, breathing rhythm, contour or halo unless the user explicitly
-  reopens that direction. Placement and overall scale may still be tuned without
-  changing those visual or interaction behaviors. On desktop, keep the mark
-  slightly smaller and farther right so it clears the title and has visible air
-  inside the black field; retain the existing mobile scale and position. Click
+  reopens that direction. The visual and interaction behaviors stay locked, while
+  placement and overall scale are resolved from the container aspect ratio by the
+  hero framing helper, not by two fixed modes: compact/portrait layouts (phones and
+  portrait tablets) center the mark in the upper dark band, while wide layouts hold
+  it at the right of the light hero. The scale is clamped by both the visible width
+  and height so the full SVG silhouette always stays on frame, and the compact
+  position is centered rather than left-shifted. Click
   feedback is intentionally stronger: ray clicks
   cast a broad star burst, while the dot triggers a short, stage-filling festive
   explosion with multicolor comet arms, staggered sparks and a central flash.
