@@ -1,0 +1,16 @@
+name: iluminate-public-production
+
+services:
+  iluminate-public:
+    image: ghcr.io/acartin/iluminate-public:${ILUMINATE_IMAGE_TAG:-main}
+    container_name: iluminate-public
+    restart: unless-stopped
+    environment:
+      ILUMINATE_PUBLIC_SITE_URL: https://iluminate.space
+      NEXT_PUBLIC_ILUMINATE_APP_URL: https://app.iluminate.space
+    networks:
+      - web-ingress
+
+networks:
+  web-ingress:
+    external: true

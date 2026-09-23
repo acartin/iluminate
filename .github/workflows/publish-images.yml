@@ -4,6 +4,11 @@ on:
   push:
     branches:
       - main
+    paths:
+      - .github/workflows/publish-images.yml
+      - services/lighting-core/**
+      - services/web/iluminate/**
+      - services/web/iluminate-public/**
   workflow_dispatch:
 
 permissions:
