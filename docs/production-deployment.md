@@ -14,7 +14,7 @@ llaves privadas ni valores de secretos.
 | VM `prd-web-01` | Operativa | Ubuntu, Docker y QEMU Guest Agent activos |
 | Cloudflare Tunnel | Operativo | Conector `prd-web-01` en buen estado |
 | `https://iluminate.space` | Operativo | Sitio público, validado con HTTP 200 |
-| `https://www.iluminate.space` | Pendiente | Requiere ruta adicional o redirección al dominio raíz |
+| `https://www.iluminate.space` | Operativo | Sirve el mismo contenedor público mediante una segunda ruta del túnel |
 | `https://app.iluminate.space` | No publicado | La aplicación todavía usa autenticación provisional |
 | PostgreSQL de producción | No desplegado | Se añadirá cuando la aplicación autenticada esté lista |
 | Sitio DataSyncSA | No desplegado | Compartirá la VM, con contenedor y ciclo propios |
@@ -87,7 +87,7 @@ La separación elegida es:
 | Dominio | Responsabilidad |
 | --- | --- |
 | `iluminate.space` | Marca, contenido público, aprendizaje y SEO |
-| `www.iluminate.space` | Debe servir o redirigir al dominio raíz |
+| `www.iluminate.space` | Alias público servido por el mismo contenedor |
 | `app.iluminate.space` | Login, registro, recuperación, proyectos, Designer y workspace |
 | `share.iluminate.space` | Posible visor público futuro; no existe actualmente |
 
@@ -104,8 +104,7 @@ ellas. No se deben mantener dos implementaciones de login.
 
 ### DNS y túnel
 
-El registro raíz anterior apuntaba a `186.177.167.67` y fue retirado porque
-causaba respuestas HTTP 522. La configuración actual del dominio raíz es:
+La configuración actual del dominio raíz es:
 
 ```text
 Type:    CNAME
@@ -123,10 +122,13 @@ Ruta publicada actual del túnel:
 ```text
 Hostname: iluminate.space
 Service:  http://iluminate-public:3000
+
+Hostname: www.iluminate.space
+Service:  http://iluminate-public:3000
 ```
 
-Para `www`, se debe crear otra ruta hacia el mismo servicio o una regla de
-redirección permanente hacia `https://iluminate.space`.
+Las dos rutas se administran juntas en Cloudflare Tunnel. El sitio mantiene
+`https://iluminate.space` como URL canónica en sus metadatos.
 
 ## Repositorio y construcción
 
@@ -359,15 +361,14 @@ despliegue.
 
 ## Pendientes recomendados
 
-1. Crear ruta o redirección para `www.iluminate.space`.
-2. Expandir el volumen lógico raíz de 39 GB para utilizar el disco virtual de
+1. Expandir el volumen lógico raíz de 39 GB para utilizar el disco virtual de
    80 GB.
-3. Añadir un health check al sitio público.
-4. Fijar producción a tags `sha-*` en vez de depender de `main`.
-5. Configurar y probar backups automáticos de Proxmox.
-6. Terminar autenticación antes de publicar `app.iluminate.space`.
-7. Añadir PostgreSQL, migraciones y backups cuando la app autenticada esté
+2. Añadir un health check al sitio público.
+3. Fijar producción a tags `sha-*` en vez de depender de `main`.
+4. Configurar y probar backups automáticos de Proxmox.
+5. Terminar autenticación antes de publicar `app.iluminate.space`.
+6. Añadir PostgreSQL, migraciones y backups cuando la app autenticada esté
    lista.
-8. Incorporar DataSyncSA con un despliegue independiente.
-9. Automatizar el pull y restart solo después de contar con health check y
+7. Incorporar DataSyncSA con un despliegue independiente.
+8. Automatizar el pull y restart solo después de contar con health check y
    rollback probado.
