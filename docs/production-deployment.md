@@ -205,7 +205,8 @@ puede añadirse después de estabilizar migraciones, health checks y rollback.
 │   ├── compose.yml
 │   └── .env             # token del túnel; modo 600
 └── iluminate/
-    └── compose.yml      # sitio público actual
+    ├── compose.yml      # sitio público actual
+    └── deploy.sh        # despliegue manual de un comando
 ```
 
 El archivo fuente del Compose público también se versiona en:
@@ -242,34 +243,25 @@ docker compose logs --tail=100
 
 ```bash
 cd /opt/web/iluminate
-docker compose pull
-docker compose up -d
-docker compose ps
+./deploy.sh
 ```
 
-Después se debe comprobar:
+El script descarga `main`, espera el health check y comprueba públicamente:
 
 ```text
 https://iluminate.space
 ```
 
 Un despliegue exitoso debe devolver HTTP 200 y el contenedor debe permanecer
-en estado `Up`.
+en estado `Up (healthy)`.
 
 ### Fijar o revertir una versión
 
-Crear `/opt/web/iluminate/.env` con un tag publicado:
-
-```dotenv
-ILUMINATE_IMAGE_TAG=sha-{commit completo}
-```
-
-Luego:
+Pasar al script un tag inmutable ya publicado:
 
 ```bash
 cd /opt/web/iluminate
-docker compose pull
-docker compose up -d
+./deploy.sh sha-{commit completo}
 ```
 
 Para rollback, sustituir el tag por el SHA de una construcción anterior que
@@ -363,12 +355,11 @@ despliegue.
 
 1. Expandir el volumen lógico raíz de 39 GB para utilizar el disco virtual de
    80 GB.
-2. Añadir un health check al sitio público.
-3. Fijar producción a tags `sha-*` en vez de depender de `main`.
-4. Configurar y probar backups automáticos de Proxmox.
-5. Terminar autenticación antes de publicar `app.iluminate.space`.
-6. Añadir PostgreSQL, migraciones y backups cuando la app autenticada esté
+2. Fijar producción a tags `sha-*` en vez de depender de `main`.
+3. Configurar y probar backups automáticos de Proxmox.
+4. Terminar autenticación antes de publicar `app.iluminate.space`.
+5. Añadir PostgreSQL, migraciones y backups cuando la app autenticada esté
    lista.
-7. Incorporar DataSyncSA con un despliegue independiente.
-8. Automatizar el pull y restart solo después de contar con health check y
+6. Incorporar DataSyncSA con un despliegue independiente.
+7. Automatizar el pull y restart solo después de contar con health check y
    rollback probado.
