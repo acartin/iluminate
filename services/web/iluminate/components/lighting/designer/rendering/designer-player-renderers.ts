@@ -1,12 +1,13 @@
 "use client";
 
-import type { DesignerForm, DesignerPoint, DesignerZoneForm, DesignerChannelForm } from "@/lib/lighting/partitura-model";
+import type { DesignerBuildAreaForm, DesignerChannelForm, DesignerForm, DesignerOpticalTreatment, DesignerPoint, DesignerZoneForm } from "@/lib/lighting/partitura-model";
 import type { CompiledDesignerLayout } from "../designer-compiler";
 import { channelBorderPolylines, channelCenterPolyline, channelIsClosed, channelWidthCm, clamp, openChannelOutline, pointInsideDesignerShape } from "../designer-geometry";
 import type { DesignerViewport } from "../types";
 import type { DesignerAnimationDiffuser, DesignerAnimationPixel } from "../designer-paper-canvas";
 
 type PixiModule = typeof import("pixi.js");
+type PixiApp = InstanceType<PixiModule["Application"]>;
 
 export type DiffuserRenderSettings = {
   diffuserDistanceCm: number;
@@ -25,532 +26,337 @@ export const DEFAULT_DIFFUSER_RENDER_SETTINGS: DiffuserRenderSettings = {
 };
 
 const STANDARD_WS2812B_VIEW_ANGLE_DEG = 120;
-const DEFAULT_ACRYLIC_THICKNESS_MM = 3;
 
-export function renderDirectLedFrame({
-  app,
-  pixi,
-  designer,
-  layout,
-  viewport,
-  canvasSize,
-  selectedZoneId,
-  selectedChannelId,
-  animationPixels,
-  showOutlines = true,
-  colorMode
-}: {
-  app: InstanceType<PixiModule["Application"]>;
-  pixi: PixiModule;
-  designer: DesignerForm;
-  layout: CompiledDesignerLayout;
-  viewport: DesignerViewport;
-  canvasSize: { width: number; height: number };
-  selectedZoneId?: string;
-  selectedChannelId?: string;
-  animationPixels: DesignerAnimationPixel[];
-  showOutlines?: boolean;
-  colorMode: "day" | "night";
+export function renderDirectLedFrame(args: {
+  app: PixiApp; pixi: PixiModule; designer: DesignerForm; layout: CompiledDesignerLayout;
+  viewport: DesignerViewport; canvasSize: { width: number; height: number };
+  selectedZoneId?: string; selectedChannelId?: string; animationPixels: DesignerAnimationPixel[];
+  showOutlines?: boolean; colorMode: "day" | "night";
+}) {
+  renderPixiAnimationFrame({ ...args, presentation: "led_map", settings: { ...DEFAULT_DIFFUSER_RENDER_SETTINGS, showOutlines: args.showOutlines ?? true } });
+}
+
+/** The single Animate renderer. All light composition stays on Pixi/WebGL. */
+export function renderPixiAnimationFrame({ app, pixi, designer, layout, viewport, canvasSize, selectedZoneId, selectedChannelId, selectedZoneIds, selectedChannelIds, animationPixels, presentation, settings, colorMode }: {
+  app: PixiApp; pixi: PixiModule; designer: DesignerForm; layout: CompiledDesignerLayout;
+  viewport: DesignerViewport; canvasSize: { width: number; height: number };
+  selectedZoneId?: string; selectedChannelId?: string; selectedZoneIds?: string[]; selectedChannelIds?: string[]; animationPixels: DesignerAnimationPixel[];
+  presentation: DesignerAnimationDiffuser; settings: DiffuserRenderSettings; colorMode: "day" | "night";
 }) {
   app.renderer.resize(canvasSize.width, canvasSize.height);
-  app.stage.removeChildren().forEach((child) => child.destroy({ children: true }));
-
+  clearPixiStage(app);
   const colors = colorMode === "night"
-    ? { workspace: 0x020617, document: 0x090d16, documentStroke: 0x1e293b, grid: 0x334155, zoneFill: 0x64748b, selected: 0x60a5fa, label: 0x94a3b8, ledStroke: 0x1e293b }
-    : { workspace: 0xe2e8f0, document: 0xffffff, documentStroke: 0x94a3b8, grid: 0x94a3b8, zoneFill: 0x64748b, selected: 0x2563eb, label: 0x475569, ledStroke: 0x94a3b8 };
-  const g = new pixi.Graphics();
-  app.stage.addChild(g);
+    ? { workspace: 0x020617, document: 0x07111f, documentStroke: 0x334155, zone: 0x64748b, selected: 0x38bdf8, label: 0x94a3b8, ledStroke: 0x1e293b }
+    : { workspace: 0xe2e8f0, document: 0xffffff, documentStroke: 0x94a3b8, zone: 0x64748b, selected: 0x0284c7, label: 0x475569, ledStroke: 0x94a3b8 };
+  const background = new pixi.Graphics();
+  background.rect(0, 0, canvasSize.width, canvasSize.height).fill(colors.workspace);
+  drawDocument(background, designer, viewport, canvasSize, colors);
+  app.stage.addChild(background);
 
-  g.rect(0, 0, canvasSize.width, canvasSize.height).fill({ color: colors.workspace });
-  drawDocument(g, designer, viewport, canvasSize, colors, false);
-  if (showOutlines) {
-    drawZones(g, pixi, designer, viewport, canvasSize, selectedZoneId, colors, app.stage, false);
-    drawChannelShapes(g, designer, viewport, canvasSize, colors, selectedChannelId);
-  }
-  drawPixels(g, designer, layout, viewport, canvasSize, selectedZoneId, animationPixels, colors);
-
-  const text = new pixi.Text({ text: `${layout.pixelMap.length} mapped pixels`, style: { fill: colors.label, fontFamily: "monospace", fontSize: 11 } });
-  text.x = 16;
-  text.y = canvasSize.height - 20;
-  app.stage.addChild(text);
+  const renderedColors = new Map(animationPixels.map((pixel) => [`${pixel.output}:${pixel.serialIndex}`, pixel.color]));
+  const pixelsById = new Map(layout.pixelMap.map((pixel) => [pixel.id, pixel]));
+  const compiledZones = new Map(layout.zones.map((zone) => [zone.id, zone]));
+  const treatments = presentation === "as_built" && designer.layers.lightSources.visible
+    ? designer.lightSources.filter((source) => source.visible && source.enabled)
+    : [];
+  const opticallyRenderedPixels = new Set<string>();
+  const directMountedPixels = new Set<string>();
+  orderOpticalTreatmentsForRendering(treatments).forEach((treatment) => {
+    const compiledZone = compiledZones.get(treatment.id);
+    if (!compiledZone || !treatment.enabled) return;
+    const pixels = compiledZone.pixelIds.map((id) => pixelsById.get(id))
+      .filter((pixel): pixel is CompiledDesignerLayout["pixelMap"][number] => Boolean(pixel));
+    if (treatment.mode === "front" && treatment.material === "none") {
+      pixels.forEach((pixel) => directMountedPixels.add(pixel.id));
+      return;
+    }
+    pixels.forEach((pixel) => opticallyRenderedPixels.add(pixel.id));
+    renderTreatment({ app, pixi, designer, treatment, pixels, renderedColors, viewport, canvasSize, settings });
+  });
+  const directPixels = presentation === "led_map"
+    ? layout.pixelMap
+    : layout.pixelMap.filter((pixel) => !opticallyRenderedPixels.has(pixel.id) || directMountedPixels.has(pixel.id));
+  const activeZoneIds = selectedZoneIds?.length ? selectedZoneIds : selectedZoneId ? [selectedZoneId] : [];
+  const activeChannelIds = selectedChannelIds?.length ? selectedChannelIds : selectedChannelId ? [selectedChannelId] : [];
+  drawDirectPixels({ app, pixi, designer, pixels: directPixels, renderedColors, viewport, canvasSize, selectedZoneIds: activeZoneIds, colors });
+  if (settings.showOutlines) drawOutlines({ app, pixi, designer, viewport, canvasSize, selectedZoneIds: activeZoneIds, selectedChannelIds: activeChannelIds, colors });
+  const count = new pixi.Text({ text: `${layout.pixelMap.length} mapped pixels`, style: { fill: colors.label, fontFamily: "monospace", fontSize: 11 } });
+  count.x = 16;
+  count.y = canvasSize.height - 20;
+  app.stage.addChild(count);
   app.render();
 }
 
-export function clearDiffuserFrame(canvas: HTMLCanvasElement, canvasSize: { width: number; height: number }) {
-  const context = setupCanvas(canvas, canvasSize);
-  context?.clearRect(0, 0, canvas.width, canvas.height);
+export function orderOpticalTreatmentsForRendering(treatments: DesignerOpticalTreatment[]) {
+  // Rear-mounted light and its opaque face belong behind any illumination on
+  // the front face. Persisted array order must not change the optical stack.
+  const renderLayer = (treatment: DesignerOpticalTreatment) => treatment.mode === "front" ? 1 : 0;
+  return treatments
+    .map((treatment, index) => ({ treatment, index }))
+    .sort((left, right) => renderLayer(left.treatment) - renderLayer(right.treatment) || left.index - right.index)
+    .map(({ treatment }) => treatment);
 }
 
-export function renderDiffuserFrame({
-  canvas,
-  designer,
-  layout,
-  viewport,
-  canvasSize,
-  selectedZoneId,
-  selectedChannelId,
-  animationPixels,
-  diffuser,
-  settings,
-  colorMode
-}: {
-  canvas: HTMLCanvasElement;
-  designer: DesignerForm;
-  layout: CompiledDesignerLayout;
-  viewport: DesignerViewport;
-  canvasSize: { width: number; height: number };
-  selectedZoneId?: string;
-  selectedChannelId?: string;
-  animationPixels: DesignerAnimationPixel[];
-  diffuser: DesignerAnimationDiffuser;
-  settings: DiffuserRenderSettings;
-  colorMode: "day" | "night";
+function clearPixiStage(app: PixiApp) {
+  const previous = app.stage.removeChildren();
+  // Masks are also stage children. Detach every cross-reference before any
+  // child is destroyed, otherwise switching preview modes can leave Pixi
+  // pointing at an already-destroyed mask and stop subsequent frames.
+  previous.forEach((child) => {
+    child.mask = null;
+    child.filters = null;
+  });
+  previous.forEach((child) => child.destroy({ children: true }));
+}
+
+function renderTreatment({ app, pixi, designer, treatment, pixels, renderedColors, viewport, canvasSize, settings }: {
+  app: PixiApp; pixi: PixiModule; designer: DesignerForm; treatment: DesignerOpticalTreatment;
+  pixels: CompiledDesignerLayout["pixelMap"]; renderedColors: Map<string, { r: number; g: number; b: number }>;
+  viewport: DesignerViewport; canvasSize: { width: number; height: number }; settings: DiffuserRenderSettings;
 }) {
-  const context = setupCanvas(canvas, canvasSize);
-  if (!context) return;
-  const palette = colorMode === "night"
-    ? { workspace: "#020617", document: "#07111f", documentStroke: "#334155", zoneStroke: "rgba(148, 163, 184, 0.35)", label: "rgba(148, 163, 184, 0.58)" }
-    : { workspace: "#e2e8f0", document: "#ffffff", documentStroke: "#94a3b8", zoneStroke: "rgba(100, 116, 139, 0.32)", label: "rgba(71, 85, 105, 0.5)" };
-
-  context.fillStyle = palette.workspace;
-  context.fillRect(0, 0, canvasSize.width, canvasSize.height);
-  drawCanvasDocument(context, designer, viewport, canvasSize, palette);
-
-  const renderedColors = new Map(animationPixels.map((pixel) => [`${pixel.output}:${pixel.serialIndex}`, pixel.color]));
-  const zonesByPixel = buildExclusiveZonesByPixel(designer, layout);
-  const pixelsByZone = new Map<string, Array<CompiledDesignerLayout["pixelMap"][number]>>();
-
-  layout.pixelMap.forEach((pixel) => {
-    const rendered = renderedColors.get(`${pixel.output}:${pixel.serialIndex}`);
-    if (!rendered || lightEnergy(rendered) <= 2) return;
-    const zones = zonesByPixel.get(pixel.id) ?? [];
-    zones.forEach((zone) => {
-      const pixels = pixelsByZone.get(zone.id) ?? [];
-      pixels.push(pixel);
-      pixelsByZone.set(zone.id, pixels);
-    });
-  });
-
-  const channelPixelIds = new Map<string, Set<string>>();
-  layout.zones.forEach((zone) => {
-    if (designer.channels.some((channel) => channel.id === zone.id)) channelPixelIds.set(zone.id, new Set(zone.pixelIds));
-  });
-  const pixelsByChannel = new Map<string, Array<CompiledDesignerLayout["pixelMap"][number]>>();
-  layout.pixelMap.forEach((pixel) => {
-    const rendered = renderedColors.get(`${pixel.output}:${pixel.serialIndex}`);
-    if (!rendered || lightEnergy(rendered) <= 2) return;
-    channelPixelIds.forEach((pixelIds, channelId) => {
-      if (!pixelIds.has(pixel.id)) return;
-      const pixels = pixelsByChannel.get(channelId) ?? [];
-      pixels.push(pixel);
-      pixelsByChannel.set(channelId, pixels);
-    });
-  });
-
-  const optical = resolveDiffuserOptics(designer, diffuser, settings);
-  const renderIntensity = settings.intensity * 2;
-  const emitterRadiusPx = Math.max(2, screenUniformLength(optical.emitterRadiusCm, viewport, canvasSize));
-  const blurPx = Math.max(0, screenUniformLength(optical.blurCm, viewport, canvasSize));
-  const afterRadiusPx = Math.max(0, screenUniformLength(settings.afterZoneEffectCm, viewport, canvasSize));
-
-  if (afterRadiusPx > 0 && settings.afterZoneOpacity > 0) {
-    const haloCanvas = createLayerCanvas(canvasSize);
-    const halo = haloCanvas.getContext("2d");
-    if (halo) {
-      const afterZoneStrength = clamp(settings.afterZoneEffectCm / 6, 0, 1);
-      const haloRadiusPx = Math.max(afterRadiusPx * 1.35, emitterRadiusPx * 0.8);
-      pixelsByZone.forEach((pixels) => drawCanvasEmitters(halo, pixels, renderedColors, viewport, canvasSize, haloRadiusPx, renderIntensity, 0.9));
-      pixelsByChannel.forEach((pixels) => drawCanvasEmitters(halo, pixels, renderedColors, viewport, canvasSize, haloRadiusPx, renderIntensity, 0.9));
-      context.save();
-      context.globalCompositeOperation = "screen";
-      context.filter = `blur(${Math.max(1, afterRadiusPx * 0.45)}px)`;
-      context.globalAlpha = clamp(settings.afterZoneOpacity * (0.35 + afterZoneStrength * 0.65) * settings.intensity, 0, 0.7);
-      context.drawImage(haloCanvas, 0, 0);
-      context.restore();
-    }
+  const target = treatment.targetType === "zone" ? designer.zones.find((zone) => zone.id === treatment.targetId) : designer.channels.find((channel) => channel.id === treatment.targetId);
+  if (!target) return;
+  const light = new pixi.Graphics();
+  if (treatment.mode === "wall_wash") drawWallWash(light, pixels, renderedColors, treatment, viewport, canvasSize, settings.intensity);
+  else drawEmitterField(light, pixels, renderedColors, treatment, designer, viewport, canvasSize, settings.intensity);
+  light.blendMode = treatment.mode === "front" && treatment.material !== "day_night" ? "screen" : "add";
+  const frontBlend = clamp((treatment.sourceDistanceCm - 2) / 8, 0, 1);
+  const frontOpticalBlur = treatment.mode === "front"
+    ? treatment.material === "silicone"
+      ? 0.04 + treatment.sourceDistanceCm * 0.06
+      : (treatment.material === "milky_white" ? 0.22 : 0.1) * frontBlend + treatment.sourceDistanceCm * 0.035 * frontBlend
+    : 0;
+  const haloGapFactor = treatment.sourceDistanceCm / (treatment.sourceDistanceCm + 1);
+  const blurCm = treatment.mode === "halo"
+    ? 0.03 + treatment.softnessCm * haloGapFactor + treatment.sourceDistanceCm * 0.12
+    : treatment.mode === "front"
+      ? treatment.softnessCm + frontOpticalBlur
+      : treatment.softnessCm;
+  const blurPx = Math.min(80, Math.max(0, screenUniformLength(blurCm, viewport, canvasSize)));
+  if (blurPx > 0.25) light.filters = [new pixi.BlurFilter({ strength: blurPx, quality: 3, kernelSize: 7 })];
+  const receiverMask = treatment.mode === "front" ? null : createReceiverMask(pixi, designer, treatment, viewport, canvasSize);
+  if (receiverMask) {
+    app.stage.addChild(receiverMask);
+    light.mask = receiverMask;
   }
+  if (treatment.mode === "front") {
+    const material = createTargetShape(pixi, target, treatment.targetType, viewport, canvasSize);
+    fillTargetShape(material, target, treatment.targetType, viewport, canvasSize, {
+      color: treatment.material === "day_night" ? 0x171a20 : 0xedf2f7,
+      alpha: treatment.material === "day_night" ? 0.92 : treatment.material === "silicone" ? 0.68 : 0.78
+    });
+    app.stage.addChild(material);
+    const sourceMask = createTargetShape(pixi, target, treatment.targetType, viewport, canvasSize);
+    fillTargetShape(sourceMask, target, treatment.targetType, viewport, canvasSize, 0xffffff);
+    app.stage.addChild(sourceMask);
+    light.mask = sourceMask;
+  }
+  app.stage.addChild(light);
+  if (treatment.mode === "halo" && treatment.occludeSource) {
+    const face = createTargetShape(pixi, target, treatment.targetType, viewport, canvasSize);
+    fillTargetShape(face, target, treatment.targetType, viewport, canvasSize, { color: colorNumber(treatment.faceColor), alpha: 0.98 });
+    app.stage.addChild(face);
+  }
+}
 
-  designer.zones.forEach((zone) => {
-    if (zone.visible === false) return;
-    const zonePixels = pixelsByZone.get(zone.id) ?? [];
-    const litLayer = createLayerCanvas(canvasSize);
-    const lit = litLayer.getContext("2d");
-    if (lit) {
-      drawCanvasEmitters(lit, zonePixels, renderedColors, viewport, canvasSize, emitterRadiusPx, renderIntensity * (diffuser === "day_night" ? 1.1 : 1), optical.hotspotAlpha);
-    }
-
-    context.save();
-    canvasShapePath(context, zone, viewport, canvasSize);
-    context.clip();
-    paintDiffuserMaterial(context, zone, viewport, canvasSize, diffuser, zonePixels.length ? 1 : 0.16);
-    context.globalCompositeOperation = diffuser === "day_night" ? "lighter" : "source-over";
-    context.filter = blurPx > 0 ? `blur(${blurPx}px)` : "none";
-    context.drawImage(litLayer, 0, 0);
-    context.globalAlpha = 1;
-    context.filter = "none";
-    if (diffuser === "milky_white") {
-      context.globalCompositeOperation = "screen";
-      context.globalAlpha = 0.08;
-      context.fillStyle = "#ffffff";
-      context.fillRect(0, 0, canvasSize.width, canvasSize.height);
-    }
-    context.restore();
-
-    if (settings.showOutlines) {
-      context.save();
-      canvasShapePath(context, zone, viewport, canvasSize);
-      context.strokeStyle = zone.id === selectedZoneId ? "#38bdf8" : palette.zoneStroke;
-      context.lineWidth = zone.id === selectedZoneId ? 1.8 : 1;
-      context.stroke();
-      const labelPoint = toScreen({ x: zone.x + 1, y: zone.y + 2.4 }, viewport, canvasSize);
-      context.fillStyle = zone.id === selectedZoneId ? "#0284c7" : palette.label;
-      context.font = `${zone.id === selectedZoneId ? 13 : 11}px sans-serif`;
-      context.fillText(zone.name, labelPoint.x, labelPoint.y);
-      context.restore();
-    }
+function drawEmitterField(graphics: any, pixels: CompiledDesignerLayout["pixelMap"], colors: Map<string, { r: number; g: number; b: number }>, treatment: DesignerOpticalTreatment, designer: DesignerForm, viewport: DesignerViewport, canvasSize: { width: number; height: number }, globalIntensity: number) {
+  const pitchCm = 100 / Math.max(1, designer.addressablePixelsPerMeter);
+  const distanceBlend = clamp((treatment.sourceDistanceCm - 2) / 8, 0, 1);
+  const siliconeDiffuser = treatment.mode === "front" && treatment.material === "silicone";
+  const beamAngleDeg = siliconeDiffuser ? treatment.beamAngleDeg : STANDARD_WS2812B_VIEW_ANGLE_DEG;
+  const geometricRadius = treatment.sourceDistanceCm * Math.tan(beamAngleDeg * Math.PI / 360) * (siliconeDiffuser || treatment.mode === "halo" ? 1 : 0.18);
+  const radiusCm = treatment.mode === "halo"
+    ? Math.max(0.08, treatment.spreadCm + geometricRadius)
+    : Math.max(pitchCm * 0.32, geometricRadius);
+  const radiusPx = Math.max(2, screenUniformLength(radiusCm, viewport, canvasSize));
+  pixels.forEach((pixel) => {
+    const color = colors.get(`${pixel.output}:${pixel.serialIndex}`);
+    if (!color || lightEnergy(color) <= 2) return;
+    const point = toScreen(pixel, viewport, canvasSize);
+    // A larger wall gap widens and softens a halo, but the same LED energy is
+    // distributed over more receiver area. This softened inverse-square term
+    // keeps distance useful without making realistic sign gaps go black.
+    const haloDistanceFalloff = treatment.mode === "halo" ? 1 / (1 + Math.pow(treatment.sourceDistanceCm / 12, 2)) : 1;
+    const materialTransmission = siliconeDiffuser ? treatment.transmissionPct / 100 : 1;
+    const opticalGain = (treatment.mode === "front" ? 0.92 - distanceBlend * 0.44 : 0.62) * haloDistanceFalloff * materialTransmission;
+    // Saturated red, green and blue must be as optically visible as white at
+    // the same channel level. Summing RGB and dividing by white made every
+    // single-channel background three times dimmer and left the neutral
+    // diffuser surface looking gray.
+    const exposure = lightLevel(color) * treatment.intensity * globalIntensity * opticalGain;
+    const alpha = clamp(1 - Math.exp(-exposure), 0, 1);
+    graphics.circle(point.x, point.y, radiusPx).fill({ color: rgbToNumber(color), alpha });
   });
+}
 
-  designer.channels.forEach((channel) => {
-    if (channel.visible === false) return;
-    const channelPixels = pixelsByChannel.get(channel.id) ?? [];
-    const litLayer = createLayerCanvas(canvasSize);
-    const lit = litLayer.getContext("2d");
-    if (lit) drawCanvasEmitters(lit, channelPixels, renderedColors, viewport, canvasSize, emitterRadiusPx, renderIntensity, optical.hotspotAlpha);
-    context.save();
-    canvasChannelPath(context, channel, viewport, canvasSize);
-    context.clip(channelIsClosed(channel) ? "evenodd" : "nonzero");
-    context.globalCompositeOperation = "lighter";
-    context.filter = blurPx > 0 ? `blur(${blurPx}px)` : "none";
-    context.drawImage(litLayer, 0, 0);
-    context.restore();
-    if (settings.showOutlines) {
-      context.save();
-      canvasChannelPath(context, channel, viewport, canvasSize);
-      context.strokeStyle = channel.id === selectedChannelId ? "#60a5fa" : "#f59e0b";
-      context.lineWidth = channel.id === selectedChannelId ? 1.8 : 1.2;
-      context.globalAlpha = channel.id === selectedChannelId ? 0.95 : 0.6;
-      context.stroke();
-      context.restore();
+function drawWallWash(graphics: any, pixels: CompiledDesignerLayout["pixelMap"], colors: Map<string, { r: number; g: number; b: number }>, treatment: DesignerOpticalTreatment, viewport: DesignerViewport, canvasSize: { width: number; height: number }, globalIntensity: number) {
+  const angle = treatment.directionDeg * Math.PI / 180;
+  const axis = { x: Math.cos(angle), y: Math.sin(angle) };
+  const normal = { x: -axis.y, y: axis.x };
+  const beamSlope = Math.tan(clamp(treatment.beamAngleDeg, 5, 170) * Math.PI / 360);
+  const slices = 7;
+  pixels.forEach((pixel) => {
+    const color = colors.get(`${pixel.output}:${pixel.serialIndex}`);
+    if (!color || lightEnergy(color) <= 2) return;
+    const energy = lightLevel(color);
+    for (let slice = slices; slice >= 1; slice -= 1) {
+      const endCm = treatment.throwCm * slice / slices;
+      const startCm = treatment.throwCm * (slice - 1) / slices;
+      const startHalf = treatment.spreadCm * 0.2 + startCm * beamSlope;
+      const endHalf = treatment.spreadCm * 0.2 + endCm * beamSlope;
+      const world = [
+        { x: pixel.x + axis.x * startCm + normal.x * startHalf, y: pixel.y + axis.y * startCm + normal.y * startHalf },
+        { x: pixel.x + axis.x * endCm + normal.x * endHalf, y: pixel.y + axis.y * endCm + normal.y * endHalf },
+        { x: pixel.x + axis.x * endCm - normal.x * endHalf, y: pixel.y + axis.y * endCm - normal.y * endHalf },
+        { x: pixel.x + axis.x * startCm - normal.x * startHalf, y: pixel.y + axis.y * startCm - normal.y * startHalf }
+      ];
+      const falloff = Math.pow(1 - slice / slices * 0.82, treatment.falloff);
+      const alpha = clamp(energy * treatment.intensity * globalIntensity * falloff * 0.32, 0, 0.8);
+      graphics.poly(world.flatMap((point) => { const screen = toScreen(point, viewport, canvasSize); return [screen.x, screen.y]; })).fill({ color: rgbToNumber(color), alpha });
     }
   });
 }
 
-function resolveDiffuserOptics(designer: DesignerForm, diffuser: DesignerAnimationDiffuser, settings: DiffuserRenderSettings) {
+function createReceiverMask(pixi: PixiModule, designer: DesignerForm, treatment: DesignerOpticalTreatment, viewport: DesignerViewport, canvasSize: { width: number; height: number }) {
+  if (treatment.receiverType === "canvas") return null;
+  const receiver = treatment.receiverType === "build_area" ? designer.buildAreas.find((area) => area.id === treatment.receiverId) : designer.zones.find((zone) => zone.id === treatment.receiverId);
+  if (!receiver) return null;
+  const mask = new pixi.Graphics();
+  traceClosedShape(mask, receiver, viewport, canvasSize);
+  mask.fill(0xffffff);
+  return mask;
+}
+
+function createTargetShape(pixi: PixiModule, target: DesignerZoneForm | DesignerChannelForm, targetType: "zone" | "channel", viewport: DesignerViewport, canvasSize: { width: number; height: number }) {
+  const graphics = new pixi.Graphics();
+  if (targetType === "zone") traceClosedShape(graphics, target as DesignerZoneForm, viewport, canvasSize);
+  else traceChannelShape(graphics, target as DesignerChannelForm, viewport, canvasSize);
+  return graphics;
+}
+
+function fillTargetShape(graphics: any, target: DesignerZoneForm | DesignerChannelForm, targetType: "zone" | "channel", viewport: DesignerViewport, canvasSize: { width: number; height: number }, style: any) {
+  if (targetType === "zone" || !channelIsClosed(target as DesignerChannelForm)) {
+    graphics.fill(style);
+    return;
+  }
+  graphics.clear();
+  const channel = target as DesignerChannelForm;
+  const center = channelCenterPolyline(channel);
+  traceScreenPolygon(graphics, center, viewport, canvasSize);
+  const fillStyle = typeof style === "number" ? { color: style } : style;
+  graphics.stroke({ ...fillStyle, width: Math.max(1, screenUniformLength(channelWidthCm(channel), viewport, canvasSize)) });
+}
+
+function traceScreenPolygon(graphics: any, points: DesignerPoint[], viewport: DesignerViewport, canvasSize: { width: number; height: number }) {
+  const first = points[0] ? toScreen(points[0], viewport, canvasSize) : null;
+  if (!first) return;
+  graphics.moveTo(first.x, first.y);
+  points.slice(1).forEach((point) => {
+    const screen = toScreen(point, viewport, canvasSize);
+    graphics.lineTo(screen.x, screen.y);
+  });
+  graphics.closePath();
+}
+
+function traceClosedShape(graphics: any, shape: DesignerZoneForm | DesignerBuildAreaForm, viewport: DesignerViewport, canvasSize: { width: number; height: number }) {
+  if (shape.shape === "ellipse") {
+    const center = toScreen({ x: shape.x + shape.width / 2, y: shape.y + shape.height / 2 }, viewport, canvasSize);
+    graphics.ellipse(center.x, center.y, Math.abs(shape.width / 2 * canvasSize.width / viewport.width), Math.abs(shape.height / 2 * canvasSize.height / viewport.height));
+    return;
+  }
+  if (shape.shape === "polygon" && shape.points?.length) {
+    const first = toScreen(shape.points[0], viewport, canvasSize);
+    graphics.moveTo(first.x, first.y);
+    shape.points.forEach((start, index) => {
+      const end = shape.points![(index + 1) % shape.points!.length];
+      const next = toScreen(end, viewport, canvasSize);
+      if (shape.pathMode === "bezier" && (start.handleOut || end.handleIn)) {
+        const cp1 = toScreen({ x: start.x + (start.handleOut?.x ?? 0), y: start.y + (start.handleOut?.y ?? 0) }, viewport, canvasSize);
+        const cp2 = toScreen({ x: end.x + (end.handleIn?.x ?? 0), y: end.y + (end.handleIn?.y ?? 0) }, viewport, canvasSize);
+        graphics.bezierCurveTo(cp1.x, cp1.y, cp2.x, cp2.y, next.x, next.y);
+      } else graphics.lineTo(next.x, next.y);
+    });
+    graphics.closePath();
+    return;
+  }
+  const topLeft = toScreen({ x: shape.x, y: shape.y }, viewport, canvasSize);
+  const bottomRight = toScreen({ x: shape.x + shape.width, y: shape.y + shape.height }, viewport, canvasSize);
+  graphics.rect(topLeft.x, topLeft.y, bottomRight.x - topLeft.x, bottomRight.y - topLeft.y);
+}
+
+function traceChannelShape(graphics: any, channel: DesignerChannelForm, viewport: DesignerViewport, canvasSize: { width: number; height: number }) {
+  if (!channelIsClosed(channel)) {
+    const outline = openChannelOutline(channel);
+    const first = outline[0] ? toScreen(outline[0], viewport, canvasSize) : null;
+    if (!first) return;
+    graphics.moveTo(first.x, first.y);
+    outline.slice(1).forEach((point) => { const screen = toScreen(point, viewport, canvasSize); graphics.lineTo(screen.x, screen.y); });
+    graphics.closePath();
+    return;
+  }
+  const borders = channelBorderPolylines(channel);
+  // Outlines need both closed borders. Filled channel shapes use a closed,
+  // channel-width center stroke so neither the interior nor the closing edge
+  // can be lost during triangulation.
+  traceScreenPolygon(graphics, borders.left, viewport, canvasSize);
+  traceScreenPolygon(graphics, borders.right, viewport, canvasSize);
+}
+
+function drawDirectPixels({ app, pixi, designer, pixels, renderedColors, viewport, canvasSize, selectedZoneIds, colors }: {
+  app: PixiApp; pixi: PixiModule; designer: DesignerForm; pixels: CompiledDesignerLayout["pixelMap"];
+  renderedColors: Map<string, { r: number; g: number; b: number }>; viewport: DesignerViewport;
+  canvasSize: { width: number; height: number }; selectedZoneIds: string[]; colors: Record<string, number>;
+}) {
+  const graphics = new pixi.Graphics();
   const pitchCm = 100 / Math.max(1, designer.addressablePixelsPerMeter);
-  const distanceCm = clamp(settings.diffuserDistanceCm, 0.5, 20);
-  const halfAngleRad = (STANDARD_WS2812B_VIEW_ANGLE_DEG / 2) * Math.PI / 180;
-  const geometricRadiusCm = distanceCm * Math.tan(halfAngleRad) * 0.18;
-  const materialScatterCm = DEFAULT_ACRYLIC_THICKNESS_MM * (diffuser === "milky_white" ? 0.42 : 0.2);
-  const blendProgress = smoothstep(3, 10, distanceCm);
-  const emitterRadiusCm = Math.max(pitchCm * 0.32, geometricRadiusCm + materialScatterCm);
-  const blurCm = (materialScatterCm * 0.35 + distanceCm * 0.045) * blendProgress;
-  return {
-    emitterRadiusCm,
-    blurCm,
-    hotspotAlpha: lerp(0.92, 0.48, blendProgress)
-  };
+  const size = Math.max(1.5, Math.min(54, screenUniformLength(Math.min(0.7, pitchCm * 0.42), viewport, canvasSize)));
+  pixels.forEach((pixel) => {
+    const screen = toScreen(pixel, viewport, canvasSize);
+    const rendered = renderedColors.get(`${pixel.output}:${pixel.serialIndex}`);
+    const selected = selectedZoneIds.length ? designer.zones.some((zone) => selectedZoneIds.includes(zone.id) && pointInsideDesignerShape(zone, pixel)) : false;
+    graphics.rect(screen.x - size / 2, screen.y - size / 2, size, size).fill({ color: rendered ? rgbToNumber(rendered) : selected ? colors.selected : 0x64748b, alpha: rendered ? 1 : 0.72 }).stroke({ color: selected ? 0xdbeafe : colors.ledStroke, alpha: 0.65, width: 0.75 });
+  });
+  app.stage.addChild(graphics);
+}
+
+function drawOutlines({ app, pixi, designer, viewport, canvasSize, selectedZoneIds, selectedChannelIds, colors }: {
+  app: PixiApp; pixi: PixiModule; designer: DesignerForm; viewport: DesignerViewport;
+  canvasSize: { width: number; height: number }; selectedZoneIds: string[]; selectedChannelIds: string[]; colors: Record<string, number>;
+}) {
+  designer.zones.filter((zone) => zone.visible !== false).forEach((zone) => {
+    const selected = selectedZoneIds.includes(zone.id);
+    const shape = new pixi.Graphics();
+    traceClosedShape(shape, zone, viewport, canvasSize);
+    shape.stroke({ color: selected ? colors.selected : colors.zone, alpha: selected ? 0.95 : 0.42, width: selected ? 2 : 1 });
+    app.stage.addChild(shape);
+    const point = toScreen({ x: zone.x + 1, y: zone.y + 2.4 }, viewport, canvasSize);
+    const label = new pixi.Text({ text: zone.name, style: { fill: selected ? colors.selected : colors.label, fontFamily: "sans-serif", fontSize: selected ? 13 : 11 } });
+    label.x = point.x; label.y = point.y; label.alpha = selected ? 1 : 0.72;
+    app.stage.addChild(label);
+  });
+  designer.channels.filter((channel) => channel.visible !== false).forEach((channel) => {
+    const shape = createTargetShape(pixi, channel, "channel", viewport, canvasSize);
+    const selected = selectedChannelIds.includes(channel.id);
+    shape.stroke({ color: selected ? 0x60a5fa : 0xf59e0b, alpha: selected ? 0.95 : 0.6, width: selected ? 1.8 : 1.2 });
+    app.stage.addChild(shape);
+  });
+}
+
+function drawDocument(graphics: any, designer: DesignerForm, viewport: DesignerViewport, canvasSize: { width: number; height: number }, colors: Record<string, number>) {
+  const topLeft = toScreen({ x: 0, y: 0 }, viewport, canvasSize);
+  const bottomRight = toScreen({ x: designer.canvasWidthCm, y: designer.canvasHeightCm }, viewport, canvasSize);
+  graphics.rect(topLeft.x, topLeft.y, bottomRight.x - topLeft.x, bottomRight.y - topLeft.y).fill(colors.document).stroke({ color: colors.documentStroke, width: 1.2 });
 }
 
 function toScreen(point: DesignerPoint, viewport: DesignerViewport, canvasSize: { width: number; height: number }) {
-  return {
-    x: ((point.x - viewport.x) / viewport.width) * canvasSize.width,
-    y: ((point.y - viewport.y) / viewport.height) * canvasSize.height
-  };
-}
-
-function screenLength(cm: number, viewport: DesignerViewport, canvasSize: { width: number; height: number }) {
-  return cm * Math.min(canvasSize.width / viewport.width, canvasSize.height / viewport.height);
+  return { x: ((point.x - viewport.x) / viewport.width) * canvasSize.width, y: ((point.y - viewport.y) / viewport.height) * canvasSize.height };
 }
 
 function screenUniformLength(cm: number, viewport: DesignerViewport, canvasSize: { width: number; height: number }) {
   return cm * ((canvasSize.width / viewport.width + canvasSize.height / viewport.height) / 2);
 }
 
-function drawDocument(g: any, designer: DesignerForm, viewport: DesignerViewport, canvasSize: { width: number; height: number }, colors: Record<string, number>, diffused: boolean) {
-  const topLeft = toScreen({ x: 0, y: 0 }, viewport, canvasSize);
-  const bottomRight = toScreen({ x: designer.canvasWidthCm, y: designer.canvasHeightCm }, viewport, canvasSize);
-  const width = bottomRight.x - topLeft.x;
-  const height = bottomRight.y - topLeft.y;
-  g.rect(topLeft.x, topLeft.y, width, height).fill({ color: colors.document }).stroke({ color: colors.documentStroke, width: 1.2 });
-  if (diffused) return;
-  const step = Math.max(1, designer.snapCm || 1);
-  const majorEvery = step < 5 ? Math.round(10 / step) : 2;
-  const startX = Math.max(0, Math.ceil(viewport.x / step) * step);
-  const endX = Math.min(designer.canvasWidthCm, viewport.x + viewport.width);
-  const startY = Math.max(0, Math.ceil(viewport.y / step) * step);
-  const endY = Math.min(designer.canvasHeightCm, viewport.y + viewport.height);
-  for (let x = startX; x <= endX; x += step) {
-    const point = toScreen({ x, y: 0 }, viewport, canvasSize);
-    const major = Math.round(x / step) % majorEvery === 0;
-    g.moveTo(point.x, topLeft.y).lineTo(point.x, bottomRight.y).stroke({ color: colors.grid, alpha: major ? 0.34 : 0.13, width: major ? 1 : 0.7 });
-  }
-  for (let y = startY; y <= endY; y += step) {
-    const point = toScreen({ x: 0, y }, viewport, canvasSize);
-    const major = Math.round(y / step) % majorEvery === 0;
-    g.moveTo(topLeft.x, point.y).lineTo(bottomRight.x, point.y).stroke({ color: colors.grid, alpha: major ? 0.34 : 0.13, width: major ? 1 : 0.7 });
-  }
-}
-
-function drawZones(g: any, pixi: PixiModule, designer: DesignerForm, viewport: DesignerViewport, canvasSize: { width: number; height: number }, selectedZoneId: string | undefined, colors: Record<string, number>, stage: any, diffused: boolean) {
-  [...designer.zones].filter((zone) => zone.visible !== false).reverse().forEach((zone) => {
-    const selected = zone.id === selectedZoneId;
-    drawClosedShape(g, zone, viewport, canvasSize);
-    g.fill({ color: selected ? colors.selected : colors.zoneFill, alpha: diffused ? 0.035 : selected ? 0.22 : 0.1 * designer.layers.zones.opacity });
-    g.stroke({ color: selected ? colors.selected : 0x64748b, alpha: diffused ? 0.12 : selected ? 0.95 : 0.45 * designer.layers.zones.opacity, width: selected ? 2 : 1.1 });
-    if (diffused) return;
-    const labelPoint = toScreen({ x: zone.x + 1, y: zone.y + 2.4 }, viewport, canvasSize);
-    const label = new pixi.Text({ text: zone.name, style: { fill: selected ? colors.selected : colors.label, fontFamily: "sans-serif", fontSize: selected ? 13 : 11 } });
-    label.alpha = selected ? 1 : 0.72;
-    label.x = labelPoint.x;
-    label.y = labelPoint.y;
-    stage.addChild(label);
-  });
-}
-
-function drawChannelShapes(g: any, designer: DesignerForm, viewport: DesignerViewport, canvasSize: { width: number; height: number }, colors: Record<string, number>, selectedChannelId?: string) {
-  const scale = canvasSize.width / Math.max(1, viewport.width);
-  designer.channels.forEach((channel) => {
-    if (channel.visible === false) return;
-    const center = channelCenterPolyline(channel);
-    if (center.length < 2) return;
-    const selected = channel.id === selectedChannelId;
-    const first = toScreen(center[0], viewport, canvasSize);
-    g.moveTo(first.x, first.y);
-    center.slice(1).forEach((point) => {
-      const screen = toScreen(point, viewport, canvasSize);
-      g.lineTo(screen.x, screen.y);
-    });
-    if (channelIsClosed(channel)) g.closePath();
-    g.stroke({ color: selected ? 0x60a5fa : 0xf59e0b, alpha: selected ? 0.5 : 0.26, width: Math.max(1, channelWidthCm(channel) * scale), join: "miter" });
-  });
-}
-
-function drawClosedShape(g: any, shape: DesignerZoneForm, viewport: DesignerViewport, canvasSize: { width: number; height: number }) {
-  if (shape.shape === "ellipse") {
-    const center = toScreen({ x: shape.x + shape.width / 2, y: shape.y + shape.height / 2 }, viewport, canvasSize);
-    const radiusX = Math.abs(shape.width / 2 * canvasSize.width / viewport.width);
-    const radiusY = Math.abs(shape.height / 2 * canvasSize.height / viewport.height);
-    g.ellipse(center.x, center.y, radiusX, radiusY);
-    return;
-  }
-  if (shape.shape === "polygon" && shape.points?.length) {
-    const first = toScreen(shape.points[0], viewport, canvasSize);
-    g.moveTo(first.x, first.y);
-    shape.points.forEach((start, index) => {
-      const end = shape.points![(index + 1) % shape.points!.length];
-      const next = toScreen(end, viewport, canvasSize);
-      if (shape.pathMode === "bezier" && (start.handleOut || end.handleIn)) {
-        const cp1 = toScreen({ x: start.x + (start.handleOut?.x ?? 0), y: start.y + (start.handleOut?.y ?? 0) }, viewport, canvasSize);
-        const cp2 = toScreen({ x: end.x + (end.handleIn?.x ?? 0), y: end.y + (end.handleIn?.y ?? 0) }, viewport, canvasSize);
-        g.bezierCurveTo(cp1.x, cp1.y, cp2.x, cp2.y, next.x, next.y);
-      } else {
-        g.lineTo(next.x, next.y);
-      }
-    });
-    g.closePath();
-    return;
-  }
-  const topLeft = toScreen({ x: shape.x, y: shape.y }, viewport, canvasSize);
-  const bottomRight = toScreen({ x: shape.x + shape.width, y: shape.y + shape.height }, viewport, canvasSize);
-  g.rect(topLeft.x, topLeft.y, bottomRight.x - topLeft.x, bottomRight.y - topLeft.y);
-}
-
-function drawPixels(
-  g: any,
-  designer: DesignerForm,
-  layout: CompiledDesignerLayout,
-  viewport: DesignerViewport,
-  canvasSize: { width: number; height: number },
-  selectedZoneId: string | undefined,
-  animationPixels: DesignerAnimationPixel[],
-  colors: Record<string, number>
-) {
-  const renderedColors = new Map(animationPixels.map((pixel) => [`${pixel.output}:${pixel.serialIndex}`, pixel.color]));
-  const pitchCm = 100 / Math.max(1, designer.addressablePixelsPerMeter);
-  const packageCm = Math.min(0.7, pitchCm * 0.42);
-  const dotSize = Math.max(1.5, Math.min(54, screenLength(packageCm, viewport, canvasSize)));
-  layout.pixelMap.forEach((pixel) => {
-    const point = toScreen(pixel, viewport, canvasSize);
-    const rendered = renderedColors.get(`${pixel.output}:${pixel.serialIndex}`);
-    const fillColor = rendered ? rgbToNumber(rendered) : 0x64748b;
-    const selected = selectedZoneId ? designer.zones.some((zone) => zone.id === selectedZoneId && pointInsideDesignerShape(zone, pixel)) : false;
-    g.rect(point.x - dotSize / 2, point.y - dotSize / 2, dotSize, dotSize)
-      .fill({ color: rendered ? fillColor : selected ? colors.selected : 0x64748b, alpha: rendered ? 1 : selected ? 0.86 : 0.7 })
-      .stroke({ color: selected ? 0xdbeafe : colors.ledStroke, alpha: selected ? 0.95 : 0.55, width: 0.75 });
-  });
-}
-
-function setupCanvas(canvas: HTMLCanvasElement, canvasSize: { width: number; height: number }) {
-  const ratio = Math.min(2, window.devicePixelRatio || 1);
-  const width = Math.max(1, Math.round(canvasSize.width * ratio));
-  const height = Math.max(1, Math.round(canvasSize.height * ratio));
-  if (canvas.width !== width || canvas.height !== height) {
-    canvas.width = width;
-    canvas.height = height;
-  }
-  canvas.style.width = `${canvasSize.width}px`;
-  canvas.style.height = `${canvasSize.height}px`;
-  const context = canvas.getContext("2d");
-  if (!context) return null;
-  context.setTransform(ratio, 0, 0, ratio, 0, 0);
-  context.clearRect(0, 0, canvasSize.width, canvasSize.height);
-  context.imageSmoothingEnabled = true;
-  return context;
-}
-
-function createLayerCanvas(canvasSize: { width: number; height: number }) {
-  const canvas = document.createElement("canvas");
-  canvas.width = Math.max(1, Math.round(canvasSize.width));
-  canvas.height = Math.max(1, Math.round(canvasSize.height));
-  return canvas;
-}
-
-function drawCanvasDocument(context: CanvasRenderingContext2D, designer: DesignerForm, viewport: DesignerViewport, canvasSize: { width: number; height: number }, palette: { document: string; documentStroke: string }) {
-  const topLeft = toScreen({ x: 0, y: 0 }, viewport, canvasSize);
-  const bottomRight = toScreen({ x: designer.canvasWidthCm, y: designer.canvasHeightCm }, viewport, canvasSize);
-  context.fillStyle = palette.document;
-  context.strokeStyle = palette.documentStroke;
-  context.lineWidth = 1.2;
-  context.fillRect(topLeft.x, topLeft.y, bottomRight.x - topLeft.x, bottomRight.y - topLeft.y);
-  context.strokeRect(topLeft.x, topLeft.y, bottomRight.x - topLeft.x, bottomRight.y - topLeft.y);
-}
-
-function buildExclusiveZonesByPixel(designer: DesignerForm, layout: CompiledDesignerLayout) {
-  const designerZones = new Map(designer.zones.map((zone) => [zone.id, zone]));
-  const assignments = new Map<string, DesignerZoneForm>();
-  layout.zones.forEach((compiledZone) => {
-    const designerZone = designerZones.get(compiledZone.id);
-    if (!designerZone) return;
-    compiledZone.pixelIds.forEach((pixelId) => {
-      const current = assignments.get(pixelId);
-      if (!current || designerShapeArea(designerZone) < designerShapeArea(current)) {
-        assignments.set(pixelId, designerZone);
-      }
-    });
-  });
-  const zonesByPixel = new Map<string, DesignerZoneForm[]>();
-  assignments.forEach((zone, pixelId) => zonesByPixel.set(pixelId, [zone]));
-  return zonesByPixel;
-}
-
-function drawCanvasEmitters(
-  context: CanvasRenderingContext2D,
-  pixels: Array<CompiledDesignerLayout["pixelMap"][number]>,
-  renderedColors: Map<string, { r: number; g: number; b: number }>,
-  viewport: DesignerViewport,
-  canvasSize: { width: number; height: number },
-  radiusPx: number,
-  intensity: number,
-  peakAlpha = 0.72
-) {
-  pixels.forEach((pixel) => {
-    const rendered = renderedColors.get(`${pixel.output}:${pixel.serialIndex}`);
-    if (!rendered || lightEnergy(rendered) <= 2) return;
-    const point = toScreen(pixel, viewport, canvasSize);
-    const energy = clamp(lightEnergy(rendered) / 765, 0, 1);
-    const alpha = clamp(peakAlpha * energy * intensity, 0, 1);
-    const gradient = context.createRadialGradient(point.x, point.y, 0, point.x, point.y, radiusPx);
-    gradient.addColorStop(0, `rgba(${rendered.r}, ${rendered.g}, ${rendered.b}, ${alpha})`);
-    gradient.addColorStop(0.28, `rgba(${rendered.r}, ${rendered.g}, ${rendered.b}, ${alpha * 0.78})`);
-    gradient.addColorStop(0.68, `rgba(${rendered.r}, ${rendered.g}, ${rendered.b}, ${alpha * 0.28})`);
-    gradient.addColorStop(1, `rgba(${rendered.r}, ${rendered.g}, ${rendered.b}, 0)`);
-    context.fillStyle = gradient;
-    context.beginPath();
-    context.arc(point.x, point.y, radiusPx, 0, Math.PI * 2);
-    context.fill();
-  });
-}
-
-function paintDiffuserMaterial(context: CanvasRenderingContext2D, zone: DesignerZoneForm, viewport: DesignerViewport, canvasSize: { width: number; height: number }, diffuser: DesignerAnimationDiffuser, opacity = 1) {
-  const topLeft = toScreen({ x: zone.x, y: zone.y }, viewport, canvasSize);
-  const bottomRight = toScreen({ x: zone.x + zone.width, y: zone.y + zone.height }, viewport, canvasSize);
-  const gradient = context.createLinearGradient(topLeft.x, topLeft.y, bottomRight.x, bottomRight.y);
-  if (diffuser === "day_night") {
-    gradient.addColorStop(0, `rgba(12, 14, 18, ${0.94 * opacity})`);
-    gradient.addColorStop(1, `rgba(35, 39, 46, ${0.9 * opacity})`);
-  } else {
-    gradient.addColorStop(0, `rgba(245, 248, 250, ${0.96 * opacity})`);
-    gradient.addColorStop(1, `rgba(226, 232, 240, ${0.88 * opacity})`);
-  }
-  context.fillStyle = gradient;
-  context.fillRect(0, 0, canvasSize.width, canvasSize.height);
-}
-
-function designerShapeArea(shape: DesignerZoneForm) {
-  if (shape.shape === "ellipse") return Math.PI * Math.abs(shape.width / 2) * Math.abs(shape.height / 2);
-  if (shape.shape === "polygon" && shape.points?.length) {
-    return Math.max(0.0001, Math.abs(shape.points.reduce((total, point, index) => {
-      const next = shape.points![(index + 1) % shape.points!.length];
-      return total + point.x * next.y - next.x * point.y;
-    }, 0)) / 2);
-  }
-  return Math.max(0.0001, Math.abs(shape.width * shape.height));
-}
-
-function canvasChannelPath(context: CanvasRenderingContext2D, channel: DesignerChannelForm, viewport: DesignerViewport, canvasSize: { width: number; height: number }) {
-  context.beginPath();
-  if (channelIsClosed(channel)) {
-    const borders = channelBorderPolylines(channel);
-    traceCanvasPolyline(context, borders.left, viewport, canvasSize, true);
-    traceCanvasPolyline(context, [...borders.right].reverse(), viewport, canvasSize, true);
-    return;
-  }
-  traceCanvasPolyline(context, openChannelOutline(channel), viewport, canvasSize, true);
-}
-
-function traceCanvasPolyline(context: CanvasRenderingContext2D, points: DesignerPoint[], viewport: DesignerViewport, canvasSize: { width: number; height: number }, closed: boolean) {
-  points.forEach((point, index) => {
-    const screen = toScreen(point, viewport, canvasSize);
-    if (index === 0) context.moveTo(screen.x, screen.y);
-    else context.lineTo(screen.x, screen.y);
-  });
-  if (closed) context.closePath();
-}
-
-function canvasShapePath(context: CanvasRenderingContext2D, shape: DesignerZoneForm, viewport: DesignerViewport, canvasSize: { width: number; height: number }) {
-  context.beginPath();
-  if (shape.shape === "ellipse") {
-    const center = toScreen({ x: shape.x + shape.width / 2, y: shape.y + shape.height / 2 }, viewport, canvasSize);
-    const radiusX = Math.abs(shape.width / 2 * canvasSize.width / viewport.width);
-    const radiusY = Math.abs(shape.height / 2 * canvasSize.height / viewport.height);
-    context.ellipse(center.x, center.y, radiusX, radiusY, 0, 0, Math.PI * 2);
-    return;
-  }
-  if (shape.shape === "polygon" && shape.points?.length) {
-    const first = toScreen(shape.points[0], viewport, canvasSize);
-    context.moveTo(first.x, first.y);
-    shape.points.forEach((start, index) => {
-      const end = shape.points![(index + 1) % shape.points!.length];
-      const next = toScreen(end, viewport, canvasSize);
-      if (shape.pathMode === "bezier" && (start.handleOut || end.handleIn)) {
-        const cp1 = toScreen({ x: start.x + (start.handleOut?.x ?? 0), y: start.y + (start.handleOut?.y ?? 0) }, viewport, canvasSize);
-        const cp2 = toScreen({ x: end.x + (end.handleIn?.x ?? 0), y: end.y + (end.handleIn?.y ?? 0) }, viewport, canvasSize);
-        context.bezierCurveTo(cp1.x, cp1.y, cp2.x, cp2.y, next.x, next.y);
-      } else {
-        context.lineTo(next.x, next.y);
-      }
-    });
-    context.closePath();
-    return;
-  }
-  const topLeft = toScreen({ x: shape.x, y: shape.y }, viewport, canvasSize);
-  const bottomRight = toScreen({ x: shape.x + shape.width, y: shape.y + shape.height }, viewport, canvasSize);
-  context.rect(topLeft.x, topLeft.y, bottomRight.x - topLeft.x, bottomRight.y - topLeft.y);
-}
-
-function rgbToNumber(color: { r: number; g: number; b: number }) {
-  return (Math.max(0, Math.min(255, color.r)) << 16) + (Math.max(0, Math.min(255, color.g)) << 8) + Math.max(0, Math.min(255, color.b));
-}
-
-function lightEnergy(color: { r: number; g: number; b: number }) {
-  return Math.max(0, color.r) + Math.max(0, color.g) + Math.max(0, color.b);
-}
-
-function lerp(from: number, to: number, amount: number) {
-  return from + (to - from) * clamp(amount, 0, 1);
-}
-
-function smoothstep(edge0: number, edge1: number, value: number) {
-  const t = clamp((value - edge0) / Math.max(0.0001, edge1 - edge0), 0, 1);
-  return t * t * (3 - 2 * t);
-}
+function colorNumber(color: string) { const parsed = Number.parseInt(color.replace("#", ""), 16); return Number.isFinite(parsed) ? parsed : 0x16181d; }
+function rgbToNumber(color: { r: number; g: number; b: number }) { return (clamp(Math.round(color.r), 0, 255) << 16) + (clamp(Math.round(color.g), 0, 255) << 8) + clamp(Math.round(color.b), 0, 255); }
+function lightEnergy(color: { r: number; g: number; b: number }) { return Math.max(0, color.r) + Math.max(0, color.g) + Math.max(0, color.b); }
+function lightLevel(color: { r: number; g: number; b: number }) { return clamp(Math.max(color.r, color.g, color.b) / 255, 0, 1); }

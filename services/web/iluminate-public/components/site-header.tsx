@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { appUrl } from "@/content/site";
+import { appStartUrl } from "@/content/site";
 import { Brand } from "./brand";
 
 const navigation = [
@@ -20,7 +20,7 @@ export function SiteHeader() {
           </Link>
         ))}
       </nav>
-      <a className="header-access" href={appUrl}>
+      <a className="header-access" href={appStartUrl}>
         Abrir Designer <span aria-hidden="true">↗</span>
       </a>
       <details className="mobile-menu">
@@ -33,7 +33,7 @@ export function SiteHeader() {
           ))}
           <Link href="/for-sign-makers">Para fabricantes</Link>
           <Link href="/about">Estudio</Link>
-          <a href={appUrl}>Abrir Designer ↗</a>
+          <a href={appStartUrl}>Abrir Designer ↗</a>
         </div>
       </details>
     </header>

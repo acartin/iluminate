@@ -14,6 +14,7 @@ export async function POST(request: Request) {
   if (!layout) return NextResponse.json({ ok: false, message: "Compile the Designer physical layout before generating." }, { status: 422 });
   if (layout.validation.errors.length) return NextResponse.json({ ok: false, message: "Designer electrical validation failed.", validation: layout.validation }, { status: 422 });
   const validTargetIds = new Set([...layout.zones.map((zone) => zone.id), ...layout.groups.map((group) => group.id), "full_sign", "installation"]);
+  const disabledSourceIds = new Set((document.designer?.lightSources ?? []).filter((source) => !source.enabled).map((source) => source.id));
   const partitura = generatePartitura({
     projectId: normalizeCoreId(document.projectId, "project"),
     defaultScene: document.activeSceneId,
@@ -23,7 +24,7 @@ export async function POST(request: Request) {
     groups: layout.groups,
     scenes: document.scenes.map((scene) => ({
       ...scene,
-      tracks: scene.clips.map((clip) => ({
+      tracks: scene.clips.filter((clip) => clip.enabled !== false && !disabledSourceIds.has(clip.target)).map((clip) => ({
         id: `track_${clip.id}`,
         name: clip.name,
         target: clip.target === "installation"

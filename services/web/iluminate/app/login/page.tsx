@@ -6,18 +6,20 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { PasswordInput } from "@/components/ui/password-input";
 import { defaultAuthenticatedPath, placeholderAuthEnabled, sessionCookieName } from "@/lib/api";
+import { safeRedirectPath } from "@/lib/request-url";
 
 export default async function LoginPage({
   searchParams
 }: {
-  searchParams?: Promise<{ error?: string; reset?: string }>;
+  searchParams?: Promise<{ error?: string; reset?: string; next?: string }>;
 }) {
+  const resolvedSearchParams = await searchParams;
+  const nextPath = safeRedirectPath(resolvedSearchParams?.next, defaultAuthenticatedPath);
   const cookieStore = await cookies();
   if (cookieStore.get(sessionCookieName)?.value) {
-    redirect(defaultAuthenticatedPath);
+    redirect(nextPath);
   }
 
-  const resolvedSearchParams = await searchParams;
   const hasError = resolvedSearchParams?.error === "1";
   const resetSuccess = resolvedSearchParams?.reset === "1";
 
@@ -37,6 +39,7 @@ export default async function LoginPage({
         </CardHeader>
         <CardContent>
           <form action="/api/auth/login" method="post" className="space-y-4">
+            <input type="hidden" name="next" value={nextPath} />
             <div className="space-y-2">
               <label htmlFor="username" className="text-sm font-medium">
                 Username

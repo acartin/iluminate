@@ -1,6 +1,40 @@
 import type { DesignerBuildAreaForm, DesignerChannelForm, DesignerControllerForm, DesignerForm, DesignerPoint, DesignerPointNodeType, DesignerRouteForm, DesignerRouteKind, DesignerZoneForm } from "@/lib/lighting/partitura-model";
 import type { DesignerActiveLayer, DesignerCanvasHit, DesignerRouteTerminal, DesignerViewport, ResizeHandle } from "./types";
 
+export function primitiveShapeBounds(
+  start: DesignerPoint,
+  end: DesignerPoint,
+  snapCm: number,
+  modifiers: { preserveAspect?: boolean; fromCenter?: boolean } = {}
+) {
+  const snappedStart = { x: snapValue(start.x, snapCm), y: snapValue(start.y, snapCm) };
+  const snappedEnd = { x: snapValue(end.x, snapCm), y: snapValue(end.y, snapCm) };
+  let deltaX = snappedEnd.x - snappedStart.x;
+  let deltaY = snappedEnd.y - snappedStart.y;
+
+  if (modifiers.preserveAspect) {
+    const size = Math.max(Math.abs(deltaX), Math.abs(deltaY));
+    deltaX = (deltaX < 0 ? -1 : 1) * size;
+    deltaY = (deltaY < 0 ? -1 : 1) * size;
+  }
+
+  if (modifiers.fromCenter) {
+    return {
+      x: snapValue(snappedStart.x - Math.abs(deltaX), snapCm),
+      y: snapValue(snappedStart.y - Math.abs(deltaY), snapCm),
+      width: snapValue(Math.abs(deltaX) * 2, snapCm),
+      height: snapValue(Math.abs(deltaY) * 2, snapCm)
+    };
+  }
+
+  return {
+    x: Math.min(snappedStart.x, snappedStart.x + deltaX),
+    y: Math.min(snappedStart.y, snappedStart.y + deltaY),
+    width: snapValue(Math.abs(deltaX), snapCm),
+    height: snapValue(Math.abs(deltaY), snapCm)
+  };
+}
+
 export function resizedZone(
   zone: DesignerZoneForm,
   handle: ResizeHandle,
@@ -339,7 +373,7 @@ export function routePointFill(route: DesignerRouteForm, pointIndex: number, poi
 
 export function pickDesignerHit(designer: DesignerForm, activeLayer: DesignerActiveLayer | null, point: DesignerPoint, viewport: DesignerViewport, canvasSize: { width: number; height: number }): DesignerCanvasHit {
   const tolerance = worldHitTolerance(viewport, canvasSize);
-  if (activeLayer === "artwork" && designer.layers.artwork.visible && !designer.layers.artwork.locked) {
+  if (activeLayer === "artwork" && designer.layers.artwork.visible) {
     for (const artwork of [...designer.artwork].reverse()) {
       if (artwork.visible === false) continue;
       const resizeHit = pickResizeHandleHit(artwork, point, tolerance, "artwork_resize");
@@ -347,13 +381,13 @@ export function pickDesignerHit(designer: DesignerForm, activeLayer: DesignerAct
       if (pointInsideRect(artwork, point, tolerance)) return { type: "artwork", id: artwork.id };
     }
   }
-  if (activeLayer === "hardware" && designer.layers.hardware.visible && !designer.layers.hardware.locked) {
+  if (activeLayer === "hardware" && designer.layers.hardware.visible) {
     if (designer.controller.visible !== false) {
       const controllerHit = pickControllerHit(designer.controller, point, tolerance);
       if (controllerHit) return controllerHit;
     }
   }
-  if (activeLayer === "strings" && designer.layers.strings.visible && !designer.layers.strings.locked) {
+  if (activeLayer === "strings" && designer.layers.strings.visible) {
     for (const route of [...designer.routes].reverse()) {
       if (route.visible === false) continue;
       const pointHit = pickRoutePointHit(route, point, tolerance);
@@ -361,7 +395,7 @@ export function pickDesignerHit(designer: DesignerForm, activeLayer: DesignerAct
       if (distanceToPolyline(route.points, point) <= tolerance) return { type: "route", id: route.id };
     }
   }
-  if (activeLayer === "zones" && designer.layers.zones.visible && !designer.layers.zones.locked) {
+  if (activeLayer === "zones" && designer.layers.zones.visible) {
     for (const zone of designer.zones) {
       if (zone.visible === false) continue;
       const pointHit = zone.shape === "polygon" && zone.points ? pickPolygonPointHit(zone.id, zone.points, point, tolerance, "zone_point") : null;
@@ -377,7 +411,7 @@ export function pickDesignerHit(designer: DesignerForm, activeLayer: DesignerAct
       if (channelContainsPoint(channel, point, tolerance)) return { type: "channel", id: channel.id };
     }
   }
-  if ((activeLayer === "reference" || activeLayer === "artwork") && designer.layers.artwork.visible && !designer.layers.artwork.locked) {
+  if ((activeLayer === "reference" || activeLayer === "artwork") && designer.layers.artwork.visible) {
     for (const buildArea of [...designer.buildAreas].reverse()) {
       if (buildArea.visible === false) continue;
       const pointHit = buildArea.shape === "polygon" && buildArea.points ? pickPolygonPointHit(buildArea.id, buildArea.points, point, tolerance, "build_area_point") : null;
@@ -385,6 +419,22 @@ export function pickDesignerHit(designer: DesignerForm, activeLayer: DesignerAct
       const resizeHit = pickResizeHandleHit(buildArea, point, tolerance, "build_area_resize");
       if (resizeHit) return resizeHit;
       if (pointInsideDesignerShape(buildArea, point) || pointNearShapeStroke(buildArea, point, tolerance * 2)) return { type: "build_area", id: buildArea.id };
+    }
+  }
+  return null;
+}
+
+export function pickAnimationTarget(designer: DesignerForm, point: DesignerPoint, tolerance: number): { type: "zone" | "channel"; id: string } | null {
+  // Channels are narrow foreground targets. Pick them before an overlapping filled
+  // zone so clicking a visible strip selects the clip assigned to that channel.
+  for (const channel of [...designer.channels].reverse()) {
+    if (channel.visible !== false && channelContainsPoint(channel, point, tolerance)) {
+      return { type: "channel", id: channel.id };
+    }
+  }
+  for (const zone of [...designer.zones].reverse()) {
+    if (zone.visible !== false && (pointInsideDesignerShape(zone, point) || pointNearShapeStroke(zone, point, tolerance))) {
+      return { type: "zone", id: zone.id };
     }
   }
   return null;
@@ -508,7 +558,7 @@ export function pointInPolygon(point: DesignerPoint, polygon: DesignerPoint[]) {
     const current = polygon[index];
     const previous = polygon[previousIndex];
     const intersects = current.y > point.y !== previous.y > point.y
-      && point.x < ((previous.x - current.x) * (point.y - current.y)) / Math.max(0.000001, previous.y - current.y) + current.x;
+      && point.x < ((previous.x - current.x) * (point.y - current.y)) / (previous.y - current.y) + current.x;
     if (intersects) inside = !inside;
   }
   return inside;
@@ -951,6 +1001,63 @@ export function clearFloatingTerminalJoints(routes: DesignerRouteForm[], control
   }));
 }
 
+/**
+ * Releases one selected solder point without deleting either physical route.
+ * Same-kind routes are stored as one merged route after soldering, so an
+ * internal solder point must be split back into two independent routes.
+ */
+export function detachSolderedRoutePoint(
+  routes: DesignerRouteForm[],
+  controller: DesignerControllerForm,
+  routeId: string,
+  pointIndex: number,
+  snapCm: number
+) {
+  const route = routes.find((entry) => entry.id === routeId);
+  const point = route?.points[pointIndex];
+  if (!route || !point?.joint) return { routes, routeId, pointIndex, changed: false };
+
+  if (!isRouteTerminal(route, pointIndex)) {
+    let suffix = 1;
+    let detachedRouteId = `${route.id}_detached_${suffix}`;
+    while (routes.some((entry) => entry.id === detachedRouteId)) {
+      suffix += 1;
+      detachedRouteId = `${route.id}_detached_${suffix}`;
+    }
+    const detachedPoint = { ...point, joint: false };
+    const firstRoute = {
+      ...route,
+      points: [...route.points.slice(0, pointIndex), detachedPoint]
+    };
+    const secondRoute = {
+      ...route,
+      id: detachedRouteId,
+      name: `${route.name} detached`,
+      points: [detachedPoint, ...route.points.slice(pointIndex + 1)]
+    };
+    const splitRoutes = routes.flatMap((entry) => entry.id === route.id ? [firstRoute, secondRoute] : [entry]);
+    return {
+      routes: clearFloatingTerminalJoints(splitRoutes, controller, snapCm),
+      routeId: firstRoute.id,
+      pointIndex: firstRoute.points.length - 1,
+      changed: true
+    };
+  }
+
+  const detachedRoutes = routes.map((entry) => entry.id !== route.id
+    ? entry
+    : {
+      ...entry,
+      points: entry.points.map((entryPoint, index) => index === pointIndex ? { ...entryPoint, joint: false } : entryPoint)
+    });
+  return {
+    routes: clearFloatingTerminalJoints(detachedRoutes, controller, snapCm),
+    routeId,
+    pointIndex,
+    changed: true
+  };
+}
+
 export function routeTerminalRole(pointIndex: number) {
   return pointIndex === 0 ? "input" : "output";
 }
@@ -1221,6 +1328,16 @@ export function pointToSegmentDistance(point: DesignerPoint, start: DesignerPoin
   const t = clamp(((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared, 0, 1);
   const projection = { x: start.x + t * dx, y: start.y + t * dy };
   return Math.hypot(point.x - projection.x, point.y - projection.y);
+}
+
+/** Returns a monotonically increasing suffix without relying on array length. */
+export function nextDesignerItemNumber(items: Array<{ id: string }>, prefix: string) {
+  return items.reduce((highest, item) => {
+    if (!item.id.startsWith(prefix)) return highest;
+    const suffix = item.id.slice(prefix.length);
+    if (!/^\d+$/.test(suffix)) return highest;
+    return Math.max(highest, Number(suffix));
+  }, 0) + 1;
 }
 
 export function sampleRouteLedDots(route: DesignerRouteForm, ledsPerMeter: number, addressablePixelsPerMeter: number) {

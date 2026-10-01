@@ -9,6 +9,7 @@ Precondicion recomendada al iniciar cada nueva sesion:
    - Leer `.agent/EXECUTION_MAP.md`.
    - Leer `.agent/FILESYSTEM_GUARDRAILS.md`.
    - Leer `.agent/IMPLEMENTATION_PLAN.md` cuando la tarea afecte roadmap, fases o priorizacion.
+   - Leer `.agent/DESIGNER_UX_CONTRACT.md` y `.agent/DESIGNER_HANDOFF.md` antes de cambiar el Designer, sus barras, herramientas, Layers, canvas o flujo Animate.
    - Leer `.agent/EFFECT_TARGETING_MODEL.md` antes de cambiar el compilador, pixelMap, zonas, grupos, efectos o simulador.
    - Leer `.agent/ILUMINATE_UI_STANDARDS.md` si se toca `services/web/iluminate`.
    - Leer `.agent/PUBLIC_SITE_DIRECTION.md` si se toca el sitio publico, catalogo, templates, configurador publico, SEO o area de aprendizaje.
@@ -26,13 +27,14 @@ Regla de precedencia:
 
 1. Codigo ejecutable vigente.
 2. `.agent/RULES.md`.
-3. `.agent/FILESYSTEM_GUARDRAILS.md`.
-4. `.agent/EXECUTION_MAP.md`.
-5. `.agent/IMPLEMENTATION_PLAN.md`.
-6. `.agent/ILUMINATE_UI_STANDARDS.md`.
-7. `.agent/AI_CONTEXT_LED_ORCHESTRATION_PLATFORM.md`.
-8. `.agent/BRAIN_MAP.md`.
-9. `.agent/AI_CONTEXT_PACK.md`.
+3. `.agent/DESIGNER_UX_CONTRACT.md` para estructura y controles del Designer.
+4. `.agent/FILESYSTEM_GUARDRAILS.md`.
+5. `.agent/EXECUTION_MAP.md`.
+6. `.agent/IMPLEMENTATION_PLAN.md`.
+7. `.agent/ILUMINATE_UI_STANDARDS.md`.
+8. `.agent/AI_CONTEXT_LED_ORCHESTRATION_PLATFORM.md`.
+9. `.agent/BRAIN_MAP.md`.
+10. `.agent/AI_CONTEXT_PACK.md`.
 
 ## 2. Scope operativo actual
 
@@ -90,6 +92,7 @@ Reglas:
 ## 6. Frontend Iluminate
 
 - Seguir `.agent/ILUMINATE_UI_STANDARDS.md`.
+- Para cualquier cambio del Designer, cumplir `.agent/DESIGNER_UX_CONTRACT.md`; la barra global, barra contextual y rail de herramientas no se pueden volver a mezclar por conveniencia de espacio.
 - Preservar `AppShell`, `Sidebar`, `Topbar` y UI primitives existentes.
 - No introducir templates externos.
 - No construir landing marketing dentro del portal operativo.

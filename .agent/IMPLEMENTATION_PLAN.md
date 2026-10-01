@@ -204,7 +204,7 @@ UX direction after starting the Designer branch:
 - [x] Add route segment double-click insertion for bends/cut points.
 - [x] Add internal route point delete and route cut/split actions.
 - [x] Add toolbox cut tool and automatic snap-solder behavior for route fabrication editing.
-- [x] Add toolbox delete action and floating-joint cleanup after route deletion.
+- [x] Add contextual/keyboard delete action and floating-joint cleanup after route deletion. Delete is not a tool-rail action; follow `.agent/DESIGNER_UX_CONTRACT.md`.
 - [x] Keep fabrication nodes separate from LED dots in both visual route rendering and compiled segment start/step math.
 - [x] Add copy, paste and delete actions for selected designer objects.
 - [x] Add a Zones-plane Channel tool: Bezier center line, derived parallel borders,
@@ -240,6 +240,12 @@ UX direction after starting the Designer branch:
 - [ ] Simulate LEDs over the uploaded SVG/image.
 - [x] Make clips target canonical zones/groups resolved from pixelMap.
 - [x] Formalize effect coordinate space: `serial`, `local`, and `global`.
+- [x] Consolidate Animate light rendering in Pixi/WebGL and add persisted
+  per-zone/channel, combinable Front, Halo-Lit and directional Wall Washer
+  mounts; Front selects LED Pixels, Milky White or Day/Night material.
+- [x] Promote those mounts to named Light Sources with independent LED-string
+  assignments and clip targets, automatic legacy migration and compilation to
+  firmware-compatible zone targets.
 - [x] Keep clip names unique per scene and select the clip target (zone or group)
   from the Animate clip inspector.
 - [ ] Add deterministic simulator fixtures.

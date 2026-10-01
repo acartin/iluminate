@@ -7,7 +7,7 @@ services:
     restart: unless-stopped
     environment:
       ILUMINATE_PUBLIC_SITE_URL: https://iluminate.space
-      NEXT_PUBLIC_ILUMINATE_APP_URL: https://app.iluminate.space
+      ILUMINATE_APP_URL: ${ILUMINATE_APP_URL:-}
     healthcheck:
       test:
         - CMD

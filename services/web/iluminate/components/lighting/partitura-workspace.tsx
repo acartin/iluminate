@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle, ArrowLeft, Cable, Circle, Copy, Hand, Image as ImageIcon, Layers, Maximize2, MousePointer2, Pause, PenLine, Play, Plus, Ruler, Route, RotateCcw, Save, Scissors, Sparkles, Spline, Square, Trash2, Waves, ZoomIn, ZoomOut } from "lucide-react";
+import { AlertCircle, ArrowLeft, Cable, Circle, CircleDotDashed, Cloud, Copy, Grid2X2, Hammer, Hand, Image as ImageIcon, LampWallUp, Layers, Maximize2, MousePointer2, Pause, PenLine, Play, Plus, Redo2, Ruler, Route, RotateCcw, Save, Scissors, Settings2, Sparkles, Spline, Square, Sun, SunMoon, Trash2, Undo2, Waves } from "lucide-react";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -17,9 +17,9 @@ import {
   clearFloatingTerminalJoints,
   canSolderRoutes,
   clamp,
-  clampViewport,
   deleteChannelPoint as deleteChannelPointPath,
   deletePolygonPoint,
+  detachSolderedRoutePoint,
   findMatchingControllerPort,
   findMatchingSolderTerminal,
   findNearbyControllerPort,
@@ -31,6 +31,7 @@ import {
   moveRoutePoint,
   moveRouteTerminals,
   movedShape,
+  nextDesignerItemNumber,
   nearestRouteInsertIndex,
   rectanglePoints,
   resolveRouteOutputs,
@@ -50,10 +51,12 @@ import {
 import { DesignerStudioCanvas, type DesignerAnimationDiffuser, type DesignerAnimationPixel } from "./designer/designer-paper-canvas";
 import { DEFAULT_DIFFUSER_RENDER_SETTINGS, DesignerWebglPlayer, type DiffuserRenderSettings } from "./designer/designer-webgl-player";
 import { DesignerLayersPanel, NodeTypePicker, ToolbarField, ToolbarNumber, ToolButton } from "./designer/designer-ui";
-import type { DesignerActiveLayer, DesignerRouteTerminal, DesignerSelection, DesignerTool, DesignerViewport } from "./designer/types";
+import { designerLayerForSelection, designerSelectionForClipTarget, type DesignerActiveLayer, type DesignerRouteTerminal, type DesignerSelection, type DesignerTool, type DesignerViewport } from "./designer/types";
 import type { EffectDefinition, EffectParameterDefinition } from "@/lib/lighting/effect-catalog";
+import { installClientDebugHandlers, recordClientDebug } from "@/lib/client-debug";
 import {
   clonePartituraDocument,
+  createDefaultOpticalTreatment,
   createClipIdentity,
   ClipParams,
   ClipForm,
@@ -65,11 +68,14 @@ import {
   DesignerGroupForm,
   DesignerLayerSettings,
   DesignerLayersForm,
+  DesignerOpticalMode,
+  DesignerOpticalTreatment,
   DesignerPoint,
   DesignerPointNodeType,
   DesignerRouteKind,
   DesignerRouteForm,
   DesignerZoneForm,
+  nextEmptyClipLayer,
   normalizeDefaultSignLayout,
   PartituraDocument,
   PersistedPartitura,
@@ -94,6 +100,15 @@ type ApiResult = {
 };
 
 type EffectCatalog = Record<string, EffectDefinition>;
+
+type DesignerHistoryEntry = {
+  document: PartituraDocument;
+  selection: DesignerSelection;
+};
+
+type OpticalTargetRef = { type: "zone" | "channel"; id: string };
+
+const DESIGNER_HISTORY_LIMIT = 100;
 
 type Preview = {
   sceneId: string;
@@ -120,11 +135,106 @@ const tabs = [
   { id: "simulator", label: "Simulator" }
 ];
 const GENERATED_PARTITURA_UNSPECIFIED = Symbol("generated-partitura-unspecified");
+const ACTIVE_LAYER_LABELS: Record<DesignerActiveLayer, string> = {
+  artwork: "Artwork",
+  reference: "Reference",
+  zones: "Zones",
+  lightSources: "Light Sources",
+  hardware: "Hardware",
+  strings: "Strings"
+};
+
+const DESIGNER_TOOL_LABELS: Record<DesignerTool, string> = {
+  select: "Select",
+  pan: "Pan",
+  measure: "Measure",
+  image_place: "Image",
+  build_area_rect: "Rectangle reference",
+  build_area_ellipse: "Ellipse reference",
+  build_area_polygon: "Polygon reference",
+  build_area_bezier: "Bezier reference",
+  zone_rect: "Rectangle zone",
+  zone_ellipse: "Ellipse zone",
+  zone_polygon: "Polygon zone",
+  zone_bezier: "Bezier zone",
+  channel_bezier: "Channel",
+  led_string: "LED string",
+  data_cable: "Data cable",
+  cut: "Cut route"
+};
+
+function MeasuringTapeIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
+      <path d="M4 16V8a5 5 0 0 1 5-5h3a5 5 0 0 1 5 5v8" />
+      <path d="M4 16h13v5H7a3 3 0 0 1-3-3v-2Z" />
+      <circle cx="10.5" cy="10" r="2" />
+      <path d="M17 16h4v5h-4M19 16v2M8 18v3M11 18v2M14 18v3" />
+    </svg>
+  );
+}
+
+function LightingSetupIndicators({ treatments }: { treatments: DesignerOpticalTreatment[] }) {
+  const configured = treatments.filter((treatment) => treatment.enabled && treatment.stringIds.length > 0);
+  const hasDraft = treatments.some((treatment) => treatment.enabled && treatment.stringIds.length === 0);
+  const uniqueModes = configured.filter((treatment, index) => configured.findIndex((candidate) => candidate.mode === treatment.mode) === index);
+  const frontMaterials = configured
+    .filter((treatment) => treatment.mode === "front")
+    .filter((treatment, index, entries) => entries.findIndex((candidate) => candidate.material === treatment.material) === index);
+
+  const modeMeta = {
+    front: { label: "Front", icon: Sun },
+    halo: { label: "Halo-Lit", icon: CircleDotDashed },
+    wall_wash: { label: "Wall Washer", icon: LampWallUp }
+  } satisfies Record<DesignerOpticalMode, { label: string; icon: React.ComponentType<{ className?: string }> }>;
+  const materialMeta: Record<DesignerOpticalTreatment["material"], { label: string; icon: React.ComponentType<{ className?: string }> }> = {
+    none: { label: "LED Pixels", icon: Grid2X2 },
+    silicone: { label: "Silicone Strip", icon: Waves },
+    milky_white: { label: "Milky White", icon: Cloud },
+    day_night: { label: "Day/Night", icon: SunMoon },
+    opaque: { label: "Opaque", icon: Square }
+  };
+
+  if (!uniqueModes.length && !hasDraft) return <span className="text-body-sm text-muted-foreground">No lighting setup</span>;
+  return (
+    <div className="flex items-center gap-1" aria-label="Lighting setup status">
+      {uniqueModes.map((treatment) => {
+        const meta = modeMeta[treatment.mode];
+        const Icon = meta.icon;
+        return <span key={treatment.mode} title={`${meta.label} configured`} className="flex h-7 w-7 items-center justify-center rounded border border-amber-400/70 bg-amber-400/10 text-amber-600"><Icon className="h-4 w-4" /></span>;
+      })}
+      {frontMaterials.length ? <div className="mx-1 h-5 w-px bg-border" /> : null}
+      {frontMaterials.map((treatment) => {
+        const meta = materialMeta[treatment.material];
+        const Icon = meta.icon;
+        return <span key={treatment.material} title={`Front material: ${meta.label}`} className="flex h-7 w-7 items-center justify-center rounded border border-border-2 bg-card text-muted-foreground"><Icon className="h-4 w-4" /></span>;
+      })}
+      {hasDraft ? <span title="Lighting setup incomplete: assign an LED string" className="flex h-7 w-7 items-center justify-center rounded border border-amber-500/50 bg-amber-500/10 text-amber-600"><AlertCircle className="h-4 w-4" /></span> : null}
+    </div>
+  );
+}
+
+function designerToolInstruction(tool: DesignerTool) {
+  if (tool === "select") return "Click an object to edit its properties";
+  if (tool === "pan") return "Drag the canvas to move the view";
+  if (tool === "measure") return "Drag between two points to measure";
+  if (tool === "image_place") return "Drag on the canvas to place the image container";
+  if (tool === "build_area_rect" || tool === "build_area_ellipse" || tool === "zone_rect" || tool === "zone_ellipse") return "Drag on the canvas to create it";
+  if (tool === "build_area_polygon" || tool === "build_area_bezier" || tool === "zone_polygon" || tool === "zone_bezier" || tool === "channel_bezier") return "Click to add nodes and close the path to finish";
+  if (tool === "led_string" || tool === "data_cable") return "Click to draw the route";
+  return "Click a route point to split it";
+}
+
+function persistedDocumentSignature(document: PartituraDocument) {
+  const { previewTimeMs: _previewTimeMs, ...persistedDocument } = document;
+  return JSON.stringify(persistedDocument);
+}
 
 export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura: PersistedPartitura }) {
   const [partitura, setPartitura] = useState(initialPartitura);
   const [document, setDocument] = useState<PartituraDocument>(() => normalizeDefaultSignLayout(initialPartitura.document));
   const documentRef = useRef<PartituraDocument>(document);
+  const savedDocumentSignatureRef = useRef(persistedDocumentSignature(document));
   const generatedPartituraStaleRef = useRef(false);
   const [saving, setSaving] = useState(false);
   const [editorMode, setEditorMode] = useState<"design" | "animate">("design");
@@ -136,6 +246,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
   const [animationViewerOpen, setAnimationViewerOpen] = useState(false);
   const [animationViewerViewport, setAnimationViewerViewport] = useState<DesignerViewport | null>(null);
   const animationResultRef = useRef<ApiResult | null>(null);
+  const animationGenerationIdRef = useRef(0);
   const animationRequestInFlightRef = useRef(false);
   const animationLastRequestRef = useRef(0);
   const animationStartRef = useRef<number | null>(null);
@@ -145,13 +256,21 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
   // panel. Until then the canvas must not select or drag any object.
   const [activeLayer, setActiveLayer] = useState<DesignerActiveLayer | null>(null);
   const [selection, setSelection] = useState<DesignerSelection>(null);
+  const [opticalTargetSelection, setOpticalTargetSelection] = useState<OpticalTargetRef[]>([]);
+  const undoHistoryRef = useRef<DesignerHistoryEntry[]>([]);
+  const redoHistoryRef = useRef<DesignerHistoryEntry[]>([]);
+  const historyInteractionIdRef = useRef(0);
+  const historyRecordedInteractionRef = useRef<number | null>(null);
+  const [, setHistoryRevision] = useState(0);
   const [clipboard, setClipboard] = useState<DesignerSelection>(null);
   const [fabricationNotice, setFabricationNotice] = useState("Ready");
   const [compileIssuesOpen, setCompileIssuesOpen] = useState(false);
   const [viewport, setViewport] = useState<DesignerViewport | null>(null);
   const [layersPanelOpen, setLayersPanelOpen] = useState(true);
-  const [animationTimelineHeight, setAnimationTimelineHeight] = useState(360);
-  const [animationDiffuser, setAnimationDiffuser] = useState<DesignerAnimationDiffuser>("none");
+  const [lightingEditorOpen, setLightingEditorOpen] = useState(false);
+  const [animationTimelineHeight, setAnimationTimelineHeight] = useState(260);
+  const [animationTimelineCollapsed, setAnimationTimelineCollapsed] = useState(false);
+  const [animationDiffuser, setAnimationDiffuser] = useState<DesignerAnimationDiffuser>("as_built");
   const [diffuserSettings, setDiffuserSettings] = useState<DiffuserRenderSettings>(DEFAULT_DIFFUSER_RENDER_SETTINGS);
   const [projectAssets, setProjectAssets] = useState<ProjectAsset[]>([]);
   const [assetsVersion, setAssetsVersion] = useState(0);
@@ -162,9 +281,34 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
     documentRef.current = document;
   }, [document]);
 
+  useEffect(() => installClientDebugHandlers(), []);
+
+  useEffect(() => {
+    const beginPointerInteraction = () => {
+      historyInteractionIdRef.current += 1;
+    };
+    window.addEventListener("pointerdown", beginPointerInteraction, true);
+    return () => window.removeEventListener("pointerdown", beginPointerInteraction, true);
+  }, []);
+
   useEffect(() => {
     animationResultRef.current = animationResult;
   }, [animationResult]);
+
+  useEffect(() => {
+    if (editorMode !== "animate") {
+      setLightingEditorOpen(false);
+      return;
+    }
+    if (selection?.type === "zone" || selection?.type === "channel" || selection?.type === "light_source") setLightingEditorOpen(true);
+  }, [editorMode]);
+
+  useEffect(() => {
+    const fitTimelineToViewport = () => setAnimationTimelineHeight((current) => Math.min(current, maximumTimelineHeight(window.innerHeight)));
+    fitTimelineToViewport();
+    window.addEventListener("resize", fitTimelineToViewport);
+    return () => window.removeEventListener("resize", fitTimelineToViewport);
+  }, []);
 
   useEffect(() => {
     if (!animationPlaying || editorMode !== "animate") return;
@@ -206,20 +350,49 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
       cancelled = true;
       cancelAnimationFrame(frame);
     };
-  }, [animationPlaying, document.activeSceneId, document.scenes, editorMode]);
+  }, [animationPlaying, animationResult?.partitura, document.activeSceneId, document.scenes, editorMode]);
   const designerState = document.designer;
   if (!designerState) return null;
   const designer: DesignerForm = designerState;
   const selectedArtwork = selection?.type === "artwork" ? designer.artwork.find((artwork) => artwork.id === selection.id) ?? null : null;
   const selectedBuildArea = selection?.type === "build_area" ? designer.buildAreas.find((buildArea) => buildArea.id === selection.id) ?? null : null;
   const selectedBuildAreaPointIndex = selection?.type === "build_area" ? selection.pointIndex : undefined;
-  const selectedZone = selection?.type === "zone" ? designer.zones.find((zone) => zone.id === selection.id) ?? null : null;
+  const selectedLightSource = selection?.type === "light_source" ? designer.lightSources.find((source) => source.id === selection.id) ?? null : null;
+  const selectedZone = selection?.type === "zone" ? designer.zones.find((zone) => zone.id === selection.id) ?? null : selectedLightSource?.targetType === "zone" ? designer.zones.find((zone) => zone.id === selectedLightSource.targetId) ?? null : null;
   const selectedZonePointIndex = selection?.type === "zone" ? selection.pointIndex : undefined;
-  const selectedChannel = selection?.type === "channel" ? designer.channels.find((channel) => channel.id === selection.id) ?? null : null;
+  const selectedChannel = selection?.type === "channel" ? designer.channels.find((channel) => channel.id === selection.id) ?? null : selectedLightSource?.targetType === "channel" ? designer.channels.find((channel) => channel.id === selectedLightSource.targetId) ?? null : null;
   const selectedChannelPointIndex = selection?.type === "channel" ? selection.pointIndex : undefined;
   const selectedRoute = selection?.type === "route" ? designer.routes.find((route) => route.id === selection.id) ?? null : null;
   const selectedRoutePointIndex = selection?.type === "route" ? selection.pointIndex : undefined;
   const selectedController = selection?.type === "controller" ? designer.controller : null;
+  const selectedObjectLocked = selection?.type === "artwork" || selection?.type === "build_area"
+    ? designer.layers.artwork.locked
+    : selection?.type === "zone" || selection?.type === "channel"
+      ? designer.layers.zones.locked
+      : selection?.type === "light_source"
+        ? designer.layers.lightSources.locked
+        : selection?.type === "route"
+          ? designer.layers.strings.locked
+          : selection?.type === "controller"
+            ? designer.layers.hardware.locked
+            : false;
+  const selectedOpticalTarget = selectedZone ? { type: "zone" as const, id: selectedZone.id } : selectedChannel ? { type: "channel" as const, id: selectedChannel.id } : null;
+  const selectedOpticalTargets = (opticalTargetSelection.length ? opticalTargetSelection : selectedOpticalTarget ? [selectedOpticalTarget] : [])
+    .filter((target) => target.type === "zone" ? designer.zones.some((zone) => zone.id === target.id) : designer.channels.some((channel) => channel.id === target.id));
+  const selectedOpticalTargetEntries = selectedOpticalTargets.map((target) => ({
+    ...target,
+    name: target.type === "zone"
+      ? designer.zones.find((zone) => zone.id === target.id)?.name ?? target.id
+      : designer.channels.find((channel) => channel.id === target.id)?.name ?? target.id,
+    treatments: designer.lightSources.filter((source) => source.targetType === target.type && source.targetId === target.id)
+  }));
+  const selectedOpticalTreatments = selectedOpticalTarget
+    ? designer.lightSources.filter((treatment) => treatment.targetType === selectedOpticalTarget.type && treatment.targetId === selectedOpticalTarget.id)
+    : [];
+  const selectedAnimationTargetId = selectedLightSource?.id
+    ?? (selectedOpticalTarget ? designer.lightSources.find((source) => source.targetType === selectedOpticalTarget.type && source.targetId === selectedOpticalTarget.id && source.mode === "front")?.id
+      ?? designer.lightSources.find((source) => source.targetType === selectedOpticalTarget.type && source.targetId === selectedOpticalTarget.id)?.id
+      ?? selectedOpticalTarget.id : undefined);
   const routeSummaries = designer.routes.map((route) => summarizeRoute(route, designer));
   const routeOutputs = resolveRouteOutputs(designer.controller, designer.routes, designer.snapCm);
   const totalGeneratedPixels = routeSummaries.reduce((total, route) => total + route.pixels, 0);
@@ -230,6 +403,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
   const compileWarnings = document.compiledLayout?.validation.warnings ?? [];
   const compileIssueCount = compileErrors.length + compileWarnings.length;
   const canAnimate = compileIsCurrent && compileErrors.length === 0;
+  const hasUnsavedChanges = persistedDocumentSignature(document) !== savedDocumentSignatureRef.current;
 
   useEffect(() => {
     if (viewport) return;
@@ -264,7 +438,21 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       const target = event.target as HTMLElement | null;
+      const key = event.key.toLowerCase();
+      const modifier = event.ctrlKey || event.metaKey;
+      if (modifier && key === "z") {
+        event.preventDefault();
+        if (event.shiftKey) redoDesignerChange();
+        else undoDesignerChange();
+        return;
+      }
+      if (modifier && key === "y") {
+        event.preventDefault();
+        redoDesignerChange();
+        return;
+      }
       if (target && ["INPUT", "SELECT", "TEXTAREA"].includes(target.tagName)) return;
+      historyInteractionIdRef.current += 1;
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "c") {
         event.preventDefault();
         copySelection();
@@ -301,7 +489,53 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
     setDocument(nextDocument);
   }
 
+  function recordDesignerHistory(currentDocument: PartituraDocument) {
+    const interactionId = historyInteractionIdRef.current;
+    if (historyRecordedInteractionRef.current === interactionId) return;
+    undoHistoryRef.current = [
+      ...undoHistoryRef.current.slice(-(DESIGNER_HISTORY_LIMIT - 1)),
+      { document: clonePartituraDocument(currentDocument), selection }
+    ];
+    redoHistoryRef.current = [];
+    historyRecordedInteractionRef.current = interactionId;
+    setHistoryRevision((revision) => revision + 1);
+  }
+
+  function restoreDesignerHistory(entry: DesignerHistoryEntry, notice: "Undo" | "Redo") {
+    const restoredDocument = clonePartituraDocument(entry.document);
+    replaceDocument(restoredDocument);
+    setSelection(entry.selection);
+    discardRuntimeArtifacts();
+    historyInteractionIdRef.current += 1;
+    historyRecordedInteractionRef.current = null;
+    setFabricationNotice(notice);
+    setHistoryRevision((revision) => revision + 1);
+  }
+
+  function undoDesignerChange() {
+    const entry = undoHistoryRef.current.at(-1);
+    if (!entry) return;
+    undoHistoryRef.current = undoHistoryRef.current.slice(0, -1);
+    redoHistoryRef.current = [
+      ...redoHistoryRef.current.slice(-(DESIGNER_HISTORY_LIMIT - 1)),
+      { document: clonePartituraDocument(documentRef.current), selection }
+    ];
+    restoreDesignerHistory(entry, "Undo");
+  }
+
+  function redoDesignerChange() {
+    const entry = redoHistoryRef.current.at(-1);
+    if (!entry) return;
+    redoHistoryRef.current = redoHistoryRef.current.slice(0, -1);
+    undoHistoryRef.current = [
+      ...undoHistoryRef.current.slice(-(DESIGNER_HISTORY_LIMIT - 1)),
+      { document: clonePartituraDocument(documentRef.current), selection }
+    ];
+    restoreDesignerHistory(entry, "Redo");
+  }
+
   function discardRuntimeArtifacts() {
+    animationGenerationIdRef.current += 1;
     animationResultRef.current = null;
     generatedPartituraStaleRef.current = true;
     setAnimationResult(null);
@@ -311,8 +545,10 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
     ));
   }
 
-  function updateLiveDocument(updater: (current: PartituraDocument) => PartituraDocument, options: { invalidateRuntime?: boolean } = {}) {
+  function updateLiveDocument(updater: (current: PartituraDocument) => PartituraDocument, options: { invalidateRuntime?: boolean; recordHistory?: boolean } = {}) {
     const nextDocument = updater(documentRef.current);
+    if (nextDocument === documentRef.current) return nextDocument;
+    if (options.recordHistory !== false) recordDesignerHistory(documentRef.current);
     documentRef.current = nextDocument;
     setDocument(nextDocument);
     if (options.invalidateRuntime) discardRuntimeArtifacts();
@@ -341,7 +577,9 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
       if (payload.partitura) {
         generatedPartituraStaleRef.current = false;
         setPartitura(payload.partitura);
-        replaceDocument(clonePartituraDocument(payload.partitura.document));
+        const savedDocument = clonePartituraDocument(payload.partitura.document);
+        savedDocumentSignatureRef.current = persistedDocumentSignature(savedDocument);
+        replaceDocument(savedDocument);
       }
     } finally {
       setSaving(false);
@@ -487,8 +725,40 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
     if (nextId !== previousId) setSelection({ type: "build_area", id: nextId });
   }
 
-  function selectDesignerItem(nextSelection: DesignerSelection) {
+  function selectDesignerItem(nextSelection: DesignerSelection, additive = false) {
+    // Empty-space drags are used to pan/zoom in Animate. Keep the current
+    // optical target selected so its properties panel does not disappear.
+    if (editorMode === "animate" && nextSelection === null) return;
+    if (editorMode === "animate") {
+      const source = nextSelection?.type === "light_source" ? designer.lightSources.find((entry) => entry.id === nextSelection.id) : null;
+      const opticalTarget: OpticalTargetRef | null = nextSelection?.type === "zone" || nextSelection?.type === "channel"
+        ? { type: nextSelection.type, id: nextSelection.id }
+        : source ? { type: source.targetType, id: source.targetId } : null;
+      if (opticalTarget && additive) {
+        const base = opticalTargetSelection.length ? opticalTargetSelection : selectedOpticalTarget ? [selectedOpticalTarget] : [];
+        const exists = base.some((target) => target.type === opticalTarget.type && target.id === opticalTarget.id);
+        const nextTargets = exists
+          ? base.filter((target) => target.type !== opticalTarget.type || target.id !== opticalTarget.id)
+          : [...base, opticalTarget];
+        setOpticalTargetSelection(nextTargets);
+        const primary = nextTargets.at(-1);
+        setSelection(primary ? { type: primary.type, id: primary.id } : null);
+        setLightingEditorOpen(Boolean(primary));
+        return;
+      }
+      setOpticalTargetSelection(opticalTarget ? [opticalTarget] : []);
+    } else {
+      setOpticalTargetSelection([]);
+      const selectionLayer = designerLayerForSelection(nextSelection);
+      if (selectionLayer) {
+        setActiveLayer(selectionLayer);
+        setLayersPanelOpen(true);
+      }
+    }
     setSelection(nextSelection);
+    if (editorMode === "animate") {
+      setLightingEditorOpen(nextSelection?.type === "zone" || nextSelection?.type === "channel" || nextSelection?.type === "light_source");
+    }
   }
 
   function activateDesignerLayer(layer: DesignerActiveLayer) {
@@ -497,8 +767,13 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
     setSelection(null);
   }
 
+  function openLightingSetup(target: OpticalTargetRef) {
+    selectDesignerItem({ type: target.type, id: target.id });
+    setLightingEditorOpen(true);
+  }
+
   function patchController(patch: Partial<DesignerControllerForm>) {
-    if (designer.layers.strings.locked) return;
+    if (designer.layers.hardware.locked) return;
     updateDesigner({ ...designer, controller: { ...designer.controller, ...patch, id: "controller" } });
   }
 
@@ -536,7 +811,11 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
   }
 
   function removeChannel(channelId: string) {
-    updateDesigner({ ...designer, channels: designer.channels.filter((channel) => channel.id !== channelId) });
+    updateDesigner({
+      ...designer,
+      channels: designer.channels.filter((channel) => channel.id !== channelId),
+      lightSources: designer.lightSources.filter((source) => !(source.targetType === "channel" && source.targetId === channelId))
+    });
     setSelection(null);
     setFabricationNotice("Channel deleted.");
   }
@@ -590,56 +869,6 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
     setActiveLayer("zones");
     setTool("select");
     setSelection({ type: "zone", id: zoneId });
-  }
-
-  function addZone(shape: DesignerZoneForm["shape"] = "rect") {
-    const next = designer.zones.length + 1;
-    const defaultWidth = Math.max(8, Math.round(activeViewport.width * 0.22));
-    const defaultHeight = Math.max(6, Math.round(activeViewport.height * 0.22));
-    const width = shape === "ellipse" ? Math.max(defaultWidth, defaultHeight) : defaultWidth;
-    const height = shape === "ellipse" ? width : defaultHeight;
-    const zone = {
-      id: `zone_${next}`,
-      name: `Zone ${next}`,
-      shape,
-      x: snapValue(activeViewport.x + activeViewport.width / 2 - width / 2, designer.snapCm),
-      y: snapValue(activeViewport.y + activeViewport.height / 2 - height / 2, designer.snapCm),
-      width,
-      height,
-      visible: true,
-      locked: false,
-      opacity: 1
-    };
-    updateDesigner({
-      ...designer,
-      zones: [...designer.zones, zone]
-    });
-    setSelection({ type: "zone", id: zone.id });
-    setTool("select");
-  }
-
-  function addBuildArea(shape: DesignerBuildAreaForm["shape"] = "rect") {
-    if (designer.layers.artwork.locked) return;
-    const next = designer.buildAreas.length + 1;
-    const defaultWidth = Math.max(12, Math.round(activeViewport.width * 0.28));
-    const defaultHeight = Math.max(8, Math.round(activeViewport.height * 0.28));
-    const width = shape === "ellipse" ? Math.max(defaultWidth, defaultHeight) : defaultWidth;
-    const height = shape === "ellipse" ? width : defaultHeight;
-    const buildArea: DesignerBuildAreaForm = {
-      id: `build_area_${next}`,
-      name: next === 1 ? "Build Area" : `Build Area ${next}`,
-      shape,
-      x: snapValue(activeViewport.x + activeViewport.width / 2 - width / 2, designer.snapCm),
-      y: snapValue(activeViewport.y + activeViewport.height / 2 - height / 2, designer.snapCm),
-      width,
-      height,
-      visible: true,
-      locked: false,
-      opacity: 1
-    };
-    updateDesigner({ ...designer, buildAreas: [...designer.buildAreas, buildArea] });
-    setSelection({ type: "build_area", id: buildArea.id });
-    setTool("select");
   }
 
   function updateBuildAreaPoint(buildAreaId: string, pointIndex: number, patch: Partial<DesignerPoint>) {
@@ -806,6 +1035,21 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
     setTool("select");
   }
 
+  function detachSelectedRoutePoint() {
+    if (!selectedRoute || typeof selectedRoutePointIndex !== "number") return;
+    const result = detachSolderedRoutePoint(
+      designer.routes,
+      designer.controller,
+      selectedRoute.id,
+      selectedRoutePointIndex,
+      designer.snapCm
+    );
+    if (!result.changed) return;
+    updateDesigner({ ...designer, routes: result.routes });
+    setSelection({ type: "route", id: result.routeId, pointIndex: result.pointIndex });
+    setFabricationNotice("Solder joint detached; routes were preserved.");
+  }
+
   function autoSolderRoutePoint(routeId: string, pointIndex: number, finalPoint?: DesignerPoint) {
     const routes = finalPoint ? moveRoutePoint(designer.routes, routeId, pointIndex, finalPoint) : designer.routes;
     const route = routes.find((entry) => entry.id === routeId);
@@ -927,12 +1171,17 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
         deleteBuildAreaPoint(selection.id, selection.pointIndex);
         return;
       }
-      updateDesigner({ ...designer, buildAreas: designer.buildAreas.filter((buildArea) => buildArea.id !== selection.id) });
+      updateDesigner({
+        ...designer,
+        buildAreas: designer.buildAreas.filter((buildArea) => buildArea.id !== selection.id),
+        lightSources: designer.lightSources.map((source) => source.receiverType === "build_area" && source.receiverId === selection.id ? { ...source, receiverType: "canvas", receiverId: undefined } : source)
+      });
       setSelection(null);
       return;
     }
     if (selection.type === "zone" && designer.layers.zones.locked) return;
     if (selection.type === "channel" && designer.layers.zones.locked) return;
+    if (selection.type === "light_source" && designer.layers.lightSources.locked) return;
     if (selection.type === "route" && designer.layers.strings.locked) return;
     if (selection.type === "zone" && typeof selection.pointIndex === "number") {
       deleteZonePoint(selection.id, selection.pointIndex);
@@ -947,6 +1196,9 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
       updateDesigner({
         ...designer,
         zones,
+        lightSources: designer.lightSources
+          .filter((source) => !(source.targetType === "zone" && source.targetId === selection.id))
+          .map((source) => source.receiverType === "zone" && source.receiverId === selection.id ? { ...source, receiverType: "canvas", receiverId: undefined } : source),
         groups: (designer.groups ?? []).map((group) => ({
           ...group,
           members: group.members.filter((member) => !(member.type === "zone" && member.id === selection.id))
@@ -956,6 +1208,11 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
     }
     if (selection.type === "channel") {
       removeChannel(selection.id);
+      return;
+    }
+    if (selection.type === "light_source") {
+      updateDesigner({ ...designer, lightSources: designer.lightSources.filter((source) => source.id !== selection.id) });
+      setSelection(null);
       return;
     }
     if (selection.type === "route" && typeof selection.pointIndex === "number") {
@@ -968,7 +1225,11 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
         designer.controller,
         designer.snapCm
       );
-      updateDesigner({ ...designer, routes });
+      updateDesigner({
+        ...designer,
+        routes,
+        lightSources: designer.lightSources.map((source) => ({ ...source, stringIds: source.stringIds.filter((id) => id !== selection.id) }))
+      });
       setSelection(null);
     }
   }
@@ -991,7 +1252,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
     if (clipboard.type === "zone") {
       const source = designer.zones.find((zone) => zone.id === clipboard.id);
       if (!source) return;
-      const next = designer.zones.length + 1;
+      const next = nextDesignerItemNumber(designer.zones, `${source.id}_copy_`);
       const copy = { ...source, id: `${source.id}_copy_${next}`, name: `${source.name} Copy`, x: source.x + designer.snapCm, y: source.y + designer.snapCm };
       updateDesigner({ ...designer, zones: [...designer.zones, copy] });
       setSelection({ type: "zone", id: copy.id });
@@ -1004,20 +1265,6 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
       updateDesigner({ ...designer, routes: [...designer.routes, copy] });
       setSelection({ type: "route", id: copy.id });
     }
-  }
-
-  function zoom(factor: number) {
-    setViewport((current) => {
-      const base = current ?? activeViewport;
-      const width = clamp(base.width * factor, designer.canvasWidthCm * 0.08, designer.canvasWidthCm * 2);
-      const height = clamp(base.height * factor, designer.canvasHeightCm * 0.08, designer.canvasHeightCm * 2);
-      return clampViewport({
-        x: clamp(base.x + (base.width - width) / 2, -designer.canvasWidthCm, designer.canvasWidthCm),
-        y: clamp(base.y + (base.height - height) / 2, -designer.canvasHeightCm, designer.canvasHeightCm),
-        width,
-        height
-      }, designer);
-    });
   }
 
   function zoomToFit() {
@@ -1046,7 +1293,9 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
     void previewAnimationAt(0);
   }
 
-  async function previewAnimation(sourceDocument = documentRef.current) {
+  async function previewAnimation(sourceDocument = documentRef.current, options: { play?: boolean } = {}) {
+    const generationId = ++animationGenerationIdRef.current;
+    const shouldPlay = options.play ?? true;
     setAnimationGenerating(true);
     try {
       const compiledDocument = normalizeDefaultSignLayout(sourceDocument);
@@ -1068,25 +1317,26 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
         body: JSON.stringify(previewDocument)
       });
       const payload = (await response.json()) as ApiResult;
+      if (generationId !== animationGenerationIdRef.current) return;
       animationResultRef.current = payload;
       setAnimationResult(payload);
       if (payload.ok) {
         setAnimationPlayerOpen(false);
-        setAnimationPlaying(true);
+        setAnimationPlaying(shouldPlay);
         setFabricationNotice(`Animation running: ${payload.preview?.pixelCount ?? 0} mapped pixels.`);
       } else {
         setAnimationPlaying(false);
         setFabricationNotice(payload.message ?? payload.validation?.errors[0]?.message ?? "Animation generation failed.");
       }
     } finally {
-      setAnimationGenerating(false);
+      if (generationId === animationGenerationIdRef.current) setAnimationGenerating(false);
     }
   }
 
   async function previewAnimationAt(timeMs: number) {
     const nextTimeMs = Math.max(0, Math.round(timeMs));
     setAnimationPlaying(false);
-    const previewDocument = updateLiveDocument((current) => ({ ...current, previewTimeMs: nextTimeMs }));
+    const previewDocument = updateLiveDocument((current) => ({ ...current, previewTimeMs: nextTimeMs }), { recordHistory: false });
     const current = animationResultRef.current;
     if (!current?.ok || !current.partitura) return;
     try {
@@ -1105,9 +1355,10 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
   function beginAnimationTimelineResize(event: React.PointerEvent<HTMLDivElement>) {
     event.preventDefault();
     const startY = event.clientY;
-    const startHeight = animationTimelineHeight;
+    const startHeight = Math.min(animationTimelineHeight, maximumTimelineHeight(window.innerHeight));
+    setAnimationTimelineCollapsed(false);
     const move = (moveEvent: PointerEvent) => {
-      setAnimationTimelineHeight(Math.min(560, Math.max(220, startHeight - (moveEvent.clientY - startY))));
+      setAnimationTimelineHeight(Math.min(maximumTimelineHeight(window.innerHeight), Math.max(140, startHeight - (moveEvent.clientY - startY))));
     };
     const end = () => {
       window.removeEventListener("pointermove", move);
@@ -1119,19 +1370,128 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
     window.addEventListener("pointercancel", end, { once: true });
   }
 
-  function patchDiffuserSettings(patch: Partial<DiffuserRenderSettings>) {
-    setDiffuserSettings((current) => ({
-      diffuserDistanceCm: clamp(patch.diffuserDistanceCm ?? current.diffuserDistanceCm, 0.5, 20),
-      intensity: clamp(patch.intensity ?? current.intensity, 0, 3),
-      afterZoneEffectCm: clamp(patch.afterZoneEffectCm ?? current.afterZoneEffectCm, 0, 6),
-      afterZoneOpacity: clamp(patch.afterZoneOpacity ?? current.afterZoneOpacity, 0, 1),
-      showOutlines: patch.showOutlines ?? current.showOutlines
-    }));
+  function patchOpticalTreatment(treatmentId: string, patch: Partial<DesignerOpticalTreatment>) {
+    recordClientDebug("optical_treatment_patch", {
+      target: selectedOpticalTarget ? `${selectedOpticalTarget.type}:${selectedOpticalTarget.id}` : null,
+      treatmentId,
+      patch
+    });
+    updateLiveDocument((current) => {
+      const currentDesigner = current.designer ?? designer;
+      return {
+        ...current,
+        designer: {
+          ...currentDesigner,
+          lightSources: currentDesigner.lightSources.map((treatment) => treatment.id === treatmentId ? { ...treatment, ...patch } : treatment)
+        }
+      };
+    });
+  }
+
+  function addOpticalTreatment(mode: DesignerOpticalMode) {
+    if (!selectedOpticalTarget || selectedOpticalTreatments.some((treatment) => treatment.mode === mode)) return;
+    const treatment = {
+      ...createDefaultOpticalTreatment(selectedOpticalTarget.type, selectedOpticalTarget.id, mode),
+      name: `${selectedZone?.name ?? selectedChannel?.name ?? selectedOpticalTarget.id} · ${mode === "front" ? "Front" : mode === "halo" ? "Halo" : "Wall Wash"}`,
+      stringIds: Array.from(new Set((document.compiledLayout?.zones.find((zone) => zone.id === selectedOpticalTarget.id)?.pixelIds ?? [])
+        .map((pixelId) => document.compiledLayout?.pixelMap.find((pixel) => pixel.id === pixelId)?.stringId)
+        .filter((stringId): stringId is string => Boolean(stringId))))
+    };
+    updateLiveDocument((current) => {
+      const currentDesigner = current.designer ?? designer;
+      if (currentDesigner.lightSources.some((entry) => entry.id === treatment.id)) return current;
+      return { ...current, designer: { ...currentDesigner, lightSources: [...currentDesigner.lightSources, treatment] } };
+    });
+  }
+
+  function removeOpticalTreatment(treatmentId: string) {
+    updateLiveDocument((current) => {
+      const currentDesigner = current.designer ?? designer;
+      return { ...current, designer: { ...currentDesigner, lightSources: currentDesigner.lightSources.filter((treatment) => treatment.id !== treatmentId) } };
+    });
+  }
+
+  function setSelectedOpticalMode(mode: DesignerOpticalMode, enabled: boolean) {
+    if (!selectedOpticalTargets.length) return;
+    const selectedKeys = new Set(selectedOpticalTargets.map((target) => `${target.type}:${target.id}`));
+    updateLiveDocument((current) => {
+      const currentDesigner = current.designer ?? designer;
+      const existingKeys = new Set<string>();
+      const lightSources = currentDesigner.lightSources.map((source) => {
+        const key = `${source.targetType}:${source.targetId}`;
+        if (source.mode !== mode || !selectedKeys.has(key)) return source;
+        existingKeys.add(key);
+        return source.enabled === enabled ? source : { ...source, enabled };
+      });
+      if (enabled) {
+        selectedOpticalTargets.forEach((target) => {
+          const key = `${target.type}:${target.id}`;
+          if (existingKeys.has(key)) return;
+          const targetName = target.type === "zone"
+            ? currentDesigner.zones.find((zone) => zone.id === target.id)?.name
+            : currentDesigner.channels.find((channel) => channel.id === target.id)?.name;
+          const source = {
+            ...createDefaultOpticalTreatment(target.type, target.id, mode),
+            name: `${targetName ?? target.id} · ${mode === "front" ? "Front" : mode === "halo" ? "Halo" : "Wall Wash"}`,
+            stringIds: Array.from(new Set((current.compiledLayout?.zones.find((zone) => zone.id === target.id)?.pixelIds ?? [])
+              .map((pixelId) => current.compiledLayout?.pixelMap.find((pixel) => pixel.id === pixelId)?.stringId)
+              .filter((stringId): stringId is string => Boolean(stringId))))
+          };
+          lightSources.push(source);
+        });
+      }
+      return { ...current, designer: { ...currentDesigner, lightSources } };
+    });
+  }
+
+  function patchSelectedOpticalMode(mode: DesignerOpticalMode, patch: Partial<DesignerOpticalTreatment>) {
+    if (!selectedOpticalTargets.length) return;
+    const selectedKeys = new Set(selectedOpticalTargets.map((target) => `${target.type}:${target.id}`));
+    updateLiveDocument((current) => {
+      const currentDesigner = current.designer ?? designer;
+      return {
+        ...current,
+        designer: {
+          ...currentDesigner,
+          lightSources: currentDesigner.lightSources.map((source) => (
+            source.mode === mode && source.enabled && selectedKeys.has(`${source.targetType}:${source.targetId}`)
+              ? { ...source, ...patch }
+              : source
+          ))
+        }
+      };
+    });
   }
 
   function updateAnimationDocument(nextDocument: PartituraDocument) {
+    const hadPreview = Boolean(animationResultRef.current?.ok);
+    const resumePlayback = animationPlaying;
+    const previewTimeMs = animationResultRef.current?.preview?.timeMs ?? nextDocument.previewTimeMs;
+    const clipEnablementChanged = clipEnablementSignature(documentRef.current) !== clipEnablementSignature(nextDocument);
+    if (nextDocument !== documentRef.current) recordDesignerHistory(documentRef.current);
     replaceDocument(nextDocument);
-    discardRuntimeArtifacts();
+    if (hadPreview) {
+      // Structural timeline edits must not compete with the active frame loop.
+      // Pause while the replacement partitura is generated, then resume only
+      // after the new runtime artifact is installed.
+      if (resumePlayback) setAnimationPlaying(false);
+      if (clipEnablementChanged) {
+        // A muted clip must stop contributing immediately. Do not let playback
+        // continue from the previously generated partitura while its replacement
+        // is being rendered.
+        animationResultRef.current = null;
+        setAnimationResult(null);
+      }
+      // Keep the last valid frame visible while regenerating. Clearing it here
+      // made every color edit appear as the renderer's neutral gray fallback.
+      generatedPartituraStaleRef.current = true;
+      setPartitura((current) => (
+        current.generatedPartitura === undefined ? current : { ...current, generatedPartitura: undefined }
+      ));
+      void previewAnimation({ ...nextDocument, previewTimeMs }, { play: resumePlayback });
+    } else {
+      discardRuntimeArtifacts();
+    }
   }
 
   const canCopySelection = Boolean(selection && (selection.type === "artwork" || selection.type === "zone" || selection.type === "route"));
@@ -1141,13 +1501,14 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
     && !(selection?.type === "build_area" && designer.layers.artwork.locked)
     && !(selection?.type === "zone" && designer.layers.zones.locked)
     && !(selection?.type === "channel" && designer.layers.zones.locked)
+    && !(selection?.type === "light_source" && designer.layers.lightSources.locked)
     && !(selection?.type === "route" && designer.layers.strings.locked);
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-background text-foreground">
-      <header className="flex h-14 shrink-0 items-center gap-2 overflow-x-auto border-b border-border-2 bg-card px-3 py-2 whitespace-nowrap">
-        <div className="flex shrink-0 items-center gap-2">
-          <Button asChild variant="outline" type="button" className="h-9 px-3">
+      <header className="relative z-30 flex h-10 shrink-0 items-center gap-2 border-b border-border-2 bg-card px-2 whitespace-nowrap">
+        <div className="flex min-w-0 items-center gap-2">
+          <Button asChild variant="outline" density="compact" type="button" className="shrink-0 px-2">
             <Link href={`/partituras/generator/${encodeURIComponent(partitura.id)}`}>
               <ArrowLeft className="h-4 w-4" />
               Back
@@ -1155,120 +1516,119 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
           </Button>
           <div className="min-w-0 pr-1">
             <div className="max-w-[220px] truncate text-body-sm font-semibold">{partitura.name}</div>
-            <div className="font-mono text-[10px] uppercase text-muted-foreground">{partitura.partituraKey}</div>
           </div>
         </div>
-        {editorMode === "design" ? <><div className="h-8 w-px shrink-0 bg-border" />
-        <ToolbarField label="Ruler" className="shrink-0">
-          <select className="h-8 rounded-md border border-input bg-card px-2 text-body-sm" value={designer.rulerUnit} onChange={(event) => patchDesigner({ rulerUnit: event.target.value as DesignerForm["rulerUnit"] })}>
-            <option value="cm">cm</option>
-            <option value="in">inches</option>
-          </select>
-        </ToolbarField>
-        <label className="flex h-8 shrink-0 items-center gap-2 rounded-md border border-input bg-card px-2 text-body-sm">
-          <input type="checkbox" checked={designer.rulerVisible} onChange={(event) => patchDesigner({ rulerVisible: event.target.checked })} />
-          Ruler
-        </label>
-        <ToolbarNumber label="W" value={designer.canvasWidthCm} suffix="cm" onChange={(canvasWidthCm) => patchDesigner({ canvasWidthCm })} />
-        <ToolbarNumber label="H" value={designer.canvasHeightCm} suffix="cm" onChange={(canvasHeightCm) => patchDesigner({ canvasHeightCm })} />
-        <ToolbarNumber label="Snap" value={designer.snapCm} suffix="cm" onChange={(snapCm) => patchDesigner({ snapCm })} /></> : <div className="ml-2 text-body-sm text-muted-foreground">Animation preview</div>}
-        <div className="ml-auto flex shrink-0 items-center gap-2 pl-2">
-          <ThemeToggle />
-          {editorMode === "design" ? <Button type="button" variant={layersPanelOpen ? "default" : "outline"} title="Layers" className="h-9 px-3" onClick={() => setLayersPanelOpen((open) => !open)}>
-            <Layers className="h-4 w-4" />
-            Layers
-          </Button> : null}
-          {editorMode === "design" ? <><Button type="button" variant="outline" title="Copy" className="h-9 w-9 px-0" disabled={!canCopySelection} onClick={copySelection}>
-            <Copy className="h-4 w-4" />
-          </Button>
-          <Button type="button" variant="outline" title="Paste" className="h-9 px-2" disabled={!clipboard} onClick={pasteSelection}>
-            Paste
-          </Button>
-          <Button type="button" variant="outline" title="Delete" className="h-9 w-9 px-0" disabled={!canDeleteSelection} onClick={deleteSelection}>
-            <Trash2 className="h-4 w-4" />
-          </Button></> : null}
-          <Button type="button" variant="outline" onClick={() => void save()} disabled={saving}>
-            <Save className="h-4 w-4" />
-            {saving ? "Saving" : "Save"}
-          </Button>
-          {editorMode === "design" ? <Button type="button" onClick={compileLayout} disabled={saving}>
-            <Cable className="h-4 w-4" />
-            Compile
-          </Button> : null}
-          {editorMode === "animate" ? (
-            <>
-              <Button type="button" variant="outline" title="Open fullscreen viewer" onClick={openAnimationViewer}>
-                <Maximize2 className="h-4 w-4" />
-                Viewer
-              </Button>
-              <Button type="button" variant="outline" title="Return to design tools" onClick={() => setEditorMode("design")}>
-                <MousePointer2 className="h-4 w-4" />
-                Design
-              </Button>
-            </>
-          ) : canAnimate ? (
-            <Button type="button" title="Open animation timeline" onClick={() => setEditorMode("animate")}>
-              <Play className="h-4 w-4" />
-              Animate
+        <div className="flex h-8 shrink-0 items-center rounded-md border border-input bg-surface-2 p-0.5">
+          <button type="button" className={`flex h-7 items-center gap-1 rounded px-2 text-body-sm ${editorMode === "design" ? "bg-blue-600 text-white" : "text-muted-foreground hover:bg-surface-hover"}`} onClick={() => setEditorMode("design")}>
+            <MousePointer2 className="h-3.5 w-3.5" /> Design
+          </button>
+          <button type="button" disabled={editorMode !== "animate" && !canAnimate} title={!canAnimate && editorMode !== "animate" ? "Compile the current Designer without electrical errors to enable Animate" : "Open animation timeline"} className={`flex h-7 items-center gap-1 rounded px-2 text-body-sm disabled:cursor-not-allowed disabled:opacity-40 ${editorMode === "animate" ? "bg-blue-600 text-white" : "text-muted-foreground hover:bg-surface-hover"}`} onClick={() => setEditorMode("animate")}>
+            <Play className="h-3.5 w-3.5" /> Animate
+          </button>
+        </div>
+
+        <div className="h-7 w-px shrink-0 bg-border" />
+        {editorMode === "design" ? (
+          <>
+            <details className="group relative shrink-0">
+              <summary className="flex h-8 cursor-pointer list-none items-center gap-1.5 rounded-md border border-input bg-card px-2 text-body-sm hover:bg-surface-hover [&::-webkit-details-marker]:hidden">
+                <Settings2 className="h-4 w-4" /> Setup
+              </summary>
+              <div className="absolute left-0 top-10 z-50 w-72 space-y-3 rounded-lg border border-border-2 bg-card p-3 shadow-xl">
+                <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Canvas</div>
+                <ToolbarField label="Units">
+                  <select className="h-8 rounded-md border border-input bg-card px-2 text-body-sm" value={designer.rulerUnit} onChange={(event) => patchDesigner({ rulerUnit: event.target.value as DesignerForm["rulerUnit"] })}>
+                    <option value="cm">cm</option>
+                    <option value="in">inches</option>
+                  </select>
+                </ToolbarField>
+                <div className="flex items-center gap-3">
+                  <ToolbarNumber label="W" value={designer.canvasWidthCm} suffix="cm" onChange={(canvasWidthCm) => patchDesigner({ canvasWidthCm })} />
+                  <ToolbarNumber label="H" value={designer.canvasHeightCm} suffix="cm" onChange={(canvasHeightCm) => patchDesigner({ canvasHeightCm })} />
+                </div>
+                <ToolbarNumber label="Snap" value={designer.snapCm} suffix="cm" onChange={(snapCm) => patchDesigner({ snapCm })} />
+                <div className="border-t border-border pt-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">LED layout</div>
+                <div className="flex items-center gap-3">
+                  <ToolbarNumber label="Pixels/m" value={designer.addressablePixelsPerMeter} onChange={(addressablePixelsPerMeter) => patchDesigner({ addressablePixelsPerMeter, ledDensityPerMeter: addressablePixelsPerMeter })} />
+                  <ToolbarNumber label="LEDs/m" value={designer.ledsPerMeter} onChange={(ledsPerMeter) => patchDesigner({ ledsPerMeter })} />
+                </div>
+              </div>
+            </details>
+            <Button type="button" variant={designer.rulerVisible ? "default" : "outline"} density="compact" className="px-2" title="Show or hide rulers" aria-pressed={designer.rulerVisible} onClick={() => patchDesigner({ rulerVisible: !designer.rulerVisible })}>
+              <Ruler className="h-4 w-4" /><span className="hidden 2xl:inline">Ruler</span>
             </Button>
-          ) : (
-            <Button type="button" disabled title="Compile the current Designer without electrical errors to enable Animate">
-              <Play className="h-4 w-4" />
-              Animate
+            <Button type="button" variant="outline" density="compact" className="px-2" title="Fit canvas to view" aria-label="Fit canvas to view" onClick={zoomToFit}>
+              <Maximize2 className="h-4 w-4" />
             </Button>
-          )}
+            <Button type="button" variant={layersPanelOpen ? "default" : "outline"} density="compact" className="px-2" title={layersPanelOpen ? "Close Layers panel" : "Open Layers panel"} aria-label="Layers" onClick={() => setLayersPanelOpen((open) => !open)}>
+              <Layers className="h-4 w-4" /> <span className="hidden xl:inline">{activeLayer ? ACTIVE_LAYER_LABELS[activeLayer] : "Layers"}</span>
+            </Button>
+          </>
+        ) : (
+          <>
+            <ToolbarField label="Preview">
+              <select className="h-8 rounded-md border border-input bg-card px-2 text-body-sm" value={animationDiffuser} onChange={(event) => setAnimationDiffuser(event.target.value as DesignerAnimationDiffuser)}>
+                <option value="as_built">As built</option>
+                <option value="led_map">LED map</option>
+              </select>
+            </ToolbarField>
+            <label className="flex h-8 cursor-pointer items-center gap-2 rounded-md border border-border-2 bg-card px-2 text-body-sm font-medium text-ink-secondary hover:border-border-strong hover:bg-surface-hover hover:text-foreground" title="Show or hide zone and channel outlines">
+              <input
+                type="checkbox"
+                checked={diffuserSettings.showOutlines}
+                onChange={(event) => setDiffuserSettings((current) => ({ ...current, showOutlines: event.target.checked }))}
+                className="h-4 w-4 cursor-pointer accent-blue-600"
+              />
+              <span>Outlines</span>
+            </label>
+            <Button type="button" variant="outline" density="compact" className="px-2" title="Open fullscreen viewer" onClick={openAnimationViewer}>
+              <Maximize2 className="h-4 w-4" /> <span className="hidden xl:inline">Viewer</span>
+            </Button>
+          </>
+        )}
+
+        <div className="ml-auto flex min-w-0 shrink items-center gap-1.5">
+          <Badge className={`hidden shrink-0 xl:inline-flex ${compileIsCurrent ? (compileErrors.length ? "border border-destructive/50 bg-destructive/10 text-destructive" : "border border-emerald-500/50 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300") : "border border-amber-500/50 bg-amber-500/10 text-amber-800 dark:text-amber-200"}`}>
+            {compileIsCurrent ? (compileErrors.length ? `${compileErrors.length} errors` : `${document.compiledLayout?.pixelMap.length ?? 0} px`) : "Compile required"}
+          </Badge>
+          {compileIsCurrent && compileIssueCount ? (
+            <Button type="button" variant="outline" density="compact" className="px-2" title={`${compileIssueCount} compile issues`} onClick={() => setCompileIssuesOpen(true)}>
+              <AlertCircle className="h-4 w-4" /> {compileIssueCount}
+            </Button>
+          ) : null}
+          <span className="hidden max-w-[160px] truncate text-meta text-muted-foreground 2xl:inline" title={fabricationNotice}>{fabricationNotice}</span>
+          <ThemeToggle compact />
+          <Button type="button" variant="outline" density="compact" className="px-2" title="Undo (Ctrl/Cmd+Z)" aria-label="Undo" disabled={!undoHistoryRef.current.length} onClick={undoDesignerChange}>
+            <Undo2 className="h-4 w-4" />
+          </Button>
+          <Button type="button" variant="outline" density="compact" className="px-2" title="Redo (Ctrl/Cmd+Shift+Z or Ctrl+Y)" aria-label="Redo" disabled={!redoHistoryRef.current.length} onClick={redoDesignerChange}>
+            <Redo2 className="h-4 w-4" />
+          </Button>
+          <Button type="button" variant="outline" density="compact" className={`px-2 ${compileIsCurrent ? "text-muted-foreground" : "border-amber-500 bg-amber-500 text-slate-950 hover:border-amber-400 hover:bg-amber-400 hover:text-slate-950"}`} onClick={compileLayout} disabled={saving || compileIsCurrent} title={compileIsCurrent ? "Layout is compiled and current" : "Compile pending Designer changes"} aria-label={compileIsCurrent ? "Layout compiled" : "Compile pending Designer changes"}>
+            <Hammer className="h-4 w-4" /> <span className="hidden xl:inline">{compileIsCurrent ? "Compiled" : "Compile"}</span>
+          </Button>
+          <Button type="button" variant="outline" density="compact" className={`px-2 ${hasUnsavedChanges ? "border-amber-500 bg-amber-500 text-slate-950 hover:border-amber-400 hover:bg-amber-400 hover:text-slate-950" : "text-muted-foreground"}`} onClick={() => void save()} disabled={saving || !hasUnsavedChanges} title={saving ? "Saving changes" : hasUnsavedChanges ? "Save pending changes" : "All changes are saved"} aria-label={saving ? "Saving changes" : hasUnsavedChanges ? "Save pending changes" : "All changes are saved"}>
+            <Save className="h-4 w-4" /> <span className="hidden xl:inline">{saving ? "Saving" : "Save"}</span>
+          </Button>
         </div>
       </header>
 
-      <div className="flex h-12 shrink-0 items-center overflow-x-auto border-b border-border-2 bg-surface-2 px-3 whitespace-nowrap">
-        <div className="flex min-w-max items-center gap-2">
-        {editorMode === "design" ? <Badge className="shrink-0 capitalize">{activeLayer ?? "No plane"}</Badge> : null}
-        <Badge className={compileIsCurrent ? (compileErrors.length ? "border border-destructive/50 bg-destructive/10 text-destructive" : "border border-emerald-500/50 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300") : "border border-amber-500/50 bg-amber-500/10 text-amber-800 dark:text-amber-200"}>
-          {compileIsCurrent ? (compileErrors.length ? `Compile errors: ${compileErrors.length}` : `${document.compiledLayout?.pixelMap.length ?? 0} px`) : "Compile required"}
-        </Badge>
-        {compileIsCurrent && compileIssueCount ? (
-          <Button type="button" variant="outline" className="h-8 px-2" onClick={() => setCompileIssuesOpen(true)}>
-            <AlertCircle className="h-4 w-4" />
-            Issues {compileIssueCount}
-          </Button>
-        ) : null}
-        {!(editorMode === "animate" && fabricationNotice === `Animation running: ${document.compiledLayout?.pixelMap.length ?? 0} mapped pixels.`) ? (
-          <span className="max-w-[280px] truncate text-meta text-muted-foreground">{fabricationNotice}</span>
-        ) : null}
-        {editorMode === "animate" ? (
-          <>
-            <div className="h-8 w-px shrink-0 bg-border" />
-            <ToolbarField label="Diffuser">
-              <select
-                className="h-8 rounded-md border border-input bg-card px-2 text-body-sm"
-                value={animationDiffuser}
-                onChange={(event) => {
-                  setAnimationDiffuser(event.target.value as DesignerAnimationDiffuser);
-                }}
-              >
-                <option value="none">LED pixels</option>
-                <option value="milky_white">Milky white</option>
-                <option value="day_night">Day/night</option>
-              </select>
-            </ToolbarField>
-            <DiffuserTuningControls settings={diffuserSettings} onChange={patchDiffuserSettings} />
-          </>
-        ) : null}
-        {editorMode === "design" ? <div className="h-8 w-px shrink-0 bg-border" /> : null}
-        {editorMode === "design" && activeLayer === "strings" ? (
-          <>
-            <ToolbarNumber label="Pixels/m" value={designer.addressablePixelsPerMeter} onChange={(addressablePixelsPerMeter) => patchDesigner({ addressablePixelsPerMeter, ledDensityPerMeter: addressablePixelsPerMeter })} />
-            <ToolbarNumber label="LEDs/m" value={designer.ledsPerMeter} onChange={(ledsPerMeter) => patchDesigner({ ledsPerMeter })} />
-            <div className="h-8 w-px shrink-0 bg-border" />
-          </>
-        ) : null}
+      {editorMode === "design" ? <div className="flex h-10 shrink-0 items-center border-b border-border-2 bg-surface-2 px-3 whitespace-nowrap">
+        <div className="min-w-0 flex-1 overflow-x-auto">
+          <div className="flex min-w-max items-center gap-2">
+        <span className="shrink-0 text-body-sm font-semibold text-foreground">
+          {selectedArtwork?.name ?? selectedBuildArea?.name ?? selectedLightSource?.name ?? selectedZone?.name ?? selectedChannel?.name ?? selectedController?.name ?? selectedRoute?.name ?? (editorMode === "design" ? DESIGNER_TOOL_LABELS[tool] : "Animate")}
+        </span>
+        <div className="h-6 w-px shrink-0 bg-border" />
+        {editorMode === "design" && !selection ? <span className="text-body-sm text-muted-foreground">{designerToolInstruction(tool)}{activeLayer ? ` · ${ACTIVE_LAYER_LABELS[activeLayer]} layer` : " · Choose a layer to begin"}</span> : null}
+        {editorMode === "design" && selection && selectedObjectLocked ? <Badge className="border border-red-500/50 bg-red-500/10 text-red-700 dark:text-red-300">Locked · inspect only</Badge> : null}
+        <fieldset disabled={editorMode === "design" && selectedObjectLocked} className="contents">
         {editorMode === "design" && selectedArtwork ? (
           <>
             <ToolbarNumber label="X" value={selectedArtwork.x} suffix="cm" onChange={(x) => patchArtwork(selectedArtwork.id, { x })} />
             <ToolbarNumber label="Y" value={selectedArtwork.y} suffix="cm" onChange={(y) => patchArtwork(selectedArtwork.id, { y })} />
             <ToolbarNumber label="W" value={selectedArtwork.width} suffix="cm" onChange={(width) => patchArtwork(selectedArtwork.id, { width })} />
             <ToolbarNumber label="H" value={selectedArtwork.height} suffix="cm" onChange={(height) => patchArtwork(selectedArtwork.id, { height })} />
-            <Badge>Artwork</Badge>
           </>
         ) : editorMode === "design" && selectedBuildArea ? (
           <>
@@ -1287,7 +1647,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
                 </ToolbarField>
                 <ToolbarNumber label="PX" value={selectedBuildArea.points[selectedBuildAreaPointIndex].x} suffix="cm" onChange={(x) => updateBuildAreaPoint(selectedBuildArea.id, selectedBuildAreaPointIndex, { x })} />
                 <ToolbarNumber label="PY" value={selectedBuildArea.points[selectedBuildAreaPointIndex].y} suffix="cm" onChange={(y) => updateBuildAreaPoint(selectedBuildArea.id, selectedBuildAreaPointIndex, { y })} />
-                <Button type="button" variant="outline" disabled={(selectedBuildArea.points?.length ?? 0) <= 3} onClick={() => deleteBuildAreaPoint(selectedBuildArea.id, selectedBuildAreaPointIndex)}>
+                <Button type="button" variant="outline" density="compact" disabled={(selectedBuildArea.points?.length ?? 0) <= 3} onClick={() => deleteBuildAreaPoint(selectedBuildArea.id, selectedBuildAreaPointIndex)}>
                   <Trash2 className="h-4 w-4" />
                   Point
                 </Button>
@@ -1301,8 +1661,16 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
               </>
             )}
           </>
+        ) : editorMode === "design" && selectedLightSource ? (
+          <>
+            <Badge>{selectedLightSource.mode === "front" ? "Front Source" : selectedLightSource.mode === "halo" ? "Halo Source" : "Wall Wash Source"}</Badge>
+            <Button type="button" variant="outline" density="compact" onClick={() => setLightingEditorOpen(true)}>
+              <Sparkles className="h-4 w-4" /> Configure source
+            </Button>
+          </>
         ) : editorMode === "design" && selectedZone ? (
           <>
+            <LightingSetupIndicators treatments={selectedOpticalTreatments} />
             <ToolbarField label="Shape">
               <select className="h-8 rounded-md border border-input bg-card px-2 text-body-sm" value={selectedZone.shape} onChange={(event) => patchZone(selectedZone.id, { shape: event.target.value as DesignerZoneForm["shape"] })}>
                 <option value="rect">Rectangle</option>
@@ -1318,7 +1686,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
                 </ToolbarField>
                 <ToolbarNumber label="PX" value={selectedZone.points[selectedZonePointIndex].x} suffix="cm" onChange={(x) => updateZonePoint(selectedZone.id, selectedZonePointIndex, { x })} />
                 <ToolbarNumber label="PY" value={selectedZone.points[selectedZonePointIndex].y} suffix="cm" onChange={(y) => updateZonePoint(selectedZone.id, selectedZonePointIndex, { y })} />
-                <Button type="button" variant="outline" disabled={(selectedZone.points?.length ?? 0) <= 3} onClick={() => deleteZonePoint(selectedZone.id, selectedZonePointIndex)}>
+                <Button type="button" variant="outline" density="compact" disabled={(selectedZone.points?.length ?? 0) <= 3} onClick={() => deleteZonePoint(selectedZone.id, selectedZonePointIndex)}>
                   <Trash2 className="h-4 w-4" />
                   Point
                 </Button>
@@ -1334,7 +1702,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
           </>
         ) : editorMode === "design" && selectedChannel ? (
           <>
-            <Badge>Channel</Badge>
+            <LightingSetupIndicators treatments={selectedOpticalTreatments} />
             <ToolbarNumber label="Width" value={selectedChannel.widthMm} suffix="mm" onChange={(widthMm) => patchChannel(selectedChannel.id, { widthMm: Math.max(3, Math.min(20, Math.round(widthMm))) })} />
             <ToolbarField label="Path">
               <select className="h-8 rounded-md border border-input bg-card px-2 text-body-sm" value={selectedChannel.closed ? "closed" : "open"} onChange={(event) => patchChannel(selectedChannel.id, { closed: event.target.value === "closed" })}>
@@ -1357,7 +1725,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
                 <ToolbarNumber label="PX" value={selectedChannel.points[selectedChannelPointIndex].x} suffix="cm" onChange={(x) => updateChannelPoint(selectedChannel.id, selectedChannelPointIndex, { x })} />
                 <ToolbarNumber label="PY" value={selectedChannel.points[selectedChannelPointIndex].y} suffix="cm" onChange={(y) => updateChannelPoint(selectedChannel.id, selectedChannelPointIndex, { y })} />
                 <ToolbarNumber label="Fillet" value={selectedChannel.points[selectedChannelPointIndex].radiusMm ?? 0} suffix="mm" onChange={(radiusMm) => setChannelNodeRadius(selectedChannel.id, selectedChannelPointIndex, radiusMm)} />
-                <Button type="button" variant="outline" disabled={(selectedChannel.points?.length ?? 0) <= 2} onClick={() => deleteChannelPoint(selectedChannel.id, selectedChannelPointIndex)}>
+                <Button type="button" variant="outline" density="compact" disabled={(selectedChannel.points?.length ?? 0) <= 2} onClick={() => deleteChannelPoint(selectedChannel.id, selectedChannelPointIndex)}>
                   <Trash2 className="h-4 w-4" />
                   Point
                 </Button>
@@ -1369,7 +1737,6 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
             <ToolbarNumber label="X" value={selectedController.x} onChange={(x) => patchController({ x })} />
             <ToolbarNumber label="Y" value={selectedController.y} onChange={(y) => patchController({ y })} />
             <ToolbarNumber label="Ports" value={selectedController.dataOutputs} onChange={(dataOutputs) => patchController({ dataOutputs: Math.max(1, Math.round(dataOutputs)) })} />
-            <Badge>Controller</Badge>
           </>
         ) : editorMode === "design" && selectedRoute ? (
           <>
@@ -1381,15 +1748,36 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
             </ToolbarField>
           </>
         ) : null}
+        </fieldset>
+        {editorMode === "design" && (canCopySelection || clipboard || canDeleteSelection) ? (
+          <>
+            <div className="h-6 w-px shrink-0 bg-border" />
+            {canCopySelection ? (
+              <Button type="button" variant="outline" density="compact" title="Copy selected object (Ctrl/Cmd+C)" className="px-2" onClick={copySelection}>
+                <Copy className="h-3.5 w-3.5" /> Copy
+              </Button>
+            ) : null}
+            {clipboard ? (
+              <Button type="button" variant="outline" density="compact" title="Paste copied object (Ctrl/Cmd+V)" className="px-2" onClick={pasteSelection}>
+                Paste
+              </Button>
+            ) : null}
+            {canDeleteSelection ? (
+              <Button type="button" variant="outline" density="compact" title="Delete selected object" className="px-2 text-destructive hover:text-destructive" onClick={deleteSelection}>
+                <Trash2 className="h-3.5 w-3.5" /> Delete
+              </Button>
+            ) : null}
+          </>
+        ) : null}
+          </div>
         </div>
-      </div>
-      <div className={`grid min-h-0 flex-1 ${editorMode === "animate" ? "grid-cols-[minmax(0,1fr)]" : layersPanelOpen ? "grid-cols-[56px_minmax(0,1fr)_320px]" : "grid-cols-[56px_minmax(0,1fr)]"}`}>
+      </div> : null}
+      <div className={`grid min-h-0 flex-1 ${editorMode === "animate" ? "grid-cols-[minmax(0,1fr)_380px]" : layersPanelOpen ? "grid-cols-[56px_minmax(0,1fr)_320px]" : "grid-cols-[56px_minmax(0,1fr)]"}`}>
         {editorMode === "design" ? <aside className="flex min-h-0 flex-col border-r border-border-2 bg-card py-2">
           <div className="flex shrink-0 flex-col items-center gap-2 px-2">
           <ToolButton active={tool === "select"} label="Select" icon={MousePointer2} onClick={() => setTool("select")} />
             <ToolButton active={tool === "pan"} label="Pan" icon={Hand} onClick={() => setTool("pan")} />
-          <ToolButton active={tool === "measure"} label="Measure distance" icon={Ruler} onClick={() => setTool("measure")} />
-          <ToolButton label="Delete selected" icon={Trash2} disabled={!canDeleteSelection} onClick={deleteSelection} />
+          <ToolButton active={tool === "measure"} label="Measure distance" icon={MeasuringTapeIcon} onClick={() => setTool("measure")} />
           </div>
           <div className="mx-3 my-2 h-px shrink-0 bg-border" />
           {editorMode === "design" ? <div className="flex min-h-0 flex-1 flex-col items-center gap-2 overflow-y-auto px-2 pb-2">
@@ -1409,16 +1797,16 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
           ) : null}
           {activeLayer === "artwork" || activeLayer === "reference" ? (
             <>
-              <ToolButton active={tool === "build_area_rect"} label="Rectangle Build Area" icon={Square} disabled={designer.layers.artwork.locked} onClick={() => { ensureLayerVisible("artwork"); addBuildArea("rect"); }} />
-              <ToolButton active={tool === "build_area_ellipse"} label="Ellipse Build Area" icon={Circle} disabled={designer.layers.artwork.locked} onClick={() => { ensureLayerVisible("artwork"); addBuildArea("ellipse"); }} />
+              <ToolButton active={tool === "build_area_rect"} label="Rectangle Build Area (drag on canvas)" icon={Square} disabled={designer.layers.artwork.locked} onClick={() => { ensureLayerVisible("artwork"); setTool("build_area_rect"); }} />
+              <ToolButton active={tool === "build_area_ellipse"} label="Ellipse Build Area (drag on canvas)" icon={Circle} disabled={designer.layers.artwork.locked} onClick={() => { ensureLayerVisible("artwork"); setTool("build_area_ellipse"); }} />
               <ToolButton active={tool === "build_area_polygon"} label="Polygon Build Area" icon={PenLine} disabled={designer.layers.artwork.locked} onClick={() => { ensureLayerVisible("artwork"); setTool("build_area_polygon"); }} />
               <ToolButton active={tool === "build_area_bezier"} label="Bezier Build Area" icon={Spline} disabled={designer.layers.artwork.locked} onClick={() => { ensureLayerVisible("artwork"); setTool("build_area_bezier"); }} />
             </>
           ) : null}
           {activeLayer === "zones" ? (
             <>
-              <ToolButton active={tool === "zone_rect"} label="Rectangle Zone" icon={Square} disabled={designer.layers.zones.locked || !designer.layers.zones.visible} onClick={() => addZone("rect")} />
-              <ToolButton active={tool === "zone_ellipse"} label="Ellipse Zone" icon={Circle} disabled={designer.layers.zones.locked || !designer.layers.zones.visible} onClick={() => addZone("ellipse")} />
+              <ToolButton active={tool === "zone_rect"} label="Rectangle Zone (drag on canvas)" icon={Square} disabled={designer.layers.zones.locked || !designer.layers.zones.visible} onClick={() => setTool("zone_rect")} />
+              <ToolButton active={tool === "zone_ellipse"} label="Ellipse Zone (drag on canvas)" icon={Circle} disabled={designer.layers.zones.locked || !designer.layers.zones.visible} onClick={() => setTool("zone_ellipse")} />
               <ToolButton active={tool === "zone_polygon"} label="Polygon Zone" icon={PenLine} disabled={designer.layers.zones.locked || !designer.layers.zones.visible} onClick={() => setTool("zone_polygon")} />
               <ToolButton active={tool === "zone_bezier"} label="Bezier Zone" icon={Spline} disabled={designer.layers.zones.locked || !designer.layers.zones.visible} onClick={() => setTool("zone_bezier")} />
               <ToolButton active={tool === "channel_bezier"} label="Channel (neon flex trace)" icon={Waves} disabled={designer.layers.zones.locked || !designer.layers.zones.visible} onClick={() => setTool("channel_bezier")} />
@@ -1428,18 +1816,25 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
             <>
               <ToolButton active={tool === "led_string"} label="LED string" icon={Route} tone="amber" disabled={designer.layers.strings.locked || !designer.layers.strings.visible} onClick={() => setTool("led_string")} />
               <ToolButton active={tool === "data_cable"} label="Data cable" icon={Cable} tone="green" disabled={designer.layers.strings.locked || !designer.layers.strings.visible} onClick={() => setTool("data_cable")} />
-              <ToolButton active={tool === "cut"} label="Cut route" icon={Scissors} disabled={designer.layers.strings.locked || !designer.layers.strings.visible} onClick={() => setTool("cut")} />
+              <ToolButton
+                active={tool === "cut"}
+                label={typeof selectedRoutePointIndex === "number" && selectedRoute?.points[selectedRoutePointIndex]?.joint ? "Detach solder joint" : "Cut route"}
+                icon={Scissors}
+                disabled={designer.layers.strings.locked || !designer.layers.strings.visible}
+                onClick={() => {
+                  if (typeof selectedRoutePointIndex === "number" && selectedRoute?.points[selectedRoutePointIndex]?.joint) {
+                    detachSelectedRoutePoint();
+                    return;
+                  }
+                  setTool("cut");
+                }}
+              />
             </>
           ) : null}
           </div> : <div className="min-h-0 flex-1" />}
-          <div className="flex shrink-0 flex-col items-center gap-2 border-t border-border px-2 pt-2">
-          <ToolButton label="Zoom In" icon={ZoomIn} onClick={() => zoom(0.78)} />
-          <ToolButton label="Zoom Out" icon={ZoomOut} onClick={() => zoom(1.28)} />
-          <ToolButton label="Fit" icon={Maximize2} onClick={zoomToFit} />
-          </div>
         </aside> : null}
 
-        <main className="min-w-0 overflow-hidden bg-muted p-2">
+        <main className={`min-w-0 overflow-hidden bg-muted ${editorMode === "animate" ? "p-0" : "p-2"}`}>
           {editorMode === "design" ? <DesignerStudioCanvas
             designer={designer}
             activeLayer={activeLayer}
@@ -1471,8 +1866,10 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
           /> : document.compiledLayout ? <DesignerWebglPlayer
             designer={designer}
             viewport={activeViewport}
-            selectedZoneId={selection?.type === "zone" ? selection.id : undefined}
-            selectedChannelId={selection?.type === "channel" ? selection.id : undefined}
+            selectedZoneId={selectedZone?.id}
+            selectedChannelId={selectedChannel?.id}
+            selectedZoneIds={selectedOpticalTargets.filter((target) => target.type === "zone").map((target) => target.id)}
+            selectedChannelIds={selectedOpticalTargets.filter((target) => target.type === "channel").map((target) => target.id)}
             onViewportChange={setViewport}
             onSelect={selectDesignerItem}
             layout={document.compiledLayout}
@@ -1481,6 +1878,33 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
             diffuserSettings={diffuserSettings}
           /> : null}
         </main>
+        {editorMode === "animate" ? (
+          <aside className="flex min-h-0 flex-col border-l border-border-2 bg-surface">
+            <div className="flex shrink-0 items-start justify-between gap-3 border-b bg-surface-2 px-4 py-3">
+              <div>
+                <div className="text-sm font-medium">{selectedOpticalTargets.length > 1 ? `Calibration · ${selectedOpticalTargets.length} targets` : selectedOpticalTarget ? `Calibration · ${selectedZone?.name ?? selectedChannel?.name}` : "Lighting calibration"}</div>
+                <div className="mt-0.5 text-xs text-muted-foreground">{selectedOpticalTarget ? (selectedOpticalTargets.length > 1 ? "Shared calibration · mixed values remain unchanged" : "Tune existing sources · construction stays in Design") : "Select a zone or channel"}</div>
+              </div>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto p-4">
+              {selectedOpticalTargets.length > 1 ? <MultiLightingMountsEditor
+                  entries={selectedOpticalTargetEntries}
+                  designer={designer}
+                  calibrationOnly
+                  onSetMode={setSelectedOpticalMode}
+                  onPatchMode={patchSelectedOpticalMode}
+                /> : selectedOpticalTarget ? <LightingMountsEditor
+                  treatments={selectedOpticalTreatments}
+                  designer={designer}
+                  compact
+                  calibrationOnly
+                  onAdd={addOpticalTreatment}
+                  onChange={patchOpticalTreatment}
+                  onRemove={removeOpticalTreatment}
+                /> : <div className="rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">Select a zone or channel to calibrate its existing light sources.</div>}
+            </div>
+          </aside>
+        ) : null}
         {editorMode === "design" && layersPanelOpen ? (
           <DesignerLayersPanel
             designer={designer}
@@ -1500,6 +1924,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
             onRemoveGroup={removeGroup}
             onToggleGroupMember={toggleGroupMember}
             onSelectZone={selectGroupZone}
+            onOpenLighting={openLightingSetup}
             onPatchChannel={patchChannel}
             onPatchController={patchController}
             onPatchRoute={patchRoute}
@@ -1511,29 +1936,23 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
       </div>
       {editorMode === "animate" ? (
         <>
-          <div className="h-1.5 shrink-0 cursor-row-resize border-t border-border bg-surface-2 hover:bg-blue-200" title="Resize animation timeline" onPointerDown={beginAnimationTimelineResize} />
+          <div className="h-1.5 shrink-0 cursor-row-resize border-t border-border bg-surface-2 hover:bg-blue-200" title="Drag to resize · double-click to collapse or expand" onPointerDown={beginAnimationTimelineResize} onDoubleClick={() => setAnimationTimelineCollapsed((current) => !current)} />
           <DesignerAnimateTimeline
             document={document}
             effects={effectCatalog}
-            selectedTargetId={selection?.type === "zone" || selection?.type === "channel" ? selection.id : undefined}
+            selectedTargetId={selectedAnimationTargetId}
             previewTimeMs={animationResult?.preview?.timeMs ?? document.previewTimeMs}
-            height={animationTimelineHeight}
+            height={animationTimelineCollapsed ? 40 : animationTimelineHeight}
+            collapsed={animationTimelineCollapsed}
+            onToggleCollapsed={() => setAnimationTimelineCollapsed((current) => !current)}
             onChange={updateAnimationDocument}
             onPreview={() => void previewAnimation()}
             onPreviewTimeChange={(timeMs) => void previewAnimationAt(timeMs)}
             previewing={animationGenerating}
             playing={animationPlaying}
             hasPreview={Boolean(animationResult?.ok && animationResult.partitura)}
-            onSave={() => void save()}
-            saving={saving}
             onClipTargetSelect={(targetId) => {
-              if (!targetId) {
-                setSelection(null);
-                return;
-              }
-              if (designer.zones.some((zone) => zone.id === targetId)) setSelection({ type: "zone", id: targetId });
-              else if (designer.channels.some((channel) => channel.id === targetId)) setSelection({ type: "channel", id: targetId });
-              else setSelection(null);
+              selectDesignerItem(targetId ? designerSelectionForClipTarget(designer, targetId) : null);
             }}
             onTogglePlayback={() => {
               if (!animationResult?.ok) void previewAnimation();
@@ -1551,6 +1970,21 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
         onGenerate={() => void previewAnimation()}
         onResult={setAnimationResult}
       />
+      <Modal
+        open={editorMode === "design" && lightingEditorOpen && Boolean(selectedOpticalTarget)}
+        title={`Lighting · ${selectedZone?.name ?? selectedChannel?.name ?? "Selection"}`}
+        description="Physical light mounts belong to this zone/channel. Clips only provide color and animation."
+        onClose={() => setLightingEditorOpen(false)}
+        className="max-w-4xl"
+      >
+        <LightingMountsEditor
+          treatments={selectedOpticalTreatments}
+          designer={designer}
+          onAdd={addOpticalTreatment}
+          onChange={patchOpticalTreatment}
+          onRemove={removeOpticalTreatment}
+        />
+      </Modal>
       <Modal
         open={compileIssuesOpen}
         title="Designer Compile Issues"
@@ -1590,7 +2024,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
           designer={designer}
           layout={document.compiledLayout}
           viewport={animationViewerViewport ?? fitViewportToDesigner(designer)}
-          selectedZoneId={selection?.type === "zone" ? selection.id : undefined}
+          selectedZoneId={selectedZone?.id}
           animationPixels={animationPixels}
           animationDiffuser={animationDiffuser}
           diffuserSettings={diffuserSettings}
@@ -1871,22 +2305,24 @@ function ScenesTab({
 
   function addClip() {
     const clips = activeScene?.clips ?? [];
+    const layer = activeScene ? nextEmptyClipLayer(activeScene) : 0;
     const identity = createClipIdentity(clips);
     const clip: ClipForm = {
       id: identity.id,
       name: identity.name,
+      enabled: true,
       target: sceneTargets[0]?.id ?? "full_sign",
       coordinateSpace: "local",
       effect: "solid",
       blend: "max",
       startMs: 0,
       durationMs: activeScene?.durationMs ?? 4000,
-      layer: clips.length + 1,
+      layer,
       params: defaultParamsForEffect(effectCatalog, "solid", document.accentColor)
     };
     onChange({
       ...document,
-      scenes: document.scenes.map((scene) => (scene.id === document.activeSceneId ? { ...scene, clips: [...scene.clips, clip] } : scene))
+      scenes: document.scenes.map((scene) => (scene.id === document.activeSceneId ? { ...scene, laneCount: Math.max(scene.laneCount ?? 1, layer + 1), clips: [...scene.clips, clip] } : scene))
     });
     setSelectedClipIndex(clips.length);
   }
@@ -2069,6 +2505,7 @@ function ScenesTab({
 
 function buildSceneTargets(document: PartituraDocument) {
   const layout = document.compiledLayout;
+  const sourceTargets = document.designer?.lightSources ?? [];
   const zoneTargets = document.designer?.zones ?? [];
   const groupTargets = document.designer?.groups ?? [];
   const channelTargets = document.designer?.channels ?? [];
@@ -2076,6 +2513,7 @@ function buildSceneTargets(document: PartituraDocument) {
 
   return [
     { id: "full_sign", name: "Full sign", detail: `${layout?.pixelMap.length ?? 0} mapped pixels` },
+    ...sourceTargets.map((source) => ({ id: source.id, name: source.name || source.id, detail: `${source.mode === "front" ? "Front" : source.mode === "halo" ? "Halo" : "Wall Wash"} · ${mappedZones.get(source.id) ?? 0} mapped pixels` })),
     ...zoneTargets.map((zone) => ({ id: zone.id, name: zone.name || zone.id, detail: `${mappedZones.get(zone.id) ?? 0} mapped pixels` })),
     ...channelTargets.map((channel) => ({ id: channel.id, name: channel.name || channel.id, detail: `Channel · ${mappedZones.get(channel.id) ?? 0} mapped pixels` })),
     ...groupTargets.map((group) => ({ id: group.id, name: group.name || group.id, detail: `Group · ${group.members.length} member${group.members.length === 1 ? "" : "s"}` }))
@@ -2554,35 +2992,326 @@ function NumberField({ label, value, min = 1, onChange }: { label: string; value
   );
 }
 
-function DiffuserTuningControls({ settings, onChange }: { settings: DiffuserRenderSettings; onChange: (patch: Partial<DiffuserRenderSettings>) => void }) {
+function MultiLightingMountsEditor({ entries, designer, calibrationOnly = false, onSetMode, onPatchMode }: {
+  entries: Array<OpticalTargetRef & { name: string; treatments: DesignerOpticalTreatment[] }>;
+  designer: DesignerForm;
+  calibrationOnly?: boolean;
+  onSetMode: (mode: DesignerOpticalMode, enabled: boolean) => void;
+  onPatchMode: (mode: DesignerOpticalMode, patch: Partial<DesignerOpticalTreatment>) => void;
+}) {
+  const modes: Array<{ mode: DesignerOpticalMode; label: string }> = [
+    { mode: "front", label: "Front" },
+    { mode: "halo", label: "Halo-Lit" },
+    { mode: "wall_wash", label: "Wall Washer" }
+  ];
+  const routeNames = new Map(designer.routes.map((route) => [route.id, route.name]));
   return (
-    <div className="flex h-9 shrink-0 items-center gap-2 rounded-md border border-border bg-card px-3">
-      <DiffuserSlider label="Distance" value={settings.diffuserDistanceCm} min={1} max={16} step={0.5} suffix="cm" onChange={(diffuserDistanceCm) => onChange({ diffuserDistanceCm })} />
-      <DiffuserSlider label="Intensity" value={settings.intensity} min={0.1} max={2.5} step={0.05} onChange={(intensity) => onChange({ intensity })} />
-      <DiffuserSlider label="After zone" value={settings.afterZoneEffectCm} min={0} max={6} step={0.25} suffix="cm" onChange={(afterZoneEffectCm) => onChange({ afterZoneEffectCm })} />
-      <button
-        type="button"
-        aria-pressed={settings.showOutlines}
-        title="Show or hide zone and channel outlines"
-        className={`flex h-7 shrink-0 items-center gap-1 rounded border px-2 text-[11px] font-medium transition ${settings.showOutlines ? "border-primary bg-primary/10 text-foreground" : "border-border-2 bg-card text-muted-foreground hover:bg-surface-hover"}`}
-        onClick={() => onChange({ showOutlines: !settings.showOutlines })}
-      >
-        <Square className="h-3.5 w-3.5" />
-        Outlines
-      </button>
+    <div className="space-y-4">
+      {!calibrationOnly ? <fieldset className="space-y-2">
+        <legend className="text-xs font-medium text-muted-foreground">Lighting modes</legend>
+        <div className="grid gap-2">
+          {modes.map(({ mode, label }) => {
+            const enabledCount = entries.filter((entry) => entry.treatments.some((source) => source.mode === mode && source.enabled)).length;
+            const allEnabled = enabledCount === entries.length;
+            const mixed = enabledCount > 0 && !allEnabled;
+            return (
+              <label key={mode} className={`flex cursor-pointer items-center gap-3 rounded-md border px-3 py-2 text-sm transition-colors ${enabledCount ? "border-primary bg-primary/10 text-foreground" : "border-border bg-card text-muted-foreground hover:bg-surface-2"}`}>
+                <input
+                  type="checkbox"
+                  ref={(input) => { if (input) input.indeterminate = mixed; }}
+                  checked={allEnabled}
+                  onChange={(event) => onSetMode(mode, event.target.checked)}
+                />
+                <span className="font-medium">{label}</span>
+                <span className="ml-auto text-[11px]">{mixed ? `${enabledCount}/${entries.length}` : allEnabled ? "Enabled" : "Off"}</span>
+              </label>
+            );
+          })}
+        </div>
+      </fieldset> : null}
+      {modes.map(({ mode, label }) => {
+        const sources = entries.flatMap((entry) => entry.treatments.filter((source) => source.mode === mode && source.enabled));
+        if (!sources.length) return null;
+        const assignedStrings = Array.from(new Set(sources.flatMap((source) => source.stringIds)));
+        const materials = sources.map((source) => source.material);
+        const material = commonValue(materials);
+        return (
+          <section key={mode} className="space-y-4 rounded-lg border border-border bg-card p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div className="font-medium">{label}</div>
+              <Badge>{sources.length === entries.length ? `${entries.length} zones` : `${sources.length}/${entries.length} zones`}</Badge>
+            </div>
+            {!calibrationOnly ? <div className="space-y-1 text-xs text-muted-foreground">
+              <div className="font-medium">Assigned strings</div>
+              <div>{assignedStrings.length ? assignedStrings.map((id) => routeNames.get(id) ?? id).join(", ") : "No strings assigned"}</div>
+            </div> : null}
+            {mode === "front" ? (
+              <>
+                {!calibrationOnly ? <label className="grid gap-1.5 text-xs font-medium text-muted-foreground">
+                  Material
+                  <select className="h-9 rounded-md border border-input bg-card px-3 text-sm text-foreground" value={material.mixed ? "" : material.value} onChange={(event) => {
+                    if (!event.target.value) return;
+                    const nextMaterial = event.target.value as DesignerOpticalTreatment["material"];
+                    onPatchMode(mode, nextMaterial === "silicone"
+                      ? { material: nextMaterial, sourceDistanceCm: 0.5, transmissionPct: 55, beamAngleDeg: 115, softnessCm: 0 }
+                      : { material: nextMaterial });
+                  }}>
+                    {material.mixed ? <option value="">Mixed</option> : null}
+                    <option value="none">LED Pixels</option>
+                    <option value="silicone">Silicone Strip</option>
+                    <option value="milky_white">Milky White</option>
+                    <option value="day_night">Day/Night</option>
+                  </select>
+                </label> : null}
+                <MixedDiffuserSlider label="Distance to diffusor" values={sources.map((source) => source.sourceDistanceCm)} min={0.5} max={30} step={0.5} suffix="cm" onChange={(sourceDistanceCm) => onPatchMode(mode, { sourceDistanceCm })} />
+                <MixedDiffuserSlider label="Intensity" values={sources.map((source) => source.intensity)} min={0.1} max={3} step={0.05} onChange={(intensity) => onPatchMode(mode, { intensity })} />
+                <MixedDiffuserSlider label="Softness" values={sources.map((source) => source.softnessCm)} min={0} max={10} step={0.25} suffix="cm" onChange={(softnessCm) => onPatchMode(mode, { softnessCm })} />
+                {!material.mixed && material.value === "silicone" ? <>
+                  <MixedDiffuserSlider label="Transmission" values={sources.map((source) => source.transmissionPct)} min={35} max={90} step={1} suffix="%" onChange={(transmissionPct) => onPatchMode(mode, { transmissionPct })} />
+                  <MixedDiffuserSlider label="Beam" values={sources.map((source) => source.beamAngleDeg)} min={90} max={180} step={5} suffix="°" onChange={(beamAngleDeg) => onPatchMode(mode, { beamAngleDeg })} />
+                </> : null}
+              </>
+            ) : (
+              <>
+                <MixedDiffuserSlider label="Intensity" values={sources.map((source) => source.intensity)} min={0.05} max={3} step={0.01} onChange={(intensity) => onPatchMode(mode, { intensity })} />
+                <MixedDiffuserSlider label="Spread" values={sources.map((source) => source.spreadCm)} min={0} max={30} step={0.1} suffix="cm" onChange={(spreadCm) => onPatchMode(mode, { spreadCm })} />
+                <MixedDiffuserSlider label="Softness" values={sources.map((source) => source.softnessCm)} min={0} max={20} step={0.1} suffix="cm" onChange={(softnessCm) => onPatchMode(mode, { softnessCm })} />
+                {mode === "halo" ? <>
+                  <MixedDiffuserSlider label="Wall gap" values={sources.map((source) => source.sourceDistanceCm)} min={0} max={30} step={0.1} suffix="cm" onChange={(sourceDistanceCm) => onPatchMode(mode, { sourceDistanceCm })} />
+                  <MixedColorField label="Face color" values={sources.map((source) => source.faceColor)} onChange={(faceColor) => onPatchMode(mode, { faceColor })} />
+                </> : null}
+                {mode === "wall_wash" ? <>
+                  <MixedDiffuserSlider label="Direction" values={sources.map((source) => source.directionDeg)} min={-180} max={180} step={5} suffix="°" onChange={(directionDeg) => onPatchMode(mode, { directionDeg })} />
+                  <MixedDiffuserSlider label="Throw" values={sources.map((source) => source.throwCm)} min={1} max={120} step={1} suffix="cm" onChange={(throwCm) => onPatchMode(mode, { throwCm })} />
+                  <MixedDiffuserSlider label="Beam" values={sources.map((source) => source.beamAngleDeg)} min={5} max={150} step={5} suffix="°" onChange={(beamAngleDeg) => onPatchMode(mode, { beamAngleDeg })} />
+                  <MixedDiffuserSlider label="Falloff" values={sources.map((source) => source.falloff)} min={0.25} max={4} step={0.05} onChange={(falloff) => onPatchMode(mode, { falloff })} />
+                </> : null}
+                {!calibrationOnly ? <MixedReceiverField values={sources} designer={designer} onChange={(patch) => onPatchMode(mode, patch)} /> : null}
+              </>
+            )}
+          </section>
+        );
+      })}
     </div>
   );
 }
 
-function DiffuserSlider({ label, value, min, max, step, suffix = "", onChange }: { label: string; value: number; min: number; max: number; step: number; suffix?: string; onChange: (value: number) => void }) {
-  const displayValue = Math.abs(value - Math.round(value)) < 0.001 ? String(Math.round(value)) : value.toFixed(step < 0.1 ? 2 : 1);
+function commonValue<T>(values: T[]) {
+  const value = values[0];
+  return { value, mixed: values.some((entry) => entry !== value) };
+}
+
+function MixedDiffuserSlider({ label, values, min, max, step, suffix = "", onChange }: {
+  label: string; values: number[]; min: number; max: number; step: number; suffix?: string; onChange: (value: number) => void;
+}) {
+  const current = commonValue(values);
+  return <DiffuserSlider label={`${label}${current.mixed ? " · Mixed" : ""}`} value={current.value ?? min} min={min} max={max} step={step} suffix={suffix} onChange={onChange} />;
+}
+
+function MixedColorField({ label, values, onChange }: { label: string; values: string[]; onChange: (value: string) => void }) {
+  const current = commonValue(values);
+  return <label className="flex items-center gap-2 text-xs font-medium text-muted-foreground">{label}{current.mixed ? " · Mixed" : ""}<input type="color" value={current.value ?? "#000000"} onChange={(event) => onChange(event.target.value)} /></label>;
+}
+
+function MixedReceiverField({ values, designer, onChange }: { values: DesignerOpticalTreatment[]; designer: DesignerForm; onChange: (patch: Partial<DesignerOpticalTreatment>) => void }) {
+  const receivers = values.map((source) => source.receiverType === "canvas" ? "canvas" : `${source.receiverType}:${source.receiverId ?? ""}`);
+  const receiver = commonValue(receivers);
   return (
-    <label className="flex min-w-[132px] items-center gap-1.5">
-      <span className="w-[58px] text-[11px] font-medium uppercase text-muted-foreground">{label}</span>
-      <input className="h-2 w-24 accent-primary" type="range" min={min} max={max} step={step} value={value} onChange={(event) => onChange(Number(event.target.value))} />
+    <label className="grid gap-1.5 text-xs font-medium text-muted-foreground">
+      Receiver{receiver.mixed ? " · Mixed" : ""}
+      <select className="h-9 rounded-md border border-input bg-card px-3 text-sm text-foreground" value={receiver.mixed ? "" : receiver.value} onChange={(event) => {
+        if (!event.target.value) return;
+        const [receiverType, receiverId] = event.target.value.split(":");
+        onChange({ receiverType: receiverType as DesignerOpticalTreatment["receiverType"], receiverId: receiverId || undefined });
+      }}>
+        {receiver.mixed ? <option value="">Mixed</option> : null}
+        <option value="canvas">Canvas</option>
+        {designer.buildAreas.map((area) => <option key={area.id} value={`build_area:${area.id}`}>Area: {area.name}</option>)}
+        {designer.zones.map((zone) => <option key={zone.id} value={`zone:${zone.id}`}>Zone: {zone.name}</option>)}
+      </select>
+    </label>
+  );
+}
+
+function LightingMountsEditor({ treatments, designer, compact = false, calibrationOnly = false, onAdd, onChange, onRemove }: {
+  treatments: DesignerOpticalTreatment[];
+  designer: DesignerForm;
+  compact?: boolean;
+  calibrationOnly?: boolean;
+  onAdd: (mode: DesignerOpticalMode) => void;
+  onChange: (id: string, patch: Partial<DesignerOpticalTreatment>) => void;
+  onRemove: (id: string) => void;
+}) {
+  const modes: Array<{ mode: DesignerOpticalMode; label: string }> = [
+    { mode: "front", label: "Front" },
+    { mode: "halo", label: "Halo-Lit" },
+    { mode: "wall_wash", label: "Wall Washer" }
+  ];
+  const enabledTreatments = treatments.filter((treatment) => treatment.enabled);
+  return (
+    <div className="space-y-4">
+      {!calibrationOnly ? <fieldset className="space-y-2">
+        <legend className="text-xs font-medium text-muted-foreground">Lighting modes</legend>
+        <div className="grid gap-2">
+        {modes.map(({ mode, label }) => {
+          const treatment = treatments.find((entry) => entry.mode === mode);
+          const checked = treatment?.enabled === true;
+          return (
+            <label key={mode} className={`flex cursor-pointer items-center gap-3 rounded-md border px-3 py-2 text-sm transition-colors ${checked ? "border-primary bg-primary/10 text-foreground" : "border-border bg-card text-muted-foreground hover:bg-surface-2"}`}>
+              <input
+                type="checkbox"
+                checked={checked}
+                onChange={(event) => {
+                  if (treatment) onChange(treatment.id, { enabled: event.target.checked });
+                  else if (event.target.checked) onAdd(mode);
+                }}
+              />
+              <span className="font-medium">{label}</span>
+              <span className="ml-auto text-[11px]">{checked ? "Enabled" : "Off"}</span>
+            </label>
+          );
+        })}
+        </div>
+      </fieldset> : null}
+      {!enabledTreatments.length ? <div className="rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">{calibrationOnly ? "No light sources are configured for this target. Add them in Design." : "Enable a lighting mode to configure it."}</div> : null}
+      {enabledTreatments.map((treatment) => {
+        const receiverValue = treatment.receiverType === "canvas" ? "canvas" : `${treatment.receiverType}:${treatment.receiverId ?? ""}`;
+        const title = treatment.mode === "front" ? "Front" : treatment.mode === "halo" ? "Halo-Lit" : "Wall Washer";
+        return (
+          <section key={treatment.id} className="space-y-4 rounded-lg border border-border bg-card p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div className="font-medium">{title}</div>
+              {!calibrationOnly ? <Button type="button" variant="ghost" className="h-8 text-xs" onClick={() => onRemove(treatment.id)}><Trash2 className="mr-1 h-3.5 w-3.5" />Remove</Button> : null}
+            </div>
+            {!calibrationOnly ? <label className="grid gap-1.5 text-xs font-medium text-muted-foreground">
+              Source name
+              <input className="h-9 rounded-md border border-input bg-card px-3 text-sm text-foreground" value={treatment.name} onChange={(event) => onChange(treatment.id, { name: event.target.value })} />
+            </label> : null}
+            {!calibrationOnly ? <div className="grid gap-2 text-xs font-medium text-muted-foreground">
+              <span>LED strings</span>
+              {designer.routes.filter((route) => route.kind === "led_string").length ? designer.routes.filter((route) => route.kind === "led_string").map((route) => (
+                <label key={route.id} className="flex items-center gap-2 rounded border border-border-2 bg-surface-2 px-2 py-1.5 font-normal text-foreground">
+                  <input
+                    type="checkbox"
+                    checked={treatment.stringIds.includes(route.id)}
+                    onChange={(event) => onChange(treatment.id, {
+                      stringIds: event.target.checked
+                        ? Array.from(new Set([...treatment.stringIds, route.id]))
+                        : treatment.stringIds.filter((id) => id !== route.id)
+                    })}
+                  />
+                  {route.name}
+                </label>
+              )) : <span className="font-normal">No LED strings available.</span>}
+            </div> : null}
+            {treatment.mode === "front" ? (
+              <>
+                {!calibrationOnly ? <label className="grid max-w-sm gap-1.5 text-xs font-medium text-muted-foreground">
+                  Material
+                  <select className="h-9 rounded-md border border-input bg-card px-3 text-sm text-foreground" value={treatment.material} onChange={(event) => {
+                    const material = event.target.value as DesignerOpticalTreatment["material"];
+                    onChange(treatment.id, material === "silicone"
+                      ? { material, sourceDistanceCm: 0.5, transmissionPct: 55, beamAngleDeg: 115, softnessCm: 0 }
+                      : { material });
+                  }}>
+                    <option value="none">LED Pixels</option>
+                    <option value="silicone">Silicone Strip</option>
+                    <option value="milky_white">Milky White</option>
+                    <option value="day_night">Day/Night</option>
+                  </select>
+                </label> : null}
+                <div className={compact ? "grid gap-4" : "grid gap-4 md:grid-cols-2"}>
+                  <DiffuserSlider label="Intensity" value={treatment.intensity} min={0.1} max={3} step={0.05} onChange={(intensity) => onChange(treatment.id, { intensity })} />
+                  {treatment.material !== "none" ? <>
+                    <DiffuserSlider label="Distance to diffusor" value={treatment.sourceDistanceCm} min={0.5} max={treatment.material === "silicone" ? 3 : 30} step={0.5} suffix="cm" onChange={(sourceDistanceCm) => onChange(treatment.id, { sourceDistanceCm })} />
+                    {treatment.material === "silicone" ? (
+                      <>
+                        <DiffuserSlider label="Transmission" value={treatment.transmissionPct} min={35} max={90} step={1} suffix="%" onChange={(transmissionPct) => onChange(treatment.id, { transmissionPct })} />
+                        <DiffuserSlider label="Beam" value={treatment.beamAngleDeg} min={90} max={180} step={5} suffix="°" onChange={(beamAngleDeg) => onChange(treatment.id, { beamAngleDeg })} />
+                      </>
+                    ) : <DiffuserSlider label="Softness" value={treatment.softnessCm} min={0} max={10} step={0.25} suffix="cm" onChange={(softnessCm) => onChange(treatment.id, { softnessCm })} />}
+                  </> : null}
+                </div>
+                {treatment.material === "none" ? <p className="text-xs text-muted-foreground">Individual addressable pixels remain visible.</p> : null}
+              </>
+            ) : (
+              <div className={compact ? "grid gap-4" : "grid gap-4 md:grid-cols-2"}>
+                <DiffuserSlider label="Intensity" value={treatment.intensity} min={0.05} center={treatment.mode === "halo" ? 0.3 : undefined} max={3} step={0.01} onChange={(intensity) => onChange(treatment.id, { intensity })} />
+                <DiffuserSlider label="Spread" value={treatment.spreadCm} min={0} center={treatment.mode === "halo" ? 3 : undefined} max={30} step={0.1} suffix="cm" onChange={(spreadCm) => onChange(treatment.id, { spreadCm })} />
+                <DiffuserSlider label="Softness" value={treatment.softnessCm} min={0} center={treatment.mode === "halo" ? 0.5 : undefined} max={20} step={0.1} suffix="cm" onChange={(softnessCm) => onChange(treatment.id, { softnessCm })} />
+                {treatment.mode === "halo" ? <DiffuserSlider label="Wall gap" value={treatment.sourceDistanceCm} min={0} center={0.5} max={30} step={0.1} suffix="cm" onChange={(sourceDistanceCm) => onChange(treatment.id, { sourceDistanceCm })} /> : null}
+                {treatment.mode === "wall_wash" ? (
+                  <>
+                    <DiffuserSlider label="Direction" value={treatment.directionDeg} min={-180} max={180} step={5} suffix="°" onChange={(directionDeg) => onChange(treatment.id, { directionDeg })} />
+                    <DiffuserSlider label="Throw" value={treatment.throwCm} min={1} max={120} step={1} suffix="cm" onChange={(throwCm) => onChange(treatment.id, { throwCm })} />
+                    <DiffuserSlider label="Beam" value={treatment.beamAngleDeg} min={5} max={150} step={5} suffix="°" onChange={(beamAngleDeg) => onChange(treatment.id, { beamAngleDeg })} />
+                    <DiffuserSlider label="Falloff" value={treatment.falloff} min={0.25} max={4} step={0.05} onChange={(falloff) => onChange(treatment.id, { falloff })} />
+                  </>
+                ) : null}
+                {treatment.mode === "halo" ? <label className="flex items-center gap-2 text-xs font-medium text-muted-foreground">Face color <input type="color" value={treatment.faceColor} onChange={(event) => onChange(treatment.id, { faceColor: event.target.value })} /></label> : null}
+                {!calibrationOnly ? <label className="grid gap-1.5 text-xs font-medium text-muted-foreground">
+                  Receiver
+                  <select className="h-9 rounded-md border border-input bg-card px-3 text-sm text-foreground" value={receiverValue} onChange={(event) => {
+                    const [receiverType, receiverId] = event.target.value.split(":");
+                    onChange(treatment.id, { receiverType: receiverType as DesignerOpticalTreatment["receiverType"], receiverId: receiverId || undefined });
+                  }}>
+                    <option value="canvas">Canvas</option>
+                    {designer.buildAreas.map((area) => <option key={area.id} value={`build_area:${area.id}`}>Area: {area.name}</option>)}
+                    {designer.zones.map((zone) => <option key={zone.id} value={`zone:${zone.id}`}>Zone: {zone.name}</option>)}
+                  </select>
+                </label> : null}
+              </div>
+            )}
+          </section>
+        );
+      })}
+    </div>
+  );
+}
+
+function DiffuserSlider({ label, value, min, center, max, step, suffix = "", onChange }: { label: string; value: number; min: number; center?: number; max: number; step: number; suffix?: string; onChange: (value: number) => void }) {
+  const displayValue = Math.abs(value - Math.round(value)) < 0.001 ? String(Math.round(value)) : value.toFixed(step < 0.1 ? 2 : 1);
+  const centerValue = center ?? min;
+  const centered = typeof center === "number" && centerValue > min && centerValue < max;
+  const sliderValue = centered ? centeredSliderPosition(value, min, centerValue, max) : value;
+  return (
+    <label className="flex w-full min-w-0 items-center gap-1.5">
+      <span className="w-[112px] shrink-0 text-[11px] font-medium uppercase text-muted-foreground">{label}</span>
+      <span className="relative flex min-w-0 flex-1 items-center">
+        {centered ? <span className="pointer-events-none absolute left-1/2 h-3 w-px bg-muted-foreground/60" /> : null}
+        <input
+          className="h-2 min-w-0 flex-1 accent-primary"
+          type="range"
+          min={centered ? 0 : min}
+          max={centered ? 1000 : max}
+          step={centered ? 1 : step}
+          value={sliderValue}
+          onChange={(event) => {
+            const raw = centered ? centeredSliderValue(Number(event.target.value), min, centerValue, max) : Number(event.target.value);
+            onChange(clamp(Math.round(raw / step) * step, min, max));
+          }}
+        />
+      </span>
       <span className="min-w-8 text-left font-mono text-[11px] text-muted-foreground">{displayValue}{suffix}</span>
     </label>
   );
+}
+
+function centeredSliderPosition(value: number, min: number, center: number, max: number) {
+  const bounded = clamp(value, min, max);
+  if (bounded <= center) return 500 * (bounded - min) / (center - min);
+  return 500 + 500 * Math.log(bounded / center) / Math.log(max / center);
+}
+
+function centeredSliderValue(position: number, min: number, center: number, max: number) {
+  const bounded = clamp(position, 0, 1000);
+  if (bounded <= 500) return min + (center - min) * bounded / 500;
+  return center * Math.pow(max / center, (bounded - 500) / 500);
+}
+
+function maximumTimelineHeight(viewportHeight: number) {
+  const animateChromeHeight = 94;
+  return Math.min(420, Math.max(140, (viewportHeight - animateChromeHeight) * 0.45));
 }
 
 function GridInput({ value, onChange }: { value: string; onChange: (value: string) => void }) {
@@ -2676,10 +3405,16 @@ function initialAnimationPreviewTime(document: PartituraDocument) {
   if (!scene) return Math.max(0, document.previewTimeMs);
   if (document.previewTimeMs > 0) return Math.min(document.previewTimeMs, Math.max(0, scene.durationMs - 1));
   const visibleClip = scene.clips
-    .filter((clip) => clip.effect !== "off" && clip.durationMs > 0)
+    .filter((clip) => clip.enabled !== false && clip.effect !== "off" && clip.durationMs > 0)
     .sort((left, right) => left.startMs - right.startMs || left.layer - right.layer)[0];
   if (!visibleClip) return 0;
   return Math.min(Math.max(0, scene.durationMs - 1), visibleClip.startMs + Math.floor(visibleClip.durationMs / 2));
+}
+
+function clipEnablementSignature(document: PartituraDocument) {
+  return document.scenes
+    .flatMap((scene) => scene.clips.map((clip) => `${scene.id}:${clip.id}:${clip.enabled !== false ? 1 : 0}`))
+    .join("|");
 }
 
 function reorderById<T extends { id: string }>(items: T[], activeId: string, overId: string) {

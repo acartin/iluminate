@@ -14,7 +14,9 @@ export function designerCompileSignature(designer: DesignerForm) {
   return JSON.stringify({
     controller: designer.controller,
     routes: designer.routes,
-    zones: designer.zones,
+    zones: designer.zones.map(({ id, name, shape, x, y, width, height, points, pathMode }) => ({ id, name, shape, x, y, width, height, points, pathMode })),
+    channels: designer.channels.map(({ id, name, points, pathMode, widthMm, closed, cap }) => ({ id, name, points, pathMode, widthMm, closed, cap })),
+    lightSources: designer.lightSources.map(({ id, name, targetType, targetId, stringIds }) => ({ id, name, targetType, targetId, stringIds })),
     groups: designer.groups,
     addressablePixelsPerMeter: designer.addressablePixelsPerMeter,
     snapCm: designer.snapCm
@@ -62,7 +64,28 @@ export function compileDesignerLayout(designer: DesignerForm): CompiledDesignerL
     name: channel.name,
     pixelIds: pixelMap.filter((pixel) => channelContainsPoint(channel, { x: pixel.x, y: pixel.y }, pixelFootprintRadiusCm)).map((pixel) => pixel.id)
   }));
-  const allZones = [...zones, ...channelZones];
+  const baseTargets = new Map([...zones, ...channelZones].map((zone) => [zone.id, zone]));
+  const pixelsById = new Map(pixelMap.map((pixel) => [pixel.id, pixel]));
+  const sourceZones = designer.lightSources.map((source) => {
+    const stringIds = new Set(source.stringIds);
+    const base = baseTargets.get(source.targetId);
+    return {
+      id: source.id,
+      name: source.name,
+      pixelIds: (base?.pixelIds ?? []).filter((pixelId) => {
+        const pixel = pixelsById.get(pixelId);
+        return Boolean(pixel && stringIds.has(pixel.stringId));
+      })
+    };
+  });
+  const sourcesByString = new Map<string, string[]>();
+  designer.lightSources.forEach((source) => source.stringIds.forEach((stringId) => {
+    sourcesByString.set(stringId, [...(sourcesByString.get(stringId) ?? []), source.name]);
+  }));
+  sourcesByString.forEach((sourceNames, stringId) => {
+    if (sourceNames.length > 1) warnings.push(`${stringId} is assigned to multiple light sources (${sourceNames.join(", ")}); those sources address the same physical pixels until separate LED strings are assigned.`);
+  });
+  const allZones = [...zones, ...channelZones, ...sourceZones];
   allZones.filter((zone) => !zone.pixelIds.length).forEach((zone) => warnings.push(`${zone.name} contains no mapped pixels.`));
   designer.channels.forEach((channel) => {
     const halfWidthCm = channelWidthCm(channel) / 2;
@@ -86,7 +109,7 @@ function validateGroups(
   errors: string[],
   warnings: string[]
 ) {
-  const zoneIds = new Set([...designer.zones.map((zone) => zone.id), ...designer.channels.map((channel) => channel.id)]);
+  const zoneIds = new Set([...designer.zones.map((zone) => zone.id), ...designer.channels.map((channel) => channel.id), ...designer.lightSources.map((source) => source.id)]);
   const groupIds = new Set(groups.map((group) => group.id));
   const membersById = new Map(groups.map((group) => [group.id, group.members]));
 

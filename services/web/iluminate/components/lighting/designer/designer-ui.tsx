@@ -4,10 +4,10 @@ import { cloneElement, isValidElement, useEffect, useRef, useState, type ReactEl
 import { DndContext, KeyboardSensor, PointerSensor, closestCenter, type DragEndEvent, useSensor, useSensors } from "@dnd-kit/core";
 import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { ChevronDown, ChevronRight, CircleDot, CornerDownRight, Eye, EyeOff, Folder, GripVertical, ImageIcon, Info, Layers, Lock, Minus, Pencil, Plus, Search, Spline, Trash2, Unlock, Upload, Waves, X } from "lucide-react";
+import { ChevronDown, ChevronRight, CircleDot, CornerDownRight, Eye, EyeOff, Folder, GripVertical, ImageIcon, Info, Layers, Lightbulb, Lock, Minus, Pencil, Plus, Search, Spline, Trash2, Unlock, Upload, Waves, X } from "lucide-react";
 import type { DesignerArtworkForm, DesignerBuildAreaForm, DesignerChannelForm, DesignerForm, DesignerGroupForm, DesignerLayerSettings, DesignerLayersForm, DesignerPointNodeType, DesignerZoneForm } from "@/lib/lighting/partitura-model";
 import { formatDecimal, rulerTicks } from "./designer-geometry";
-import type { DesignerActiveLayer, DesignerRouteSummary, DesignerSelection, DesignerViewport } from "./types";
+import { designerLayerForSelection, type DesignerActiveLayer, type DesignerRouteSummary, type DesignerSelection, type DesignerViewport } from "./types";
 
 export function ToolButton({
   label,
@@ -33,14 +33,15 @@ export function ToolButton({
     <button
       type="button"
       title={label}
+      aria-label={label}
       aria-pressed={active}
       disabled={disabled}
       onClick={onClick}
-      className={`relative flex h-10 w-10 items-center justify-center rounded-md border transition disabled:cursor-not-allowed disabled:opacity-40 ${active ? activeClass : "border-transparent bg-card text-ink-secondary hover:bg-surface-hover"}`}
+      className={`relative flex h-8 w-8 items-center justify-center rounded-md border transition disabled:cursor-not-allowed disabled:opacity-40 ${active ? activeClass : "border-transparent bg-card text-ink-secondary hover:bg-surface-hover"}`}
     >
-      {active ? <span className="absolute -right-1.5 top-1/2 h-2.5 w-2.5 -translate-y-1/2 rounded-full bg-current ring-2 ring-white" /> : null}
-      {(tone === "amber" || tone === "green") && !active ? <span className={`absolute bottom-1 h-1.5 w-5 rounded-full ${tone === "amber" ? "bg-amber-500" : "bg-emerald-500"}`} /> : null}
-      <Icon className="h-5 w-5" />
+      {active ? <span className="absolute -right-1 top-1/2 h-2 w-2 -translate-y-1/2 rounded-full bg-current ring-2 ring-white" /> : null}
+      {(tone === "amber" || tone === "green") && !active ? <span className={`absolute bottom-0.5 h-1 w-4 rounded-full ${tone === "amber" ? "bg-amber-500" : "bg-emerald-500"}`} /> : null}
+      <Icon className="h-4 w-4" />
     </button>
   );
 }
@@ -63,6 +64,7 @@ export function DesignerLayersPanel({
   onRemoveGroup,
   onToggleGroupMember,
   onSelectZone,
+  onOpenLighting,
   onPatchChannel,
   onPatchController,
   onPatchRoute,
@@ -87,6 +89,7 @@ export function DesignerLayersPanel({
   onRemoveGroup: (groupId: string) => void;
   onToggleGroupMember: (groupId: string, memberType: "zone" | "group", memberId: string) => void;
   onSelectZone: (zoneId: string) => void;
+  onOpenLighting: (target: { type: "zone" | "channel"; id: string }) => void;
   onPatchChannel: (channelId: string, patch: Partial<Pick<DesignerChannelForm, "name" | "widthMm" | "closed" | "cap" | "visible">>) => void;
   onPatchController: (patch: Partial<Pick<DesignerForm["controller"], "name" | "visible">>) => void;
   onPatchRoute: (routeId: string, patch: Partial<Pick<DesignerForm["routes"][number], "name" | "visible">>) => void;
@@ -105,6 +108,7 @@ export function DesignerLayersPanel({
     artwork: false,
     reference: false,
     zones: false,
+    lightSources: false,
     hardware: false,
     strings: false
   });
@@ -150,8 +154,10 @@ export function DesignerLayersPanel({
       setExpandedArtworkGroups((current) => ({ ...current, images: true }));
       return;
     }
-    const layer = layerForSelection(selection);
+    const layer = designerLayerForSelection(selection);
     if (layer) setExpandedLayers((current) => ({ ...current, [layer]: true }));
+    if (selection.type === "zone") setExpandedDiffusorGroups((current) => ({ ...current, zones: true }));
+    if (selection.type === "channel") setExpandedDiffusorGroups((current) => ({ ...current, channels: true }));
     if (selection.type === "route") {
       const route = designer.routes.find((entry) => entry.id === selection.id);
       if (route?.kind === "data_cable") setExpandedStringGroups((current) => ({ ...current, data_cables: true }));
@@ -324,7 +330,6 @@ export function DesignerLayersPanel({
                 <SortableLayerChildRow key={zone.id} id={zone.id} disabled={designer.layers.zones.locked}>
                   <LayerChildRow
                     label={zone.name}
-                    detail={`${zone.shape} · ${formatDecimal(zone.width)}x${formatDecimal(zone.height)} cm`}
                     selected={selection?.type === "zone" && selection.id === zone.id}
                     color="blue"
                     strongColor
@@ -336,6 +341,8 @@ export function DesignerLayersPanel({
                     }}
                     onRename={(name) => onPatchZone(zone.id, { name })}
                     onOpenDetails={() => setDetails({ type: "zone", id: zone.id })}
+                    lightingCount={designer.lightSources.filter((source) => source.targetType === "zone" && source.targetId === zone.id && source.enabled && source.stringIds.length > 0).length}
+                    onOpenLighting={() => onOpenLighting({ type: "zone", id: zone.id })}
                   />
                 </SortableLayerChildRow>
               ))}
@@ -352,7 +359,6 @@ export function DesignerLayersPanel({
                 <LayerChildRow
                   key={channel.id}
                   label={channel.name}
-                  detail={`${channel.widthMm} mm · ${channel.closed ? "closed" : channel.cap}`}
                   selected={selection?.type === "channel" && selection.id === channel.id}
                   color="amber"
                   icon={Waves}
@@ -363,6 +369,8 @@ export function DesignerLayersPanel({
                     onSelect({ type: "channel", id: channel.id });
                   }}
                   onRename={(name) => onPatchChannel(channel.id, { name })}
+                  lightingCount={designer.lightSources.filter((source) => source.targetType === "channel" && source.targetId === channel.id && source.enabled && source.stringIds.length > 0).length}
+                  onOpenLighting={() => onOpenLighting({ type: "channel", id: channel.id })}
                 />
               ))
             ) : (
@@ -517,17 +525,6 @@ type DesignerLayerDetails = {
   id: string;
 };
 
-function layerForSelection(selection: DesignerSelection): DesignerActiveLayer | null {
-  if (!selection) return null;
-  if (selection.type === "artwork") return "artwork";
-  if (selection.type === "build_area") return "artwork";
-  if (selection.type === "zone") return "zones";
-  if (selection.type === "channel") return "zones";
-  if (selection.type === "controller") return "hardware";
-  if (selection.type === "route") return "strings";
-  return null;
-}
-
 function LayerPanelSection({
   label,
   active,
@@ -559,8 +556,8 @@ function LayerPanelSection({
         <IconToggle active={layer.visible} label={layer.visible ? `Hide ${label}` : `Show ${label}`} onClick={() => onChange({ visible: !layer.visible })}>
           {layer.visible ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
         </IconToggle>
-        <IconToggle active={layer.locked} label={layer.locked ? `Unlock ${label}` : `Lock ${label}`} onClick={() => onChange({ locked: !layer.locked })}>
-          {layer.locked ? <Lock className="h-3.5 w-3.5" /> : <Unlock className="h-3.5 w-3.5" />}
+        <IconToggle active={layer.locked} stateTone={layer.locked ? "danger" : "success"} label={layer.locked ? `Unlock ${label}` : `Lock ${label}`} onClick={() => onChange({ locked: !layer.locked })}>
+          {layer.locked ? <Lock className="h-3.5 w-3.5 text-red-500" /> : <Unlock className="h-3.5 w-3.5 text-emerald-500" />}
         </IconToggle>
       </div>
       {expanded ? (
@@ -772,7 +769,7 @@ function SortableLayerChildRow({ id, disabled, children }: { id: string; disable
 
 type LayerChildRowProps = {
   label: string;
-  detail: string;
+  detail?: string;
   selected?: boolean;
   color?: "slate" | "green" | "amber" | "blue" | "violet";
   strongColor?: boolean;
@@ -786,6 +783,8 @@ type LayerChildRowProps = {
   onClick: () => void;
   onRename?: (name: string) => void;
   onOpenDetails?: () => void;
+  lightingCount?: number;
+  onOpenLighting?: () => void;
 };
 
 function LayerChildRow({
@@ -803,7 +802,9 @@ function LayerChildRow({
   onToggleVisible,
   onClick,
   onRename,
-  onOpenDetails
+  onOpenDetails,
+  lightingCount,
+  onOpenLighting
 }: LayerChildRowProps) {
   const colorClass = color === "green" ? "bg-emerald-500" : color === "amber" ? "bg-amber-400" : color === "blue" ? "bg-sky-500" : color === "violet" ? "bg-violet-500" : "bg-slate-400";
   const iconColorClass = color === "green" ? "text-emerald-600" : color === "amber" ? "text-amber-600" : color === "blue" ? "text-sky-600" : color === "violet" ? "text-violet-600" : "text-slate-500";
@@ -879,11 +880,25 @@ function LayerChildRow({
             }}
           />
         ) : (
-          <button type="button" className="min-w-0 flex-1 text-left" title={`${label} · ${detail}`} onClick={onClick} onDoubleClick={onOpenDetails}>
+          <button type="button" className="min-w-0 flex-1 text-left" title={detail ? `${label} · ${detail}` : label} onClick={onClick} onDoubleClick={onOpenDetails}>
             <span className={`block whitespace-normal break-words text-body-sm font-medium leading-4 ${selected ? "text-white" : "text-foreground"}`}>{label}</span>
-            <span className={`block truncate font-mono text-[10px] uppercase leading-3 ${selected ? "text-white/70" : "text-muted-foreground"}`}>{detail}</span>
+            {detail ? <span className={`block truncate font-mono text-[10px] uppercase leading-3 ${selected ? "text-white/70" : "text-muted-foreground"}`}>{detail}</span> : null}
           </button>
         )}
+        {onOpenLighting ? (
+          <button
+            type="button"
+            title={lightingCount ? `Open lighting setup · ${lightingCount} configured` : "Configure lighting setup"}
+            aria-label={lightingCount ? `Open lighting setup for ${label}, ${lightingCount} configured` : `Configure lighting setup for ${label}`}
+            className={`flex h-7 w-7 shrink-0 items-center justify-center rounded border ${selected ? "border-white/30 text-white hover:bg-white/15" : lightingCount ? "border-amber-400/70 bg-amber-400/10 text-amber-600 hover:bg-amber-400/20" : "border-border-2 text-muted-foreground hover:bg-card hover:text-amber-600"}`}
+            onClick={(event) => {
+              event.stopPropagation();
+              onOpenLighting();
+            }}
+          >
+            <Lightbulb className="h-4 w-4" />
+          </button>
+        ) : null}
         {onToggleVisible ? (
           <button
             type="button"
@@ -1066,13 +1081,22 @@ function detailFields(
   ];
 }
 
-function IconToggle({ active, selected, compact, label, children, onClick }: { active: boolean; selected?: boolean; compact?: boolean; label: string; children: React.ReactNode; onClick: () => void }) {
+function IconToggle({ active, selected, compact, stateTone, label, children, onClick }: { active: boolean; selected?: boolean; compact?: boolean; stateTone?: "danger" | "success"; label: string; children: React.ReactNode; onClick: () => void }) {
+  const stateClass = stateTone === "danger"
+    ? "border-red-500 bg-red-50 text-red-700 hover:bg-red-100 dark:bg-red-950/40 dark:text-red-300"
+    : stateTone === "success"
+      ? "border-emerald-500 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:text-emerald-300"
+      : selected
+        ? "border-white/20 bg-white/10 text-white hover:bg-white/20"
+        : active
+          ? "border-blue-300 bg-card text-blue-700"
+          : "border-border-2 bg-surface-2 text-muted-foreground hover:bg-card";
   return (
     <button
       type="button"
       title={label}
       aria-pressed={active}
-      className={`flex ${compact ? "h-6 w-6 opacity-0 group-hover:opacity-100" : "h-7 w-7"} items-center justify-center rounded border transition ${selected ? "border-white/20 bg-white/10 text-white hover:bg-white/20" : active ? "border-blue-300 bg-card text-blue-700" : "border-border-2 bg-surface-2 text-muted-foreground hover:bg-card"}`}
+      className={`flex ${compact ? "h-6 w-6 opacity-0 group-hover:opacity-100" : "h-7 w-7"} items-center justify-center rounded border transition ${stateClass}`}
       onClick={(event) => {
         event.stopPropagation();
         onClick();
@@ -1127,13 +1151,13 @@ export function LayerToggle({
         type="button"
         title={layer.locked ? `Unlock ${label}` : `Lock ${label}`}
         aria-pressed={layer.locked}
-        className={`flex h-6 w-6 items-center justify-center rounded border transition ${layer.locked ? "border-amber-500 bg-amber-100 text-amber-800" : active ? "border-white/50 bg-white/10 text-white" : "border-slate-200 bg-white text-slate-500 hover:bg-slate-100"}`}
+        className={`flex h-6 w-6 items-center justify-center rounded border transition ${layer.locked ? "border-red-500 bg-red-50 text-red-700 hover:bg-red-100" : "border-emerald-500 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"}`}
         onClick={(event) => {
           event.stopPropagation();
           onChange({ locked: !layer.locked });
         }}
       >
-        {layer.locked ? <Lock className="h-3.5 w-3.5" /> : <Unlock className="h-3.5 w-3.5" />}
+        {layer.locked ? <Lock className="h-3.5 w-3.5 text-red-500" /> : <Unlock className="h-3.5 w-3.5 text-emerald-500" />}
       </button>
       <input
         type="range"

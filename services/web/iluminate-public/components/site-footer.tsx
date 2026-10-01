@@ -1,6 +1,6 @@
 import Image from "next/image";
 import Link from "next/link";
-import { appUrl } from "@/content/site";
+import { appLoginUrl, appStartUrl } from "@/content/site";
 import wordmarkAsset from "@/assets/iluminate-brand-master-editable_Wordmark oscuro.svg";
 
 const wordmark = typeof wordmarkAsset === "string" ? wordmarkAsset : wordmarkAsset.src;
@@ -54,8 +54,8 @@ export function SiteFooter() {
         </div>
         <div>
           <span className="eyebrow">Plataforma</span>
-          <a href={appUrl}>Abrir Designer ↗</a>
-          <a href={appUrl}>Iniciar sesión ↗</a>
+          <a href={appStartUrl}>Abrir herramientas ↗</a>
+          <a href={appLoginUrl}>Iniciar sesión ↗</a>
         </div>
       </div>
       <div className="footer-bottom">

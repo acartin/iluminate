@@ -2,7 +2,7 @@ import Link from "next/link";
 import { HeroStage } from "@/components/hero-stage";
 import { ProjectCard } from "@/components/project-card";
 import { Reveal } from "@/components/reveal";
-import { appUrl, projects } from "@/content/site";
+import { appStartUrl, projects } from "@/content/site";
 
 export default function HomePage() {
   return (
@@ -106,7 +106,7 @@ export default function HomePage() {
         <h2>De una forma estática<br />a una experiencia viva.</h2>
         <div className="closing-actions">
           <Link className="button button-light" href="/templates">Explorar templates</Link>
-          <a className="button button-outline" href={appUrl}>Abrir Designer ↗</a>
+          <a className="button button-outline" href={appStartUrl}>Abrir Designer ↗</a>
         </div>
       </section>
     </>

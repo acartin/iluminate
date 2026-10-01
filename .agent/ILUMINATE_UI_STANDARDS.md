@@ -128,6 +128,25 @@ La timeline debe usar el vocabulario de la partitura:
 - layers
 - blend modes
 
+Cada clip expone dentro del propio bloque un ojo para habilitarlo o silenciarlo.
+El estado se persiste en el documento de autoría y los clips deshabilitados no
+se incluyen en la partitura generada; al cambiar ese estado se invalida de
+inmediato el runtime anterior para impedir que Play siga reproduciéndolo. El
+borrado de pista solo aparece en una pista vacía; una pista que contiene un clip
+apagado sigue ocupada y muestra únicamente el borrado propio del clip. Las pistas usan filas compactas, con como
+máximo un margen mínimo alrededor del bloque, y el viewport no agrega padding
+decorativo. Animate no reserva una segunda barra contextual vacía.
+
+Al crear un clip se usa siempre la última pista completamente vacía. Si no
+existe una pista vacía, se agrega una nueva al final. La creación automática no
+superpone clips ni reutiliza la pista del clip seleccionado.
+
+Una edición estructural del timeline durante Play suspende el loop mientras se
+regenera la partitura y lo reanuda con el runtime nuevo. El playhead se anima
+como un único elemento alineado a píxeles enteros, sin modificar medidas ni
+provocar aparición/desaparición de scrollbars. En zoom 1 no hay overflow
+horizontal; con zoom mayor el scrollbar horizontal permanece reservado.
+
 La simulacion debe interpretar la misma semantica que firmware. Si hay efectos duplicados en TypeScript y C++, deben existir pruebas deterministas o fixtures comunes.
 
 ## 8. Estados, errores y feedback
@@ -142,6 +161,19 @@ Usar:
 - `lib/feedback.ts` para normalizar mensajes.
 
 Los errores no deben exponer SQL, tokens, trazas ni payloads sensibles.
+
+Botones e iconos:
+
+- Todo control representado únicamente por un icono debe tener un nombre accesible y un texto de ayuda al hacer hover (`aria-label` y `title`, directamente o mediante el componente compartido).
+- Los componentes compartidos deben derivar `title` desde `aria-label` cuando no se proporcione uno explícito.
+- En el Designer, naranja significa una acción global pendiente: Save cuando existen cambios sin guardar y Compile cuando el layout requiere recompilación. Gris significa que la acción está al día y no requiere intervención.
+- Save debe comparar el documento actual con la última versión confirmada por el servidor; el historial Undo por sí solo no determina si hay cambios pendientes. El movimiento del playhead/preview no ensucia el documento.
+- Compile usa un icono de construcción/compilación reconocible y comparte el color pendiente de Save.
+- Las barras operativas de Design y Animate usan la misma densidad compacta:
+  controles de 32 px e iconos principales de 16 px. Los iconos secundarios de
+  filas en Layers pueden usar 14 px. El componente `Button` conserva 40 px como
+  tamaño normal del portal y expone `density="compact"` para editores densos;
+  no simular esta variante mezclando clases de altura incompatibles.
 
 ## 9. Seguridad, auth y permisos
 
@@ -183,6 +215,8 @@ No permitido:
 ## 12. Checklist antes de implementar UI
 
 1. Leer `.agent/RULES.md`, `.agent/EXECUTION_MAP.md`, `.agent/FILESYSTEM_GUARDRAILS.md` y este documento.
+   Si el cambio afecta Designer o Animate, leer y cumplir además
+   `.agent/DESIGNER_UX_CONTRACT.md` y `.agent/DESIGNER_HANDOFF.md`.
 2. Revisar componentes existentes.
 3. Confirmar si la pantalla es editor, simulator, CRUD, dashboard, detalle o configuracion.
 4. Confirmar servicio propietario del dato.

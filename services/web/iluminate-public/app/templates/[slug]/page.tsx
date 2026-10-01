@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ProjectPlayer } from "@/components/project-player";
-import { appUrl, templates } from "@/content/site";
+import { appTemplateUrl, templates } from "@/content/site";
 
 type TemplatePageProps = { params: Promise<{ slug: string }> };
 
@@ -37,10 +37,10 @@ export default async function TemplatePage({ params }: TemplatePageProps) {
           <div><strong>100%</strong><span>Editable</span></div>
         </div>
         <p>
-          Al usar este template se creará una copia privada en tu cuenta. La geometría, el
-          cableado y la configuración del controlador deberán adaptarse a tu proyecto real.
+          Al usar este template se preparará un proyecto nuevo en tu cuenta. La geometría, el
+          cableado y la configuración del controlador se definirán después dentro de Designer.
         </p>
-        <a className="button button-dark" href={`${appUrl}/?template=${template.slug}`}>Usar este template ↗</a>
+        <a className="button button-dark" href={appTemplateUrl(template.slug)}>Usar este template ↗</a>
         <Link className="text-link" href={`/projects/${template.projectSlug}`}>Ver proyecto de origen</Link>
       </section>
     </article>

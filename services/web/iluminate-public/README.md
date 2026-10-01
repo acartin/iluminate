@@ -17,8 +17,11 @@ through the root Compose project.
 ## Environment
 
 - `ILUMINATE_PUBLIC_SITE_URL`: canonical public URL used by metadata and sitemap.
-- `NEXT_PUBLIC_ILUMINATE_APP_URL`: dashboard handoff URL; production value is
-  `https://app.iluminate.space`.
+- `ILUMINATE_APP_URL`: optional complete dashboard handoff URL. Leave it empty
+  in development so the handoff preserves the hostname used by the browser and
+  changes only to `ILUMINATE_WEB_PORT` (default `8420`). Set the external URL
+  explicitly when the production dashboard is deployed.
+- `ILUMINATE_WEB_PORT`: dashboard port used by the automatic local handoff.
 
 The public container intentionally receives no database, storage-write,
 authentication or device credentials.

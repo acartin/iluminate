@@ -1,6 +1,6 @@
 import type { DesignerBuildAreaForm, DesignerChannelForm, DesignerControllerForm, DesignerForm, DesignerPoint, DesignerRouteForm, DesignerRouteKind, DesignerZoneForm } from "@/lib/lighting/partitura-model";
-import type { DesignerActiveLayer, DesignerMeasurement, DesignerRouteDraft, DesignerShapeDraft, DesignerViewport, PaperApi, PaperPoint, PaperRectangle } from "./types";
-import { channelBorderPolylines, channelCenterPolyline, channelIsClosed, channelWidthCm, controllerConnectedPorts, controllerPortPoint, formatDecimal, formatMeasure, openChannelOutline, pointInsideDesignerShape, routeColor, routeDirectionMarkers, routePointFill, routeSelectedColor, sampleRouteLedDots } from "./designer-geometry";
+import type { DesignerActiveLayer, DesignerMeasurement, DesignerPrimitiveDraft, DesignerRouteDraft, DesignerShapeDraft, DesignerViewport, PaperApi, PaperPoint, PaperRectangle } from "./types";
+import { channelBorderPolylines, channelCenterPolyline, channelContainsPoint, channelIsClosed, channelWidthCm, controllerConnectedPorts, controllerPortPoint, formatDecimal, formatMeasure, openChannelOutline, pointInsideDesignerShape, routeColor, routeDirectionMarkers, routePointFill, routeSelectedColor, sampleRouteLedDots } from "./designer-geometry";
 import type { CompiledDesignerLayout } from "./designer-compiler";
 
 let paperScope: PaperApi;
@@ -24,6 +24,7 @@ export function drawPaperDesigner({
   selectedController,
   routeDraft,
   shapeDraft,
+  primitiveDraft,
   measurement,
   canvasSize,
   colorMode
@@ -42,6 +43,7 @@ export function drawPaperDesigner({
   selectedController: boolean;
   routeDraft: DesignerRouteDraft | null;
   shapeDraft: DesignerShapeDraft | null;
+  primitiveDraft: DesignerPrimitiveDraft | null;
   measurement: DesignerMeasurement | null;
   canvasSize: { width: number; height: number };
   colorMode: "day" | "night";
@@ -68,6 +70,7 @@ export function drawPaperDesigner({
   drawPaperDocumentCanvas(designer, toScreen, rectToScreen, colors);
   drawPaperGrid(designer, viewport, canvasSize, toScreen, colors.grid);
   drawPaperShapeDraft(shapeDraft, toScreen);
+  drawPaperPrimitiveDraft(primitiveDraft, rectToScreen);
 
   // Reference geometry belongs to the Artwork plane: the Artwork category eye is
   // the master switch, and each build area's own eye refines it.
@@ -106,6 +109,32 @@ export function drawPaperDesigner({
     });
   }
 
+  if (designer.layers.lightSources.visible) {
+    designer.lightSources.filter((source) => source.visible && source.enabled).forEach((source) => {
+      const target = source.targetType === "zone"
+        ? designer.zones.find((zone) => zone.id === source.targetId)
+        : designer.channels.find((channel) => channel.id === source.targetId);
+      if (!target) return;
+      const color = source.mode === "front" ? "#f59e0b" : source.mode === "halo" ? "#a78bfa" : "#38bdf8";
+      designer.routes.filter((route) => route.kind === "led_string" && source.stringIds.includes(route.id)).forEach((route) => {
+        sampleRouteLedDots(route, designer.addressablePixelsPerMeter, designer.addressablePixelsPerMeter)
+          .filter((dot) => source.targetType === "zone"
+            ? pointInsideDesignerShape(target as DesignerZoneForm, dot)
+            : channelContainsPoint(target as DesignerChannelForm, dot))
+          .forEach((dot) => {
+            new paperScope.Path.Circle({
+              center: toScreen(dot),
+              radius: Math.max(2, Math.min(4.5, lengthToScreen(0.22))),
+              fillColor: color,
+              strokeColor: "#020617",
+              strokeWidth: 0.7,
+              opacity: designer.layers.lightSources.opacity
+            });
+          });
+      });
+    });
+  }
+
   if (designer.layers.strings.visible) {
     designer.routes.forEach((route) => {
       if (route.visible === false) return;
@@ -137,8 +166,22 @@ export function drawPaperDesigner({
   drawPaperActiveLayerLabel(activeLayer, canvasSize);
 }
 
+function drawPaperPrimitiveDraft(draft: DesignerPrimitiveDraft | null, rectToScreen: (shape: { x: number; y: number; width: number; height: number }) => PaperRectangle) {
+  if (!draft || draft.bounds.width <= 0 || draft.bounds.height <= 0) return;
+  const color = draft.target === "build_area" ? "#a78bfa" : "#38bdf8";
+  const options = {
+    rectangle: rectToScreen(draft.bounds),
+    fillColor: draft.target === "build_area" ? "rgba(167,139,250,0.10)" : "rgba(56,189,248,0.10)",
+    strokeColor: color,
+    strokeWidth: 1.5,
+    dashArray: [8, 5]
+  };
+  if (draft.shape === "ellipse") new paperScope.Path.Ellipse(options);
+  else new paperScope.Path.Rectangle(options);
+}
+
 /** Animation presentation: same Paper geometry and viewport as Designer, without fabrication layers. */
-export function drawPaperAnimationMap({ designer, layout, viewport, selectedZoneId, canvasSize, colorMode, animationPixels = [], animationDiffusers = {} }: {
+export function drawPaperAnimationMap({ designer, layout, viewport, selectedZoneId, canvasSize, colorMode, animationPixels = [] }: {
   designer: DesignerForm;
   layout: CompiledDesignerLayout;
   viewport: DesignerViewport;
@@ -146,7 +189,7 @@ export function drawPaperAnimationMap({ designer, layout, viewport, selectedZone
   canvasSize: { width: number; height: number };
   colorMode: "day" | "night";
   animationPixels?: Array<{ output: number; serialIndex: number; color: { r: number; g: number; b: number } }>;
-  animationDiffusers?: Record<string, "none" | "milky_white" | "day_night">;
+  animationDiffusers?: Record<string, "as_built" | "led_map">;
 }) {
   const colors = colorMode === "night" ? { workspace: "#020617", document: "#090d16", documentStroke: "#1e293b", grid: "#334155", label: "#94a3b8" } : { workspace: "#e2e8f0", document: "#ffffff", documentStroke: "#94a3b8", grid: "#94a3b8", label: "#475569" };
   paperScope.project.clear();
@@ -161,41 +204,13 @@ export function drawPaperAnimationMap({ designer, layout, viewport, selectedZone
     new paperScope.PointText({ point: toScreen({ x: zone.x + 1.2, y: zone.y + 2.5 }), content: zone.name, fillColor: selected ? "#bfdbfe" : colors.label, fontFamily: "sans-serif", fontSize: selected ? 13 : 11, opacity: selected ? 1 : 0.8 });
   });
   const renderedColors = new Map(animationPixels.map((pixel) => [`${pixel.output}:${pixel.serialIndex}`, pixel.color]));
-  const designerZones = new Map(designer.zones.map((zone) => [zone.id, zone]));
-  const zonesByPixel = new Map<string, DesignerZoneForm[]>();
-  layout.zones.forEach((zone) => {
-    const designerZone = designerZones.get(zone.id);
-    if (!designerZone) return;
-    zone.pixelIds.forEach((pixelId) => {
-      const zones = zonesByPixel.get(pixelId) ?? [];
-      zones.push(designerZone);
-      zonesByPixel.set(pixelId, zones);
-    });
-  });
   layout.pixelMap.forEach((pixel) => {
     const point = toScreen(pixel);
     const selected = selectedZoneId ? designer.zones.some((zone) => zone.id === selectedZoneId && pointInsideDesignerShape(zone, pixel)) : false;
     const dotSize = Math.max(3, Math.min(9, (100 / Math.max(1, designer.addressablePixelsPerMeter)) * canvasSize.width / viewport.width * 1.35));
     const rendered = renderedColors.get(`${pixel.output}:${pixel.serialIndex}`);
     const fillColor = rendered ? `rgb(${rendered.r}, ${rendered.g}, ${rendered.b})` : selected ? "#60a5fa" : "#64748b";
-    const zone = (zonesByPixel.get(pixel.id) ?? []).find((entry) => entry.id === selectedZoneId) ?? zonesByPixel.get(pixel.id)?.[0];
-    const diffuser = zone ? animationDiffusers[zone.id] ?? animationDiffusers.full_sign ?? "none" : animationDiffusers.full_sign ?? "none";
-    if (diffuser !== "none") {
-      const glowSize = dotSize * (diffuser === "day_night" ? 4.4 : 5.2);
-      const color = rendered ?? { r: 70, g: 85, b: 105 };
-      new paperScope.Path.Circle({
-        center: point,
-        radius: glowSize,
-        fillColor: `rgba(${color.r}, ${color.g}, ${color.b}, ${rendered ? 0.22 : 0.08})`
-      });
-      new paperScope.Path.Circle({
-        center: point,
-        radius: glowSize * 0.42,
-        fillColor: `rgba(${color.r}, ${color.g}, ${color.b}, ${rendered ? 0.55 : 0.14})`
-      });
-    } else {
-      new paperScope.Path.Rectangle({ rectangle: new paperScope.Rectangle(point.x - dotSize / 2, point.y - dotSize / 2, dotSize, dotSize), radius: Math.min(2, dotSize / 4), fillColor, strokeColor: selected ? "#dbeafe" : "#1e293b", strokeWidth: 0.75 });
-    }
+    new paperScope.Path.Rectangle({ rectangle: new paperScope.Rectangle(point.x - dotSize / 2, point.y - dotSize / 2, dotSize, dotSize), radius: Math.min(2, dotSize / 4), fillColor, strokeColor: selected ? "#dbeafe" : "#1e293b", strokeWidth: 0.75 });
   });
   new paperScope.PointText({ point: new paperScope.Point(18, canvasSize.height - 16), content: `${layout.pixelMap.length} mapped pixels`, fillColor: colors.label, fontFamily: "monospace", fontSize: 11 });
 }

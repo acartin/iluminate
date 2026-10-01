@@ -20,7 +20,7 @@ function getInitialTheme(): Theme {
   return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
-export function ThemeToggle() {
+export function ThemeToggle({ compact = false }: { compact?: boolean }) {
   const [theme, setTheme] = React.useState<Theme>("light");
 
   React.useEffect(() => {
@@ -44,8 +44,9 @@ export function ThemeToggle() {
       title={theme === "dark" ? "Light theme" : "Dark theme"}
       type="button"
       variant="outline"
+      density={compact ? "compact" : "default"}
       onClick={toggleTheme}
-      className="h-9 w-9 px-0"
+      className={compact ? "w-8 px-0" : "h-9 w-9 px-0"}
     >
       <Icon className="h-4 w-4" />
     </Button>

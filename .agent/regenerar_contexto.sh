@@ -184,6 +184,7 @@ append_file_excerpt ".agent/FILESYSTEM_GUARDRAILS.md"
 
 append_section "Reglas Operativas"
 append_file_excerpt ".agent/RULES.md"
+append_file_excerpt ".agent/DESIGNER_UX_CONTRACT.md"
 append_file_excerpt ".agent/EXECUTION_MAP.md"
 append_file_excerpt ".agent/IMPLEMENTATION_PLAN.md"
 append_file_excerpt ".agent/ILUMINATE_UI_STANDARDS.md"

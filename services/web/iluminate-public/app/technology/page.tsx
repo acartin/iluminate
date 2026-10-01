@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { appUrl } from "@/content/site";
+import { appStartUrl } from "@/content/site";
 
 export const metadata: Metadata = {
   title: "Tecnología",
@@ -31,7 +31,7 @@ export default function TechnologyPage() {
           <article><span>02</span><h3>La luz es una composición.</h3><p>Una escena coordina zonas completas; no es una lista desconectada de colores y efectos.</p></article>
           <article><span>03</span><h3>La instalación debe ser autónoma.</h3><p>Una interrupción de internet no debería apagar la experiencia instalada.</p></article>
         </div>
-        <a className="button button-light" href={appUrl}>Abrir Designer ↗</a>
+        <a className="button button-light" href={appStartUrl}>Abrir Designer ↗</a>
       </section>
     </>
   );

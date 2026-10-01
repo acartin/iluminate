@@ -1,9 +1,9 @@
 # AI Context Pack
 
-- Generated UTC: `2026-09-22T21:34:31Z`
+- Generated UTC: `2026-10-01T00:15:13Z`
 - Repo root: `/srv/iluminate`
-- Git branch: `HETZNER-DEV-2026-Setiembre-20`
-- Git commit: `4716411`
+- Git branch: `main`
+- Git commit: `86f6802`
 - Policy: high-signal only; enfocado en Iluminate.
 
 ## Contexto Maestro
@@ -13,10 +13,10 @@
 ```
 # BRAIN_MAP
 
-- Generated UTC: `2026-09-22T21:34:31Z`
+- Generated UTC: `2026-10-01T00:15:13Z`
 - Repo root: `/srv/iluminate`
-- Git branch: `HETZNER-DEV-2026-Setiembre-20`
-- Git commit: `4716411`
+- Git branch: `main`
+- Git commit: `86f6802`
 
 ## 1. MAPA DE INTENCIONES (ILUMINATE)
 
@@ -98,6 +98,7 @@ services/web/iluminate-public
 services/web/iluminate-public/app
 services/web/iluminate-public/app/about
 services/web/iluminate-public/app/for-sign-makers
+services/web/iluminate-public/app/handoff
 services/web/iluminate-public/app/learn
 services/web/iluminate-public/app/projects
 services/web/iluminate-public/app/technology
@@ -118,6 +119,7 @@ services/web/iluminate/app/partituras
 services/web/iluminate/app/projects
 services/web/iluminate/app/reset-password
 services/web/iluminate/app/settings
+services/web/iluminate/app/start
 services/web/iluminate/components
 services/web/iluminate/components/crud
 services/web/iluminate/components/lighting
@@ -189,8 +191,6 @@ services/lighting-core/fixtures/partitura-v1-minimal.json
 services/lighting-core/generators/partitura-generator.ts
 services/lighting-core/index.ts
 services/lighting-core/migrations/.gitkeep
-services/lighting-core/migrations/2026-08-19_create_iluminate_operational_tables.sql
-services/lighting-core/migrations/2026-08-22_create_iluminate_partituras.sql
 ```
 ### `.agent/AI_CONTEXT_LED_ORCHESTRATION_PLATFORM.md`
 
@@ -577,6 +577,7 @@ Precondicion recomendada al iniciar cada nueva sesion:
    - Leer `.agent/EXECUTION_MAP.md`.
    - Leer `.agent/FILESYSTEM_GUARDRAILS.md`.
    - Leer `.agent/IMPLEMENTATION_PLAN.md` cuando la tarea afecte roadmap, fases o priorizacion.
+   - Leer `.agent/DESIGNER_UX_CONTRACT.md` y `.agent/DESIGNER_HANDOFF.md` antes de cambiar el Designer, sus barras, herramientas, Layers, canvas o flujo Animate.
    - Leer `.agent/EFFECT_TARGETING_MODEL.md` antes de cambiar el compilador, pixelMap, zonas, grupos, efectos o simulador.
    - Leer `.agent/ILUMINATE_UI_STANDARDS.md` si se toca `services/web/iluminate`.
    - Leer `.agent/PUBLIC_SITE_DIRECTION.md` si se toca el sitio publico, catalogo, templates, configurador publico, SEO o area de aprendizaje.
@@ -594,13 +595,14 @@ Regla de precedencia:
 
 1. Codigo ejecutable vigente.
 2. `.agent/RULES.md`.
-3. `.agent/FILESYSTEM_GUARDRAILS.md`.
-4. `.agent/EXECUTION_MAP.md`.
-5. `.agent/IMPLEMENTATION_PLAN.md`.
-6. `.agent/ILUMINATE_UI_STANDARDS.md`.
-7. `.agent/AI_CONTEXT_LED_ORCHESTRATION_PLATFORM.md`.
-8. `.agent/BRAIN_MAP.md`.
-9. `.agent/AI_CONTEXT_PACK.md`.
+3. `.agent/DESIGNER_UX_CONTRACT.md` para estructura y controles del Designer.
+4. `.agent/FILESYSTEM_GUARDRAILS.md`.
+5. `.agent/EXECUTION_MAP.md`.
+6. `.agent/IMPLEMENTATION_PLAN.md`.
+7. `.agent/ILUMINATE_UI_STANDARDS.md`.
+8. `.agent/AI_CONTEXT_LED_ORCHESTRATION_PLATFORM.md`.
+9. `.agent/BRAIN_MAP.md`.
+10. `.agent/AI_CONTEXT_PACK.md`.
 
 ## 2. Scope operativo actual
 
@@ -658,6 +660,7 @@ Reglas:
 ## 6. Frontend Iluminate
 
 - Seguir `.agent/ILUMINATE_UI_STANDARDS.md`.
+- Para cualquier cambio del Designer, cumplir `.agent/DESIGNER_UX_CONTRACT.md`; la barra global, barra contextual y rail de herramientas no se pueden volver a mezclar por conveniencia de espacio.
 - Preservar `AppShell`, `Sidebar`, `Topbar` y UI primitives existentes.
 - No introducir templates externos.
 - No construir landing marketing dentro del portal operativo.
@@ -712,6 +715,190 @@ Antes de empezar trabajo nuevo:
 
 Si aparece una instruccion heredada de otro proyecto, tratarla como legacy y no aplicarla a Iluminate salvo pedido explicito.
 ```
+### `.agent/DESIGNER_UX_CONTRACT.md`
+
+```
+# Designer UX Contract
+
+**Status:** mandatory. This document is the canonical layout contract for the
+Designer studio. Read it before changing `partitura-workspace.tsx`, the Designer
+tool rail, either top bar, Layers navigation, or Animate workspace controls.
+
+The purpose of this contract is to keep controls organized by scope. New
+features must fit this structure; they must not gradually turn the first bar or
+the tool rail into a collection of unrelated buttons.
+
+## Fixed Studio Structure
+
+The Designer has exactly these primary UI regions:
+
+```text
+Global command bar
+Contextual properties bar (Design only)
+Tool rail | Canvas | Layers/properties panel
+Animate timeline when Animate mode is active
+```
+
+Do not add a third horizontal command/properties bar. Recover horizontal space
+with compact labels, icons, grouped menus or responsive hiding before adding
+another row. Vertical canvas space has priority.
+
+## 1. Global Command Bar
+
+The first/top bar contains only commands or state that remain valid regardless
+of the selected tool or canvas object.
+
+Canonical contents:
+
+- Back and document identity.
+- Design/Animate mode switch.
+- Designer-wide setup: units, canvas width/height, snap, Pixels/m and LEDs/m.
+  These settings stay grouped under `Setup`; do not expand all of them into the
+  bar.
+- Global view commands: rulers and fit-to-view.
+- Layers panel toggle and active-layer identification.
+- Compile state, issue count and global fabrication status.
+- Theme, Undo, Redo, Compile and Save.
+- In Animate mode: preview type, an always-labeled `Outlines` checkbox and fullscreen Viewer. Outlines is a visibility state, not a square-shaped drawing-tool button.
+
+Save remains gray and disabled when the current persistent document matches the
+last server-confirmed version. It turns amber and becomes actionable when
+there are unsaved changes; returning to the saved state through Undo returns it
+to gray. Preview/playhead movement does not mark the document dirty. Compile
+uses the same amber pending-state color and a build/compile icon, then returns
+to gray when current. Every icon-only control exposes the same accessible hover
+description through `title` and `aria-label`.
+
+Selection-dependent actions or fields do not belong here. In particular, do
+not place object coordinates, shape/path fields, node controls, Lighting,
+Copy/Paste or Delete in this bar.
+
+## 2. Contextual Properties Bar
+
+The second bar exists only in Design and describes the current editing context.
+Its contents must change with the active tool or selected object. Animate must
+not reserve an empty contextual row: its calibration lives in the right panel
+and its scene/track/clip controls live in the timeline toolbar.
+
+With no object selected it shows:
+
+- active tool name;
+- a short instruction for using that tool;
+- active layer or a prompt to choose one.
+
+With an object selected it shows:
+
+- object name/identity;
+- only properties relevant to that object or selected node;
+- contextual actions such as Lighting, Configure source, Copy, Paste and
+  Delete.
+
+Examples:
+
+- Zone: Lighting, shape, position/size, selected-node fields.
+- Channel: Lighting, width, open/closed path, ends, node and fillet fields.
+- Artwork/reference: position, size, shape and node fields.
+- Route: route type and editing actions.
+- Controller: position and port count.
+- Light source: source type and Configure source.
+
+The contextual bar may scroll horizontally when an object genuinely has many
+properties. It must not absorb document-wide configuration merely because
+space is available.
+
+For a selected soldered route node, the scissors in the Strings tool rail acts
+immediately as `Detach solder joint`; it does not appear in the contextual
+properties bar. Detaching never deletes route geometry. A controller/cable or
+mixed cable/string joint clears the selected connection and any newly floating
+counterpart marker. A same-kind cable/cable or string/string joint, which
+persistence represents as one merged route, splits back into two independent
+routes at that node. Without a soldered node selected, the same scissors keeps
+its existing `Cut route` pointer mode. This explicit Strings workflow is the
+sole exception to the general command-placement rule for the tool rail.
+
+## 3. Left Tool Rail
+
+The left rail contains tools: modes that change what pointer interaction does
+on the canvas.
+
+Always-available tools:
+
+- Select.
+- Pan.
+- Measure.
+
+The remaining tools depend on the active layer, for example image placement,
+reference/zone/channel drawing, LED string, data cable and route cutting.
+
+The rail must not contain command actions. Do not add Delete, Copy, Paste,
+Undo, Redo, Fit, Zoom buttons, Save, Compile, Layers or object parameters to
+the rail. Mouse wheel/trackpad handles zoom; Fit belongs to the global bar;
+Delete belongs to the contextual bar and keyboard shortcut.
+
+Ruler visibility and distance measurement are different functions and must not
+share the same icon. The global Ruler control uses the ruler icon. The Measure
+tool uses a measuring-tape icon so the operator can distinguish view state from
+an active canvas tool without reading a tooltip.
+
+## Category Activation And Selection Synchronization
+
+Category activation must be immediate and deterministic:
+
+- Clicking a category name, its disclosure arrow or one of its folders makes
+  that category the active canvas layer and returns the pointer to Select.
+- Once active, every visible object belonging to that category can be selected
+  on the canvas. Zooming or panning must never be required to "finish"
+  activation.
+- Hidden layers and hidden objects are not selectable.
+- Locked layers remain selectable for identification and inspection, but no
+  geometry, property, delete or drawing mutation is allowed. The contextual
+  bar must identify the selection as `Locked · inspect only`. Lock means
+  immutable, not invisible and not uninspectable.
+
+Canvas selection and Layers navigation are one synchronized state:
+
+- Selecting an object on the canvas opens the Layers panel if necessary.
+- It activates and expands the object's parent category.
+- It expands the exact containing folder and scrolls the selected row into
+  view.
+- Mapping is fixed: artwork -> `Artwork / Images`; build area -> `Artwork /
+  Reference`; zone -> `Diffusors / Zones`; channel -> `Diffusors / Channels`;
+  data cable -> `Strings / Data cables`; LED string -> `Strings / LED strings`;
+  controller -> `Hardware`.
+- The same mapping must be used by canvas selection and panel selection; do not
+  maintain competing ad-hoc mappings in separate components.
+
+`Light Sources` is not a Layers category. A Front, Halo-Lit or Wall Washer
+record has no independent canvas geometry or drawing tool; it is a Lighting
+Setup owned by a zone or channel. It must be reached from that owner rather
+than presented as an activatable canvas plane. Keep the persisted
+`designer.lightSources` name temporarily for document compatibility until a
+separate, explicit data migration renames it; the legacy field name is not
+permission to restore the Layers category.
+
+## Lighting Construction Versus Animate Calibration
+
+Lighting construction belongs to Design. Only Design may create, enable,
+disable or remove Front, Halo-Lit and Wall Washer sources, rename a source,
+assign LED strings, choose the installed front material/diffuser or choose the
+physical receiver. These are installation attributes, not animation controls.
+
+Animate may tune only calibration parameters of sources that already exist:
+
+- Front: intensity and the applicable distance, softness, transmission and
+  beam calibration for its installed material.
+- Halo-Lit: intensity, spread, softness, wall gap and face color.
+- Wall Washer: intensity, spread, softness, direction, throw, beam and falloff.
+
+Animate must not show mode enable checkboxes, Add/Remove, source naming, LED
+string assignment, material selection or receiver selection. If the selected
+target has no configured source, Animate directs the operator to Design.
+
+Selecting a timeline clip must keep that clip selected and select/highlight its
+owning zone or channel on the Animate canvas. Modern clips normally target a
+Front, Halo-Lit or Wall Washer source ID; the UI must resolve that source's
+`targetType` and `targetId` instead of treating the non-geometric source record
+```
 ### `.agent/EXECUTION_MAP.md`
 
 ```
@@ -754,9 +941,9 @@ Este archivo define donde validar cambios segun la ruta afectada. En Iluminate, 
 ## Variables clave actuales
 
 - `ILUMINATE_WEB_PORT`
-- `ILUMINATE_PUBLIC_WEB_PORT` (prevista)
-- `ILUMINATE_PUBLIC_SITE_URL` (prevista; produccion `https://iluminate.space`)
-- `ILUMINATE_APP_URL` (prevista; produccion `https://app.iluminate.space`)
+- `ILUMINATE_PUBLIC_WEB_PORT`
+- `ILUMINATE_PUBLIC_SITE_URL` (produccion `https://iluminate.space`)
+- `ILUMINATE_APP_URL` (vacia en desarrollo para handoff por hostname; produccion `https://app.iluminate.space`)
 - `ILUMINATE_API_BASE_URL`
 - `ILUMINATE_PLACEHOLDER_AUTH`
 - `ILUMINATE_SECURE_COOKIES`
@@ -1133,6 +1320,25 @@ La timeline debe usar el vocabulario de la partitura:
 - layers
 - blend modes
 
+Cada clip expone dentro del propio bloque un ojo para habilitarlo o silenciarlo.
+El estado se persiste en el documento de autoría y los clips deshabilitados no
+se incluyen en la partitura generada; al cambiar ese estado se invalida de
+inmediato el runtime anterior para impedir que Play siga reproduciéndolo. El
+borrado de pista solo aparece en una pista vacía; una pista que contiene un clip
+apagado sigue ocupada y muestra únicamente el borrado propio del clip. Las pistas usan filas compactas, con como
+máximo un margen mínimo alrededor del bloque, y el viewport no agrega padding
+decorativo. Animate no reserva una segunda barra contextual vacía.
+
+Al crear un clip se usa siempre la última pista completamente vacía. Si no
+existe una pista vacía, se agrega una nueva al final. La creación automática no
+superpone clips ni reutiliza la pista del clip seleccionado.
+
+Una edición estructural del timeline durante Play suspende el loop mientras se
+regenera la partitura y lo reanuda con el runtime nuevo. El playhead se anima
+como un único elemento alineado a píxeles enteros, sin modificar medidas ni
+provocar aparición/desaparición de scrollbars. En zoom 1 no hay overflow
+horizontal; con zoom mayor el scrollbar horizontal permanece reservado.
+
 La simulacion debe interpretar la misma semantica que firmware. Si hay efectos duplicados en TypeScript y C++, deben existir pruebas deterministas o fixtures comunes.
 
 ## 8. Estados, errores y feedback
@@ -1148,41 +1354,22 @@ Usar:
 
 Los errores no deben exponer SQL, tokens, trazas ni payloads sensibles.
 
+Botones e iconos:
+
+- Todo control representado únicamente por un icono debe tener un nombre accesible y un texto de ayuda al hacer hover (`aria-label` y `title`, directamente o mediante el componente compartido).
+- Los componentes compartidos deben derivar `title` desde `aria-label` cuando no se proporcione uno explícito.
+- En el Designer, naranja significa una acción global pendiente: Save cuando existen cambios sin guardar y Compile cuando el layout requiere recompilación. Gris significa que la acción está al día y no requiere intervención.
+- Save debe comparar el documento actual con la última versión confirmada por el servidor; el historial Undo por sí solo no determina si hay cambios pendientes. El movimiento del playhead/preview no ensucia el documento.
+- Compile usa un icono de construcción/compilación reconocible y comparte el color pendiente de Save.
+- Las barras operativas de Design y Animate usan la misma densidad compacta:
+  controles de 32 px e iconos principales de 16 px. Los iconos secundarios de
+  filas en Layers pueden usar 14 px. El componente `Button` conserva 40 px como
+  tamaño normal del portal y expone `density="compact"` para editores densos;
+  no simular esta variante mezclando clases de altura incompatibles.
+
 ## 9. Seguridad, auth y permisos
 
 La seguridad autoritativa vive en backend/auth.
-
-Reglas:
-
-- Logout siempre por POST/form, no `Link` ni GET.
-- No pasar rol activo, organizacion o tenant por query string como autoridad.
-- Ocultar/deshabilitar acciones sin permiso, pero la API debe validar tambien.
-- `lighting-core` debe recibir identidad/contexto resuelto; no manejar contrasenas ni sesiones.
-
-## 10. Mocks y contratos API
-
-Mientras una API no este completa:
-
-- Marcar mocks como temporales.
-- No mezclar mocks silenciosos con datos reales.
-- No simular exito persistente si la API no guarda.
-- Mantener acciones deshabilitadas o feedback claro cuando falte contrato.
-
-## 11. Dependencias UI
-
-No instalar librerias visuales grandes sin justificar.
-
-Permitido con criterio:
-
-- Paper.js para el canvas de autoria vectorial avanzada. El Designer debe renderizar sobre HTML canvas + Paper.js; no reconstruir un motor SVG paralelo para strings, zonas o controlador.
-- PixiJS si el simulador lo requiere.
-- Librerias funcionales pequenas.
-- Iconos de la libreria ya presente.
-
-No permitido:
-
-- Templates UI externos.
-- Kits completos que reemplacen el sistema actual.
 ```
 ### `.agent/ILUMINATE_BOOTSTRAP.md`
 
@@ -1225,7 +1412,7 @@ El dominio publico registrado es `iluminate.space`; el dashboard/Designer se pub
 # Effect Targeting Model
 
 **Status:** canonical product decision
-**Last updated:** 2026-09-10
+**Last updated:** 2026-09-27
 
 ## Decision
 
@@ -1236,6 +1423,7 @@ controller + data cables + LED strings
 -> electrical topology and serial order
 -> generated pixelMap
 -> zones and groups select pixels
+-> light sources bind visual geometry to physical LED strings
 -> clips/effects render those selected pixels
 ```
 
@@ -1277,10 +1465,21 @@ Effects target only these normal authoring concepts:
 - **Group:** a named collection of zones and/or other groups, for example
   `Letter L`, `word CARIBE`, or `full sign`. Groups create no pixels and do not
   alter wiring. They may nest, but cycles are invalid.
+- **Light source:** a named Front, Halo or Wall Wash emitter attached to a zone
+  or channel and to one or more physical LED strings. Front and Halo on the same
+  letter are independent clip targets only when backed by independent strings.
+  The compiler exports each source as a resolved zone target, preserving the
+  firmware-facing partitura contract.
 
-The UI should use zones and groups as the normal selectable targets for clips.
+The UI should use light sources and groups as the normal selectable targets for
+clips when sources exist. Legacy zone targets remain valid during migration.
 A string remains visible as physical fabrication information, not the ordinary
 effect-authoring language.
+
+A disabled light source is construction state, not an active render target.
+Clips may remain authored against it for later reuse, but generation omits them.
+When a legacy geometry-targeted clip is migrated, it expands only to enabled
+sources; disabled placeholder modes must not create active duplicate effects.
 
 ## Effect Ordering And Coordinates
 
@@ -1411,6 +1610,14 @@ Login, signup and `Use this template` actions hand off to
 `app.iluminate.space`. Authentication and private editing do not move into the
 public application.
 
+Local development keeps both applications on the same host with independent
+ports (`8430` public and `8420` dashboard by default). Public links go through
+the server-side `/handoff` route: when `ILUMINATE_APP_URL` is empty it preserves
+the hostname used by the browser and changes only to `ILUMINATE_WEB_PORT`. This
+avoids hardcoded LAN addresses and also avoids build-time `NEXT_PUBLIC_*`
+configuration. Production must set `ILUMINATE_APP_URL` to the complete external
+dashboard URL before publishing authenticated handoffs.
+
 ## Public Projects And Templates
 
 The first projects are Iluminate-created concepts, not customer case studies.
@@ -1525,14 +1732,6 @@ Do not require a custom video hosting or LMS platform for the first version.
   intensity. Each ray is independently hoverable; clicking a ray replaces its
   illuminated-peak color with a solid palette color, while its resting endpoint
   remains black. The dot acts as a master switch with
-  a restrained comet-like light burst. The earlier dark nebula has been removed.
-  An invisible interaction field preserves the
-  pointer experience against the clean light wall. Keep that field confined to
-  the sculpture so it never crosses the hero title, and reset old trail points
-  on re-entry to prevent long connecting segments. Pointer movement across
-  that field or the mark draws a short-lived red wand trail with fine sparks;
-  avoid large blob-like
-  hover particles. Clicking a ray assigns a new peak color and produces a brief
 ```
 
 ## Documentacion de Arquitectura
@@ -1727,9 +1926,9 @@ The partitura owns:
 ### Servicios del compose principal
 
 ```text
+postgres
 iluminate-public-web
 iluminate-web
-postgres
 ```
 ### `compose.yml:1-220`
 
@@ -1781,7 +1980,8 @@ services:
     container_name: iluminate-public-web
     environment:
       ILUMINATE_PUBLIC_SITE_URL: ${ILUMINATE_PUBLIC_SITE_URL:-http://localhost:8430}
-      NEXT_PUBLIC_ILUMINATE_APP_URL: ${ILUMINATE_APP_URL:-http://localhost:8420}
+      ILUMINATE_APP_URL: ${ILUMINATE_APP_URL:-}
+      ILUMINATE_WEB_PORT: ${ILUMINATE_WEB_PORT:-8420}
     ports:
       - "${ILUMINATE_PUBLIC_WEB_PORT:-8430}:3000"
     restart: unless-stopped
@@ -1803,8 +2003,9 @@ ILUMINATE_ENV=local
 ILUMINATE_WEB_PORT=8420
 ILUMINATE_PUBLIC_WEB_PORT=8430
 ILUMINATE_PUBLIC_SITE_URL=http://localhost:8430
-ILUMINATE_APP_URL=http://localhost:8420
-NEXT_PUBLIC_ILUMINATE_APP_URL=http://localhost:8420
+# Empty in development: the public handoff keeps the current hostname and uses ILUMINATE_WEB_PORT.
+# Set the complete external URL only after the production dashboard route exists.
+ILUMINATE_APP_URL=
 
 # Web/API
 ILUMINATE_API_BASE_URL=
@@ -1875,6 +2076,7 @@ services/web/iluminate-public
 services/web/iluminate-public/app
 services/web/iluminate-public/app/about
 services/web/iluminate-public/app/for-sign-makers
+services/web/iluminate-public/app/handoff
 services/web/iluminate-public/app/learn
 services/web/iluminate-public/app/projects
 services/web/iluminate-public/app/technology
@@ -1895,6 +2097,7 @@ services/web/iluminate/app/partituras
 services/web/iluminate/app/projects
 services/web/iluminate/app/reset-password
 services/web/iluminate/app/settings
+services/web/iluminate/app/start
 services/web/iluminate/components
 services/web/iluminate/components/crud
 services/web/iluminate/components/lighting
@@ -2026,9 +2229,11 @@ services/web/iluminate/app/not-found.tsx
 services/web/iluminate/app/page.tsx
 services/web/iluminate/docs/theme-standard.md
 services/web/iluminate/lib/api.ts
+services/web/iluminate/lib/client-debug.ts
 services/web/iluminate/lib/feedback.ts
 services/web/iluminate/lib/modules.ts
 services/web/iluminate/lib/request-url.ts
+services/web/iluminate/lib/start-intent.ts
 services/web/iluminate/lib/types.ts
 services/web/iluminate/lib/utils.ts
 services/web/iluminate/next-env.d.ts
@@ -2038,6 +2243,7 @@ services/web/iluminate/package.json
 services/web/iluminate/postcss.config.mjs
 services/web/iluminate/tailwind.config.ts
 services/web/iluminate/tsconfig.json
+services/web/iluminate/tsconfig.tsbuildinfo
 ```
 
 ## Extractos de Servicio

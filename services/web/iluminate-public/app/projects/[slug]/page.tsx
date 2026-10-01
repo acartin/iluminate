@@ -3,7 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ProjectPlayer } from "@/components/project-player";
 import { ProjectVisual } from "@/components/project-visual";
-import { appUrl, projects } from "@/content/site";
+import { appStartUrl, appTemplateUrl, projects } from "@/content/site";
 
 type ProjectPageProps = { params: Promise<{ slug: string }> };
 
@@ -70,7 +70,7 @@ export default async function ProjectPage({ params }: ProjectPageProps) {
           <p>Usa la estructura de este estudio como punto de partida y adáptala a tu geometría.</p>
           <div>
             <Link className="button button-dark" href={`/templates/${project.templateSlug}`}>Ver el template</Link>
-            <a className="text-link" href={appUrl}>Abrir Designer ↗</a>
+            <a className="text-link" href={project.templateSlug ? appTemplateUrl(project.templateSlug) : appStartUrl}>Abrir Designer ↗</a>
           </div>
         </section>
       )}

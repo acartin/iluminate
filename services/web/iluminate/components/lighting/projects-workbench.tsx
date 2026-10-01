@@ -12,6 +12,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { Tabs } from "@/components/ui/tabs";
 import { PersistedPartitura } from "@/lib/lighting/partitura-model";
 import { PersistedAsset, PersistedProject } from "@/lib/server/projects";
+import { StartTemplate } from "@/lib/start-intent";
 import { ProjectAssetGallery } from "./project-asset-gallery";
 
 type RecordData = Record<string, unknown>;
@@ -31,10 +32,21 @@ const projectConfig: CrudResourceConfig<ProjectRecord> = {
 
 function formatBytes(value?: number) { return !value ? "-" : value < 1024 * 1024 ? `${Math.ceil(value / 1024)} KB` : `${(value / (1024 * 1024)).toFixed(1)} MB`; }
 
-export function ProjectsWorkbench() {
+export function ProjectsWorkbench({ initialTemplate }: { initialTemplate?: StartTemplate }) {
   const [projects, setProjects] = useState<PersistedProject[]>([]);
+  const effectiveProjectConfig = useMemo<CrudResourceConfig<ProjectRecord>>(() => {
+    if (!initialTemplate) return projectConfig;
+    return {
+      ...projectConfig,
+      createFields: projectConfig.createFields.map((field) => {
+        if (field.name === "name") return { ...field, defaultValue: initialTemplate.name };
+        if (field.name === "description") return { ...field, defaultValue: `Proyecto iniciado desde el template ${initialTemplate.name}.` };
+        return field;
+      })
+    };
+  }, [initialTemplate]);
   useEffect(() => { void fetch("/api/lighting/projects", { cache: "no-store" }).then((response) => response.json()).then((payload) => setProjects(payload.records ?? [])); }, []);
-  return <div className="space-y-6"><div><div className="mb-2 flex gap-2"><Badge>Persistent</Badge><Badge>Active tenant</Badge></div><h1 className="text-page-title font-light">Projects</h1><p className="mt-2 text-page-subtitle text-muted-foreground">Manage physical signs, their visual references, partituras and controllers.</p></div><CrudResourcePage config={projectConfig} records={projects as ProjectRecord[]} /></div>;
+  return <div className="space-y-6"><div><div className="mb-2 flex gap-2"><Badge>Persistent</Badge><Badge>Active tenant</Badge></div><h1 className="text-page-title font-light">Projects</h1><p className="mt-2 text-page-subtitle text-muted-foreground">Manage physical signs, their visual references, partituras and controllers.</p></div>{initialTemplate ? <Card><CardContent><div className="font-medium">Template selected: {initialTemplate.name}</div><p className="mt-1 text-body-sm text-muted-foreground">The project form is ready with this starting point. Define its physical geometry and LED routes later in Designer.</p></CardContent></Card> : null}<CrudResourcePage config={effectiveProjectConfig} records={projects as ProjectRecord[]} initialCreateOpen={Boolean(initialTemplate)} /></div>;
 }
 
 export function ProjectWorkspace({ initialProject, initialPartituras, initialAssets, initialTab }: { initialProject: PersistedProject; initialPartituras: PersistedPartitura[]; initialAssets: PersistedAsset[]; initialTab?: string }) {

@@ -74,6 +74,7 @@ export function CrudResourcePage<TRecord extends Record<string, unknown>>({
   records,
   onNavigateAction,
   onCreateAction,
+  initialCreateOpen = false,
   hideToolbar = false,
   hideHeader = false
 }: {
@@ -81,12 +82,13 @@ export function CrudResourcePage<TRecord extends Record<string, unknown>>({
   records: TRecord[];
   onNavigateAction?: (href: string) => void;
   onCreateAction?: () => void;
+  initialCreateOpen?: boolean;
   hideToolbar?: boolean;
   hideHeader?: boolean;
 }) {
   const [query, setQuery] = useState("");
   const [selectedFilters, setSelectedFilters] = useState<Record<string, string>>({});
-  const [createOpen, setCreateOpen] = useState(false);
+  const [createOpen, setCreateOpen] = useState(initialCreateOpen);
   const [activeRecord, setActiveRecord] = useState<TRecord | null>(null);
   const [deleteRecord, setDeleteRecord] = useState<TRecord | null>(null);
   const [mode, setMode] = useState<"view" | "edit" | null>(null);

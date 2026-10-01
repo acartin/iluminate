@@ -37,9 +37,9 @@ Este archivo define donde validar cambios segun la ruta afectada. En Iluminate, 
 ## Variables clave actuales
 
 - `ILUMINATE_WEB_PORT`
-- `ILUMINATE_PUBLIC_WEB_PORT` (prevista)
-- `ILUMINATE_PUBLIC_SITE_URL` (prevista; produccion `https://iluminate.space`)
-- `ILUMINATE_APP_URL` (prevista; produccion `https://app.iluminate.space`)
+- `ILUMINATE_PUBLIC_WEB_PORT`
+- `ILUMINATE_PUBLIC_SITE_URL` (produccion `https://iluminate.space`)
+- `ILUMINATE_APP_URL` (vacia en desarrollo para handoff por hostname; produccion `https://app.iluminate.space`)
 - `ILUMINATE_API_BASE_URL`
 - `ILUMINATE_PLACEHOLDER_AUTH`
 - `ILUMINATE_SECURE_COOKIES`

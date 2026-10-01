@@ -114,7 +114,24 @@ The Designer separates five persisted visual layers:
   dot); the chips are visual only and do not change behavior.
 - `Strings`: physical fabrication plane containing LED strings, data cables, terminals and joints (no controller).
 
-Each layer has `visible`, `locked` and `opacity`. Hidden layers do not render or receive selection. Locked layers remain visible but cannot be edited from the canvas/toolbox/top properties. Each object row also exposes a per-object visibility eye (like the layer header): hidden objects do not render and are not hit-tested. Per-object lock and opacity remain layer-level only.
+`Light Sources` is deliberately absent from Layers. The persisted
+`designer.lightSources` collection currently stores what the product calls
+Lighting Setups: Front, Halo-Lit or Wall Washer configuration owned by a zone
+or channel and referencing physical LED strings. These records have no
+independent canvas geometry or drawing tool, so they are not an activatable
+canvas plane. Do not restore that category. Keep the legacy persisted name only
+for backward compatibility until an explicit model migration is designed.
+
+Each Zone and Channel row has a visible lightbulb action that selects the owner
+and opens its Lighting Setup modal. The contextual bar does not repeat that
+modal button; it shows read-only mounting/material status icons. Only enabled
+setups with at least one assigned LED string count as configured. Enabled
+records without strings show an incomplete warning instead of pretending that
+Front/Halo/Wall Washer is installed. Zone/channel rows omit their geometry
+description because shape, dimensions and path properties already live in the
+contextual bar.
+
+Each layer has `visible`, `locked` and `opacity`. Hidden layers do not render or receive selection. Locked layers remain visible and selectable for inspection, but cannot be moved, resized, deleted or edited from the canvas/toolbox/contextual properties. A locked selection is identified as `Locked · inspect only`. Each object row also exposes a per-object visibility eye (like the layer header): hidden objects do not render and are not hit-tested. Per-object lock and opacity remain layer-level only.
 
 `Groups` are not a canvas layer and have no geometry. They are authored in the `Zones Groups` folder of the `Diffusors` category: a named, cycle-free composition of zones and/or other groups. A clip that targets a group applies its effect to the union of the member zones' pixels, respecting each zone's geometry, and behaves as one composition across the group's bounds. Whole-sign composition is achieved by grouping the desired zones (a group of all zones spans the sign). The clip `coordinateSpace` control was removed from the UI; clips are authored as `"local"` and the core still accepts/validates `serial`/`local`/`global`. Groups persist in `designer.groups` and compile into `compiledLayout.groups`.
 
@@ -140,6 +157,12 @@ derived and are never manipulated separately.
   the `full_sign` group), so clips target them like any zone. They appear in the
   Animate and Scenes target lists, and are selectable on the Animate canvas
   (clicking a channel selects it, so `Add clip` targets it).
+- Timeline selection is bidirectional: clicking a clip keeps it selected and
+  selects/highlights its owning zone or channel on the Animate canvas. Because
+  current clips target a Front/Halo-Lit/Wall Washer source ID, resolve the
+  source `targetType`/`targetId`; never select the non-geometric source record
+  as a substitute for its owner. Direct legacy zone/channel clip targets remain
+  supported, and changing the clip Target performs the same synchronization.
 - The Layers panel `Channels` section selects, renames, deletes and edits width
   and ends of each channel. Width and ends also appear in the top contextual bar
   when a channel is selected.
@@ -174,7 +197,7 @@ per-folder eye/lock/opacity: the `Artwork` category header owns the plane
 visibility/lock, and the `Reference` folder is standardized to per-object eyes
 only.
 
-The right Layers panel is the active-plane selector. Exactly one layer is active at a time, and the active layer must have a clearly different background. **On open no plane is active** (all categories collapsed): the canvas must not select, drag or draw any object until the operator activates a category, at which point that plane becomes editable. Visibility and lock buttons are secondary controls, not the active selection state. Canvas editing only applies to the active plane: `Artwork` is the umbrella plane for image placement **and** build-area/reference editing; `Diffusors` (internal `zones`) edits zones, channels and groups; `Strings` edits routes (data cables/LED strings); `Hardware` selects the controller. Tools must not switch the active plane. The toolbox should show only the tools that apply to the active plane, plus global navigation/actions such as select, pan, zoom and delete.
+The right Layers panel is the active-plane selector. Exactly one layer is active at a time, and the active layer must have a clearly different background. **On open no plane is active** (all categories collapsed): the canvas must not select, drag or draw any object until the operator activates a category. Clicking a category label, disclosure arrow or folder activates it immediately and returns the pointer to Select; zoom/pan must never be needed to complete activation. Visibility and lock buttons are secondary controls, not the active selection state. Canvas editing only applies to the active plane: `Artwork` is the umbrella plane for image placement **and** build-area/reference editing; `Diffusors` (internal `zones`) edits zones, channels and groups; `Strings` edits routes (data cables/LED strings); `Hardware` selects the controller. Selecting an object on the canvas opens Layers, expands its category and exact folder, scrolls its row into view and keeps that layer active. Tools must not switch the active plane. The toolbox shows only pointer-interaction tools that apply to the active plane, plus Select, Pan and Measure. Commands such as Delete, Fit, Copy/Paste, Save and Compile never belong in the toolbox. See `.agent/DESIGNER_UX_CONTRACT.md`.
 
 `Build Areas` are editable reference geometries. They are not containers and do not own/delete zones or strings. Multiple build areas may exist. They currently support rectangle, ellipse and polygon. The overall canvas can be larger to leave room for controller, cables and notes. Artwork image references should be positioned/scaled into a build area, not forced to occupy the whole canvas.
 
@@ -254,19 +277,30 @@ Drag behavior:
 - Dragging a data cable that is soldered to a controller port must keep the cable input terminal anchored to that port; the controller does not move.
 - To avoid detach bugs during controller drag, use a snapshot of the original routes captured at drag start.
 
+Detach behavior:
+
+- Select a confirmed solder node and press the scissors in the Strings tool rail; it detaches immediately and must not appear in the contextual properties bar.
+- Detaching preserves every cable/string and only removes the selected electrical joint.
+- Controller/cable and mixed cable/string joints clear the selected terminal and any counterpart that becomes floating.
+- Same-kind cable/cable and string/string solder is stored as one merged route; detaching its internal joint splits it back into two complete independent routes.
+- The detached terminal returns to its normal green/red node color. With no soldered node selected, the same left-rail scissors retains its `Cut route` pointer mode for deliberate geometric route splitting.
+
 ## Current Tools
 
 Left toolbox:
 
 - Select.
+- Pan.
+- Measure.
 - Rectangle zone.
 - Ellipse zone.
 - LED string: click-to-trace tool. First canvas click places the green DIN/start terminal, second click creates the first real segment and red DOUT/end terminal, each later click appends a bend/cut node and moves the red terminal to the new end.
 - Data cable: same click-to-trace behavior as LED string, but green signal-only rendering and no LED generation.
 - Cut route.
-- Delete selected.
-- Pan.
-- Zoom in/out/fit.
+
+Delete is a contextual action and keyboard command. Fit is a global view
+command. Zoom uses the mouse wheel/trackpad. None of them belongs in the tool
+rail.
 
 Reference tools:
 
@@ -305,13 +339,29 @@ There is no solder/cautin tool. Do not add it back.
 
 Top command/context bars:
 
-- Back.
-- Copy/paste/delete also exist in the top command area, but delete in the toolbox is more intuitive for canvas editing.
-- Save.
-- Compile: derives and persists the physical pixelMap from controller ports, data cables, LED strings, zones and groups.
+The mandatory placement rules live in `.agent/DESIGNER_UX_CONTRACT.md`.
+
+- The first bar is global and selection-independent: Back/document identity,
+  Design/Animate, grouped Setup, Ruler, Fit, Layers, compile state/issues,
+  Theme, Undo/Redo, Compile and Save. Animate adds Preview, Outlines and Viewer
+  as mode-wide controls.
+- In Design, the second bar is contextual: active-tool guidance when nothing is
+  selected, or the selected object's properties and actions. Lighting, node
+  controls, Copy/Paste and Delete belong here. Animate omits this row because
+  calibration is in the right panel and timeline controls are below the canvas.
+- Design has exactly two horizontal command/property bars; Animate has one. Do
+  not add a third.
+- `Add clip` uses the last empty timeline track. If none is empty, it appends a
+  track first. It never inherits the selected clip's track or creates an
+  automatic overlap.
+- Editing clips/tracks during playback temporarily suspends the frame loop and
+  resumes after regeneration. Playhead movement must not affect timeline
+  measurements or scrollbar visibility. It renders as one pixel-aligned DOM
+  element; horizontal scrolling is absent at zoom 1 and permanently reserved
+  while zoomed.
+- Compile derives and persists the physical pixelMap from controller ports,
+  data cables, LED strings, zones and groups.
 - Animate is disabled until the current Designer signature has compiled with no electrical errors. Any change to controller, routes, addressable density, zones or groups makes the compilation stale. Artwork and reference-only changes do not.
-- Canvas settings: ruler unit, ruler visibility, width, height, LED density, snap.
-- Selected object properties appear in the contextual bar.
 
 Layer panel:
 
@@ -400,7 +450,7 @@ Designer document_json
 -> Compile creates compiledLayout.pixelMap
 -> Animate/effects create frame colors per pixel
 -> Player surface handles viewport, pan/zoom and selection
--> Renderer module draws direct LED pixels or diffuser simulation
+-> Renderer module presents the installed lighting or the raw LED map
 ```
 
 `designer-webgl-player.tsx` must remain a thin surface/container. Do not place
@@ -413,17 +463,37 @@ services/web/iluminate/components/lighting/designer/rendering/
 
 Current renderer module:
 
-- `renderDirectLedFrame`: Pixi/WebGL direct pixel renderer.
-- `renderDiffuserFrame`: canvas-based acrylic diffuser renderer.
-- `DiffuserRenderSettings`: temporary calibration controls for distance,
-  intensity, after-zone glow and an `Outlines` toggle. Intensity is intentionally
-  rendered with extra gain so the maximum slider value reaches a visibly
-  saturated acrylic simulation. After-zone glow is measured in real centimeters
-  and is allowed to spill softly outside the zone only when the user raises that
-  control. The after-zone halo is built from both zone and channel emitters, so
-  channels glow outside their band exactly like zones. `showOutlines` (default true) controls whether zone/channel outlines,
-  fills and labels are drawn; turn it off for a clean emulation with only the
-  light output.
+- Animate uses one Pixi/WebGL surface. The previous Canvas 2D diffuser surface
+  was removed; do not create a second canvas renderer for optical presentation.
+- `renderPixiAnimationFrame` composes Front, Halo-Lit and directional Wall
+  Washer mounts. A target may have more than one mount at the same time.
+- Optical treatments persist in `designer.opticalTreatments` and reference a
+  zone or channel. They consume compiled pixel colors but do not change wiring,
+  pixelMap membership, effect targeting or the firmware artifact.
+- Front chooses the face material: visible `LED Pixels`, `Silicone Strip`,
+  `Milky White` or `Day/Night`. Its distance controls whether individual LEDs
+  remain visible or blend into a continuous face. Silicone Strip additionally
+  persists physical light transmission and beam angle; channel width is not an
+  optical control.
+- A treatment can target the canvas, a Build Area or another zone as its light
+  receiver. Halo-Lit supports an opaque face over the emitted field; Wall Washer
+  supports direction, throw, beam angle, softness and falloff.
+- `DiffuserRenderSettings` remains a temporary global preview calibration for
+  intensity and outlines. Animate exposes only `As built` (all persisted mounts)
+  and `LED map` (raw addressable pixels); physical configuration belongs to the
+  selected zone or channel in Designer.
+- Animate exposes the same persisted mounts in a calibration-only side panel.
+  It may tune the existing source's optical calibration while the frame plays,
+  but it must not create/remove/enable modes, rename sources, assign strings,
+  choose materials or change receivers. Those are construction decisions owned
+  by Design. Front calibration includes intensity and applicable diffuser
+  distance/softness/transmission/beam; Halo includes intensity/spread/softness/
+  wall gap/face color; Wall Washer includes intensity/spread/softness/direction/
+  throw/beam/falloff. If no source exists, Animate sends the operator to Design.
+- Halo-Lit remains a physical sum of fields emitted by each mapped LED. Wall
+  gap controls the projected cone radius, spread adds source expansion, and
+  intensity changes energy without changing field size. At zero gap/spread the
+  emitter field is intentionally minimal rather than derived from pixel pitch.
 
 Diffuser rendering must behave like a light field, not a zone color wash. Each
 active LED contributes local energy around its physical `pixelMap` position.
@@ -439,9 +509,8 @@ to the smallest visible zone containing it for diffuser drawing. This keeps
 global effects usable without producing a full-canvas blur when a broad target
 overlaps detailed zones.
 
-Future renderer experiments may replace the canvas diffuser renderer with a
-Pixi/WebGL shader or render-texture implementation, but they must consume the
-same `compiledLayout`, frame colors, viewport and diffuser settings contract.
+Future shader or render-texture refinements must consume the same
+`compiledLayout`, frame colors, viewport and optical-treatment contract.
 
 ## Current Limitations
 

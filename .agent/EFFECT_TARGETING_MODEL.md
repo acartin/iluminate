@@ -1,7 +1,7 @@
 # Effect Targeting Model
 
 **Status:** canonical product decision
-**Last updated:** 2026-09-10
+**Last updated:** 2026-09-27
 
 ## Decision
 
@@ -12,6 +12,7 @@ controller + data cables + LED strings
 -> electrical topology and serial order
 -> generated pixelMap
 -> zones and groups select pixels
+-> light sources bind visual geometry to physical LED strings
 -> clips/effects render those selected pixels
 ```
 
@@ -53,10 +54,21 @@ Effects target only these normal authoring concepts:
 - **Group:** a named collection of zones and/or other groups, for example
   `Letter L`, `word CARIBE`, or `full sign`. Groups create no pixels and do not
   alter wiring. They may nest, but cycles are invalid.
+- **Light source:** a named Front, Halo or Wall Wash emitter attached to a zone
+  or channel and to one or more physical LED strings. Front and Halo on the same
+  letter are independent clip targets only when backed by independent strings.
+  The compiler exports each source as a resolved zone target, preserving the
+  firmware-facing partitura contract.
 
-The UI should use zones and groups as the normal selectable targets for clips.
+The UI should use light sources and groups as the normal selectable targets for
+clips when sources exist. Legacy zone targets remain valid during migration.
 A string remains visible as physical fabrication information, not the ordinary
 effect-authoring language.
+
+A disabled light source is construction state, not an active render target.
+Clips may remain authored against it for later reuse, but generation omits them.
+When a legacy geometry-targeted clip is migrated, it expands only to enabled
+sources; disabled placeholder modes must not create active duplicate effects.
 
 ## Effect Ordering And Coordinates
 

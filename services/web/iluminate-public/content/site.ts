@@ -160,4 +160,9 @@ export const lessons = [
   },
 ];
 
-export const appUrl = process.env.NEXT_PUBLIC_ILUMINATE_APP_URL ?? "https://app.iluminate.space";
+export const appStartUrl = "/handoff?destination=start";
+export const appLoginUrl = "/handoff?destination=login";
+
+export function appTemplateUrl(templateSlug: string) {
+  return `${appStartUrl}&template=${encodeURIComponent(templateSlug)}`;
+}

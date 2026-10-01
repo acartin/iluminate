@@ -1,17 +1,19 @@
 import { API_BASE_URL, defaultAuthenticatedPath, placeholderAuthEnabled, placeholderRoleCookieName, sessionCookieName } from "@/lib/api";
-import { redirectTo } from "@/lib/request-url";
+import { redirectTo, safeRedirectPath } from "@/lib/request-url";
 
 export async function POST(request: Request) {
   const formData = await request.formData();
   const username = String(formData.get("username") ?? "");
   const password = String(formData.get("password") ?? "");
+  const nextPath = safeRedirectPath(formData.get("next"), defaultAuthenticatedPath);
+  const loginErrorPath = `/login?error=1&next=${encodeURIComponent(nextPath)}`;
 
   if (placeholderAuthEnabled) {
     if (!username || !password) {
-      return redirectTo("/login?error=1");
+      return redirectTo(loginErrorPath);
     }
 
-    const response = redirectTo(defaultAuthenticatedPath);
+    const response = redirectTo(nextPath);
     response.cookies.set(sessionCookieName, "placeholder-session", {
       httpOnly: true,
       sameSite: "lax",
@@ -31,11 +33,11 @@ export async function POST(request: Request) {
   });
 
   if (!apiResponse.ok) {
-    return redirectTo("/login?error=1");
+    return redirectTo(loginErrorPath);
   }
 
   const payload = (await apiResponse.json()) as { access_token: string; expires_at: string };
-  const response = redirectTo(defaultAuthenticatedPath);
+  const response = redirectTo(nextPath);
   response.cookies.set(sessionCookieName, payload.access_token, {
     httpOnly: true,
     sameSite: "lax",

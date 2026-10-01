@@ -2,6 +2,7 @@ import type {
   DesignerBuildAreaForm,
   DesignerChannelForm,
   DesignerControllerForm,
+  DesignerForm,
   DesignerArtworkForm,
   DesignerLayersForm,
   DesignerPoint,
@@ -17,6 +18,7 @@ export type DesignerSelection =
   | { type: "build_area"; id: string; pointIndex?: number }
   | { type: "zone"; id: string; pointIndex?: number }
   | { type: "channel"; id: string; pointIndex?: number }
+  | { type: "light_source"; id: string }
   | { type: "route"; id: string; pointIndex?: number }
   | { type: "controller"; id: string }
   | null;
@@ -25,7 +27,38 @@ export type DesignerViewport = { x: number; y: number; width: number; height: nu
 export type DesignerActiveLayer = keyof DesignerLayersForm;
 export type DesignerRouteDraft = { kind: DesignerRouteKind; points: DesignerPoint[]; routeId?: string };
 export type DesignerShapeDraft = { target: "build_area" | "zone" | "channel"; mode: "straight" | "bezier"; points: DesignerPoint[] };
+export type DesignerPrimitiveDraft = {
+  target: "build_area" | "zone";
+  shape: "rect" | "ellipse";
+  start: DesignerPoint;
+  bounds: { x: number; y: number; width: number; height: number };
+  clientStart: DesignerPoint;
+};
 export type DesignerMeasurement = { start: DesignerPoint; end?: DesignerPoint; locked?: boolean };
+
+export function designerLayerForSelection(selection: DesignerSelection): DesignerActiveLayer | null {
+  if (!selection) return null;
+  if (selection.type === "artwork" || selection.type === "build_area") return "artwork";
+  if (selection.type === "zone" || selection.type === "channel") return "zones";
+  if (selection.type === "light_source") return "lightSources";
+  if (selection.type === "controller") return "hardware";
+  if (selection.type === "route") return "strings";
+  return null;
+}
+
+export function designerSelectionForClipTarget(designer: DesignerForm, targetId: string): DesignerSelection {
+  const source = designer.lightSources.find((entry) => entry.id === targetId);
+  if (source?.targetType === "zone" && designer.zones.some((zone) => zone.id === source.targetId)) {
+    return { type: "zone", id: source.targetId };
+  }
+  if (source?.targetType === "channel" && designer.channels.some((channel) => channel.id === source.targetId)) {
+    return { type: "channel", id: source.targetId };
+  }
+  if (designer.zones.some((zone) => zone.id === targetId)) return { type: "zone", id: targetId };
+  if (designer.channels.some((channel) => channel.id === targetId)) return { type: "channel", id: targetId };
+  return null;
+}
+
 export type DesignerDrag =
   | { type: "artwork-move"; artworkId: string; start: { x: number; y: number }; original: DesignerArtworkForm }
   | { type: "artwork-resize"; artworkId: string; handle: ResizeHandle; start: { x: number; y: number }; original: DesignerArtworkForm }

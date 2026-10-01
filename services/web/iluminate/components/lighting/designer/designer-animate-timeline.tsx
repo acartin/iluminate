@@ -1,10 +1,10 @@
 "use client";
 
 import * as React from "react";
-import { GripVertical, Pause, Play, Plus, Save, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronUp, Eye, EyeOff, GripVertical, Pause, Play, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { EffectDefinition, EffectParameterDefinition } from "@/lib/lighting/effect-catalog";
-import { createClipIdentity, type ClipForm, type ClipParams, type PartituraDocument, type SceneForm } from "@/lib/lighting/partitura-model";
+import { createClipIdentity, nextEmptyClipLayer, type ClipForm, type ClipParams, type PartituraDocument, type SceneForm } from "@/lib/lighting/partitura-model";
 
 type Props = {
   document: PartituraDocument;
@@ -19,8 +19,8 @@ type Props = {
   playing: boolean;
   hasPreview: boolean;
   onTogglePlayback: () => void;
-  onSave: () => void;
-  saving: boolean;
+  collapsed?: boolean;
+  onToggleCollapsed?: () => void;
   onClipTargetSelect?: (targetId: string | null) => void;
 };
 
@@ -28,8 +28,8 @@ type TimelineDrag =
   | { type: "clip"; clip: ClipForm; mode: "move" | "start" | "end"; originX: number; originY: number }
   | { type: "playhead"; originX: number };
 
-const ROW_HEIGHT = 44;
-const HEADER_HEIGHT = 30;
+const ROW_HEIGHT = 34;
+const HEADER_HEIGHT = 16;
 const MIN_CLIP_MS = 100;
 const TRACK_GUTTER_WIDTH = 72;
 
@@ -46,15 +46,17 @@ export function DesignerAnimateTimeline({
   playing,
   hasPreview,
   onTogglePlayback,
-  onSave,
-  saving,
+  collapsed = false,
+  onToggleCollapsed,
   onClipTargetSelect
 }: Props) {
   const activeScene = document.scenes.find((scene) => scene.id === document.activeSceneId) ?? document.scenes[0];
+  const sourceTargetIds = new Set((document.designer?.lightSources ?? []).map((source) => source.targetId));
   const targets = [
     { id: "full_sign", name: "Full sign" },
-    ...(document.designer?.zones ?? []).map((zone) => ({ id: zone.id, name: zone.name || zone.id })),
-    ...(document.designer?.channels ?? []).map((channel) => ({ id: channel.id, name: channel.name || channel.id })),
+    ...(document.designer?.lightSources ?? []).map((source) => ({ id: source.id, name: source.name || source.id })),
+    ...(document.designer?.zones ?? []).filter((zone) => !sourceTargetIds.has(zone.id)).map((zone) => ({ id: zone.id, name: zone.name || zone.id })),
+    ...(document.designer?.channels ?? []).filter((channel) => !sourceTargetIds.has(channel.id)).map((channel) => ({ id: channel.id, name: channel.name || channel.id })),
     ...(document.designer?.groups ?? []).map((group) => ({ id: group.id, name: group.name || group.id }))
   ];
   const [selectedClipId, setSelectedClipId] = useStatefulClip(activeScene?.clips ?? []);
@@ -65,17 +67,18 @@ export function DesignerAnimateTimeline({
   const timelineRef = React.useRef<HTMLDivElement | null>(null);
   const selectedClip = activeScene?.clips.find((clip) => clip.id === selectedClipId) ?? activeScene?.clips[0];
   const zoneTargetIds = React.useMemo(
-    () => new Set([...(document.designer?.zones ?? []).map((zone) => zone.id), ...(document.designer?.channels ?? []).map((channel) => channel.id)]),
-    [document.designer?.zones, document.designer?.channels]
+    () => new Set([...(document.designer?.lightSources ?? []).map((source) => source.id), ...(document.designer?.zones ?? []).map((zone) => zone.id), ...(document.designer?.channels ?? []).map((channel) => channel.id)]),
+    [document.designer?.lightSources, document.designer?.zones, document.designer?.channels]
   );
   const durationMs = Math.max(100, activeScene?.durationMs ?? 4000);
   const laneCount = Math.max(1, activeScene?.laneCount ?? inferLaneCount(activeScene?.clips ?? []));
-  const availableAxisWidth = Math.max(320, timelineViewportWidth - 24 - TRACK_GUTTER_WIDTH);
+  const availableAxisWidth = Math.max(320, timelineViewportWidth - TRACK_GUTTER_WIDTH);
   const minPxPerSecond = availableAxisWidth / (durationMs / 1000);
   const pxPerSecond = minPxPerSecond * zoomFactor;
   const timeAxisWidth = Math.ceil((durationMs / 1000) * pxPerSecond);
   const timelineWidth = TRACK_GUTTER_WIDTH + Math.max(availableAxisWidth, timeAxisWidth);
   const playheadLeft = TRACK_GUTTER_WIDTH + timeToPx(clamp(previewTimeMs, 0, durationMs), pxPerSecond);
+  const playheadRenderLeft = Math.round(clamp(playheadLeft, 10, Math.max(10, timelineWidth - 10)));
 
   React.useEffect(() => {
     const viewport = timelineViewportRef.current;
@@ -156,8 +159,9 @@ export function DesignerAnimateTimeline({
     if (selectedClip?.layer === layer) setSelectedClipId(undefined);
   }
 
-  function addClip(layer = laneCount) {
+  function addClip() {
     if (!activeScene) return;
+    const layer = nextEmptyClipLayer(activeScene);
     const identity = createClipIdentity(activeScene.clips);
     const effect = effects.solid ?? Object.values(effects)[0];
     const defaultStart = 0;
@@ -165,6 +169,7 @@ export function DesignerAnimateTimeline({
     const clip: ClipForm = {
       id: identity.id,
       name: identity.name,
+      enabled: true,
       target: selectedTargetId && targets.some((target) => target.id === selectedTargetId) ? selectedTargetId : "full_sign",
       coordinateSpace: "local",
       effect: effect?.id ?? "solid",
@@ -176,7 +181,7 @@ export function DesignerAnimateTimeline({
     };
     onChange({
       ...document,
-      scenes: document.scenes.map((scene) => scene.id === activeScene.id ? { ...scene, laneCount: Math.max(laneCount + 1, layer + 1), clips: [...scene.clips, clip] } : scene)
+      scenes: document.scenes.map((scene) => scene.id === activeScene.id ? { ...scene, laneCount: Math.max(laneCount, layer + 1), clips: [...scene.clips, clip] } : scene)
     });
     selectClip(clip);
   }
@@ -256,55 +261,54 @@ export function DesignerAnimateTimeline({
   return (
     <section className="shrink-0 border-t border-border-2 bg-card" style={{ height }}>
       <div className="flex h-full min-h-0 flex-col">
-        <div className="flex h-11 shrink-0 items-center gap-2 overflow-x-auto border-b border-border px-3">
-          <div className="flex min-w-0 flex-1 items-center gap-1">
+        <div className="flex h-10 shrink-0 items-center gap-2 overflow-x-auto border-b border-border bg-surface-2 px-3">
+          <div className="flex min-w-0 items-center gap-1">
             {document.scenes.map((scene) => (
               <button key={scene.id} type="button" onClick={() => changeScene(scene.id)} className={`h-8 max-w-40 truncate rounded-md border px-3 text-body-sm font-medium ${scene.id === activeScene.id ? "border-primary bg-primary text-primary-foreground" : "border-border-2 bg-card hover:bg-surface-hover"}`}>
                 {scene.name}
               </button>
             ))}
-            <Button type="button" variant="outline" className="h-8 w-8 px-0" title="New scene" onClick={addScene}><Plus className="h-4 w-4" /></Button>
           </div>
-          <ToolbarTextInput value={activeScene.name} onChange={(name) => updateScene({ name })} className="w-36" />
-          <SceneDurationInput value={activeScene.durationMs} onChange={(durationMs) => updateScene({ durationMs })} />
-          <label className="flex h-8 items-center gap-1 rounded-md border border-input bg-card px-2 text-meta">
-            <input type="checkbox" checked={activeScene.loop} onChange={(event) => updateScene({ loop: event.target.checked })} />
-            Loop
-          </label>
-          <Button type="button" variant="ghost" className="h-8 w-8 px-0 text-destructive" disabled={document.scenes.length <= 1} title="Delete scene" onClick={removeScene}><Trash2 className="h-4 w-4" /></Button>
-        </div>
-
-        <div className="flex h-11 shrink-0 items-center justify-between gap-3 border-b border-border bg-surface-2 px-3">
-          <div className="flex items-center gap-2">
-            <Button type="button" variant="outline" className="h-8" onClick={() => addClip()}><Plus className="h-4 w-4" />Clip</Button>
-            <Button type="button" variant="outline" className="h-8" onClick={addLane}><Plus className="h-4 w-4" />Track</Button>
-            <Button type="button" variant="outline" className="h-8" disabled={saving} onClick={onSave}><Save className="h-4 w-4" />{saving ? "Saving" : "Save"}</Button>
-            <Button type="button" className="h-8" disabled={previewing} onClick={hasPreview ? onTogglePlayback : onPreview}>{playing ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}{previewing ? "Rendering" : playing ? "Pause" : "Play"}</Button>
-            <div className="font-mono text-body-sm text-muted-foreground">{Math.round(previewTimeMs)} ms</div>
-          </div>
+          <Button type="button" variant="outline" density="compact" title="New scene" onClick={addScene}><Plus className="h-4 w-4" />Scene</Button>
+          <Button type="button" variant="outline" density="compact" onClick={addLane}><Plus className="h-4 w-4" />Track</Button>
+          <Button type="button" variant="outline" density="compact" onClick={() => addClip()}><Plus className="h-4 w-4" />Clip</Button>
+          <div className="h-6 w-px shrink-0 bg-border" />
+          <Button type="button" density="compact" disabled={previewing} onClick={hasPreview ? onTogglePlayback : onPreview}>{playing ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}{previewing ? "Rendering" : playing ? "Pause" : "Play"}</Button>
+          <div className="shrink-0 font-mono text-body-sm text-muted-foreground">{Math.round(previewTimeMs)} ms</div>
+          <div className="ml-auto flex shrink-0 items-center gap-2">
+            <ToolbarTextInput value={activeScene.name} onChange={(name) => updateScene({ name })} className="w-36" />
+            <SceneDurationInput value={activeScene.durationMs} onChange={(durationMs) => updateScene({ durationMs })} />
+            <label className="flex h-8 items-center gap-1 rounded-md border border-input bg-card px-2 text-meta">
+              <input type="checkbox" checked={activeScene.loop} onChange={(event) => updateScene({ loop: event.target.checked })} />
+              Loop
+            </label>
+            <Button type="button" variant="ghost" density="compact" className="w-8 px-0 text-destructive" disabled={document.scenes.length <= 1} title="Delete scene" onClick={removeScene}><Trash2 className="h-4 w-4" /></Button>
           <label className="flex items-center gap-2 text-meta text-muted-foreground">
             Zoom
             <input type="range" min="1" max="6" step="0.1" value={zoomFactor} className="w-36 accent-blue-600" onChange={(event) => setZoomFactor(Number(event.target.value))} />
           </label>
+            {onToggleCollapsed ? <Button type="button" variant="ghost" density="compact" className="w-8 px-0" title={collapsed ? "Expand timeline" : "Collapse timeline"} onClick={onToggleCollapsed}>{collapsed ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}</Button> : null}
+          </div>
         </div>
 
-        <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_320px]">
-          <div ref={timelineViewportRef} className="min-w-0 overflow-auto p-3">
-            <div className="relative" style={{ width: timelineWidth, minHeight: HEADER_HEIGHT + laneCount * ROW_HEIGHT + 14 }}>
-              <TimelineHeader durationMs={durationMs} pxPerSecond={pxPerSecond} width={timelineWidth} />
+        {!collapsed ? <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_380px]">
+          <div ref={timelineViewportRef} className={`min-w-0 overflow-y-auto ${zoomFactor > 1 ? "overflow-x-scroll" : "overflow-x-hidden"}`}>
+            <div className="relative" style={{ width: timelineWidth, minHeight: HEADER_HEIGHT + laneCount * ROW_HEIGHT }}>
               <div
                 ref={timelineRef}
-                className="relative rounded-md border border-border-2 bg-surface-2"
+                className="relative border-b border-border-2 bg-surface-2"
                 style={{ width: timelineWidth, height: HEADER_HEIGHT + laneCount * ROW_HEIGHT }}
                 onPointerDown={beginPlayheadDrag}
               >
                 <TimelineGrid durationMs={durationMs} laneCount={laneCount} pxPerSecond={pxPerSecond} />
                 {Array.from({ length: laneCount }, (_, layer) => (
                   <div key={layer} className="absolute left-0 right-0 border-b border-border/80" style={{ top: HEADER_HEIGHT + layer * ROW_HEIGHT, height: ROW_HEIGHT }}>
-                    <div className="pointer-events-none absolute left-0 top-0 flex h-full w-[72px] items-center border-r border-border bg-card/80 px-2 font-mono text-[10px] uppercase text-muted-foreground">Track {layer + 1}</div>
-                    <button type="button" title={`Delete track ${layer + 1}`} className="absolute right-1 top-1.5 z-10 flex h-6 w-6 items-center justify-center rounded border border-transparent text-muted-foreground hover:border-border-2 hover:bg-card hover:text-destructive" onPointerDown={stopTimelinePointer} onClick={(event) => { event.stopPropagation(); removeLane(layer); }}>
-                      <Trash2 className="h-3.5 w-3.5" />
-                    </button>
+                    <div className="pointer-events-none absolute left-0 top-0 flex h-full w-[72px] items-center border-r border-border bg-card/80 px-1 font-mono text-[10px] uppercase text-muted-foreground">Track {layer + 1}</div>
+                    {!activeScene.clips.some((clip) => clip.layer === layer) ? (
+                      <button type="button" title={`Delete empty track ${layer + 1}`} aria-label={`Delete empty track ${layer + 1}`} className="absolute left-[46px] top-1 z-10 flex h-6 w-6 items-center justify-center rounded border border-transparent text-muted-foreground hover:border-border-2 hover:bg-card hover:text-destructive" onPointerDown={stopTimelinePointer} onClick={(event) => { event.stopPropagation(); removeLane(layer); }}>
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    ) : null}
                   </div>
                 ))}
                 {(activeScene.clips ?? []).map((clip) => {
@@ -317,19 +321,20 @@ export function DesignerAnimateTimeline({
                     targetName={targetName}
                     left={left}
                     width={width}
-                    top={HEADER_HEIGHT + Math.max(0, clip.layer) * ROW_HEIGHT + 7}
+                    top={HEADER_HEIGHT + Math.max(0, clip.layer) * ROW_HEIGHT + 1}
                     selected={selectedClip?.id === clip.id}
                     dragging={timelineDrag?.type === "clip" && timelineDrag.clip.id === clip.id}
                     onSelect={() => selectClip(clip)}
                     onDrag={(event, mode) => beginClipDrag(event, clip, mode)}
+                    onToggleEnabled={() => updateClip(clip.id, { enabled: clip.enabled === false })}
                     onDelete={(event) => {
                       stopTimelinePointer(event);
                       removeClip(clip.id);
                     }}
                   />;
                 })}
-                <div className="absolute bottom-0 top-0 z-20 w-px bg-red-500" style={{ left: playheadLeft }} />
-                <button type="button" title="Playhead" className="absolute top-0 z-30 h-full w-5 -translate-x-1/2 cursor-ew-resize" style={{ left: playheadLeft }} onPointerDown={beginPlayheadDrag}>
+                <button type="button" title="Playhead" className="absolute left-0 top-0 z-30 h-full w-5 cursor-ew-resize will-change-transform" style={{ transform: `translate3d(${playheadRenderLeft - 10}px, 0, 0)` }} onPointerDown={beginPlayheadDrag}>
+                  <span className="absolute bottom-0 left-1/2 top-0 w-px bg-red-500" />
                   <span className="absolute left-1/2 top-0 h-3 w-3 -translate-x-1/2 rounded-full bg-red-500 shadow" />
                 </button>
               </div>
@@ -349,13 +354,13 @@ export function DesignerAnimateTimeline({
               onDelete={() => removeClip(selectedClip.id)}
             /> : <div className="rounded-md border border-dashed p-4 text-body-sm text-muted-foreground">Select a zone, add a clip, then Play.</div>}
           </div>
-        </div>
+        </div> : null}
       </div>
     </section>
   );
 }
 
-function ClipBlock({ clip, targetName, left, width, top, selected, dragging, onSelect, onDrag, onDelete }: {
+function ClipBlock({ clip, targetName, left, width, top, selected, dragging, onSelect, onDrag, onToggleEnabled, onDelete }: {
   clip: ClipForm;
   targetName: string;
   left: number;
@@ -365,6 +370,7 @@ function ClipBlock({ clip, targetName, left, width, top, selected, dragging, onS
   dragging: boolean;
   onSelect: () => void;
   onDrag: (event: React.PointerEvent<HTMLElement>, mode: "move" | "start" | "end") => void;
+  onToggleEnabled: () => void;
   onDelete: (event: React.PointerEvent<HTMLButtonElement>) => void;
 }) {
   return (
@@ -376,13 +382,16 @@ function ClipBlock({ clip, targetName, left, width, top, selected, dragging, onS
         event.stopPropagation();
         onSelect();
       }}
-      className={`absolute z-10 flex h-8 min-w-8 cursor-grab items-center overflow-hidden rounded border text-left text-meta shadow-sm ${dragging ? "cursor-grabbing" : ""} ${selected ? "border-primary bg-primary text-primary-foreground" : "border-border-strong bg-card hover:bg-surface-hover"}`}
+      className={`absolute z-10 flex h-8 min-w-8 cursor-grab items-center overflow-hidden rounded border text-left text-meta shadow-sm ${clip.enabled === false ? "opacity-50" : ""} ${dragging ? "cursor-grabbing" : ""} ${selected ? "border-primary bg-primary text-primary-foreground" : "border-border-strong bg-card hover:bg-surface-hover"}`}
       style={{ left, top, width }}
       title={`${clip.name} → ${targetName}: drag to move`}
     >
       <span className="flex h-full w-3 shrink-0 cursor-ew-resize items-center justify-center bg-black/10 hover:bg-black/20" onPointerDown={(event) => onDrag(event, "start")} title="Resize start">
         <GripVertical className="h-3 w-3" />
       </span>
+      <button type="button" className="flex h-full w-6 shrink-0 items-center justify-center bg-black/10 text-current opacity-75 hover:bg-black/20 hover:opacity-100" title={clip.enabled === false ? "Enable clip" : "Disable clip"} aria-label={clip.enabled === false ? "Enable clip" : "Disable clip"} onPointerDown={stopTimelinePointer} onClick={(event) => { event.stopPropagation(); onToggleEnabled(); }}>
+        {clip.enabled === false ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
+      </button>
       <span className="block min-w-0 flex-1 truncate px-2">{clip.name}</span>
       <button type="button" className="flex h-full w-6 shrink-0 items-center justify-center bg-black/10 text-current opacity-75 hover:bg-black/20 hover:opacity-100" title="Delete clip" onPointerDown={onDelete} onClick={(event) => event.stopPropagation()}>
         <Trash2 className="h-3.5 w-3.5" />
@@ -394,17 +403,12 @@ function ClipBlock({ clip, targetName, left, width, top, selected, dragging, onS
   );
 }
 
-function TimelineHeader({ durationMs, pxPerSecond, width }: { durationMs: number; pxPerSecond: number; width: number }) {
-  const ticks = timelineTicks(durationMs, pxPerSecond);
-  return <div className="relative h-6 text-meta text-muted-foreground" style={{ width }}>
-    {ticks.map((tick) => <span key={tick} className="absolute -translate-x-1/2 font-mono" style={{ left: TRACK_GUTTER_WIDTH + timeToPx(tick, pxPerSecond) }}>{tick >= 1000 ? `${tick / 1000}s` : `${tick}ms`}</span>)}
-  </div>;
-}
-
 function TimelineGrid({ durationMs, laneCount, pxPerSecond }: { durationMs: number; laneCount: number; pxPerSecond: number }) {
   const ticks = timelineTicks(durationMs, pxPerSecond, true);
+  const labelTicks = timelineTicks(durationMs, pxPerSecond);
   return <>
-    <div className="absolute left-0 right-0 top-0 h-[30px] border-b border-border bg-card/80" />
+    <div className="absolute left-0 right-0 top-0 border-b border-border bg-card/80" style={{ height: HEADER_HEIGHT }} />
+    {labelTicks.map((tick) => <span key={`label-${tick}`} className="pointer-events-none absolute top-0 z-10 -translate-x-1/2 font-mono text-[9px] leading-4 text-muted-foreground" style={{ left: TRACK_GUTTER_WIDTH + timeToPx(tick, pxPerSecond) }}>{tick >= 1000 ? `${tick / 1000}s` : `${tick}ms`}</span>)}
     <div className="absolute bottom-0 top-0 border-l border-border/90" style={{ left: TRACK_GUTTER_WIDTH }} />
     {ticks.map((tick) => <div key={tick} className="absolute bottom-0 top-0 border-l border-border/70" style={{ left: TRACK_GUTTER_WIDTH + timeToPx(tick, pxPerSecond) }} />)}
     {Array.from({ length: laneCount + 1 }, (_, index) => <div key={index} className="absolute left-0 right-0 border-t border-border/70" style={{ top: HEADER_HEIGHT + index * ROW_HEIGHT }} />)}
@@ -417,7 +421,7 @@ function ClipInspector({ clip, targets, effect, effects, onChange, onDelete }: {
     <Select label="Target" value={clip.target} options={targets.map((target) => [target.id, target.name])} onChange={(target) => onChange({ target })} />
     <Select label="Effect" value={clip.effect} options={Object.values(effects).map((item) => [item.id, item.label])} onChange={(effectId) => onChange({ effect: effectId, params: defaultParams(effects[effectId]) })} />
     {definition ? <div className="space-y-2 border-t border-border-2 pt-3">{Object.entries(definition.parameters).map(([key, parameter]) => <ParameterInput key={key} name={key} definition={parameter} value={clip.params[key]} onChange={(value) => onChange({ params: { ...clip.params, [key]: value } })} />)}</div> : null}
-    <Button type="button" variant="ghost" className="h-8 w-full text-destructive" onPointerDown={stopTimelinePointer} onClick={onDelete}><Trash2 className="h-4 w-4" />Delete clip</Button>
+    <Button type="button" variant="ghost" density="compact" className="w-full text-destructive" onPointerDown={stopTimelinePointer} onClick={onDelete}><Trash2 className="h-4 w-4" />Delete clip</Button>
   </div>;
 }
 

@@ -15,6 +15,7 @@ import {
   movedChannel,
   movedShape,
   nearestChannelInsertIndex,
+  nextDesignerItemNumber,
   nearestShapeInsertIndex,
   pickBezierHandle,
   pickDesignerHit,
@@ -22,6 +23,7 @@ import {
   pointInsideDesignerShape,
   pointNearShapeStroke,
   pointsBounds,
+  primitiveShapeBounds,
   resizedBuildArea,
   resizedZone,
   sameSnapPoint,
@@ -39,7 +41,7 @@ import {
   moveRouteWithSolderedTerminals,
   normalizeViewportAspect
 } from "./designer-geometry";
-import type { DesignerActiveLayer, DesignerDrag, DesignerMeasurement, DesignerRouteDraft, DesignerRouteTerminal, DesignerSelection, DesignerShapeDraft, DesignerTool, DesignerViewport, PaperApi, ResizeHandle } from "./types";
+import type { DesignerActiveLayer, DesignerDrag, DesignerMeasurement, DesignerPrimitiveDraft, DesignerRouteDraft, DesignerRouteTerminal, DesignerSelection, DesignerShapeDraft, DesignerTool, DesignerViewport, PaperApi, ResizeHandle } from "./types";
 
 export type DesignerAnimationPixel = {
   output: number;
@@ -47,7 +49,7 @@ export type DesignerAnimationPixel = {
   color: { r: number; g: number; b: number };
 };
 
-export type DesignerAnimationDiffuser = "none" | "milky_white" | "day_night";
+export type DesignerAnimationDiffuser = "as_built" | "led_map";
 
 export function DesignerStudioCanvas({
   designer,
@@ -123,6 +125,7 @@ export function DesignerStudioCanvas({
   const [drag, setDrag] = useState<DesignerDrag | null>(null);
   const [routeDraft, setRouteDraft] = useState<DesignerRouteDraft | null>(null);
   const [shapeDraft, setShapeDraft] = useState<DesignerShapeDraft | null>(null);
+  const [primitiveDraft, setPrimitiveDraft] = useState<DesignerPrimitiveDraft | null>(null);
   const [measurement, setMeasurement] = useState<DesignerMeasurement | null>(null);
   const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
   const [colorMode, setColorMode] = useState<"day" | "night">("night");
@@ -217,12 +220,13 @@ export function DesignerStudioCanvas({
       selectedController: Boolean(selectedController),
       routeDraft,
       shapeDraft,
+      primitiveDraft,
       measurement,
       canvasSize,
       colorMode
     });
     loadedPaper.view.update();
-  }, [activeLayer, animationDiffusers, animationPixels, canvasSize, colorMode, compiledLayout, designer, measurement, paperReady, presentation, routeDraft, selectedBuildAreaId, selectedBuildAreaPointIndex, selectedChannelId, selectedChannelPointIndex, selectedController, selectedRouteId, selectedRoutePointIndex, selectedZoneId, selectedZonePointIndex, shapeDraft, viewport]);
+  }, [activeLayer, animationDiffusers, animationPixels, canvasSize, colorMode, compiledLayout, designer, measurement, paperReady, presentation, primitiveDraft, routeDraft, selectedBuildAreaId, selectedBuildAreaPointIndex, selectedChannelId, selectedChannelPointIndex, selectedController, selectedRouteId, selectedRoutePointIndex, selectedZoneId, selectedZonePointIndex, shapeDraft, viewport]);
 
   useEffect(() => {
     if (activeLayer !== "strings" || (tool !== "led_string" && tool !== "data_cable")) setRouteDraft(null);
@@ -233,10 +237,16 @@ export function DesignerStudioCanvas({
   }, [tool]);
 
   useEffect(() => {
+    const isPrimitiveTool = tool === "build_area_rect" || tool === "build_area_ellipse" || tool === "zone_rect" || tool === "zone_ellipse";
+    if (!isPrimitiveTool) setPrimitiveDraft(null);
+  }, [tool]);
+
+  useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key === "Escape") {
         setRouteDraft(null);
         setShapeDraft(null);
+        setPrimitiveDraft(null);
         setMeasurement(null);
         return;
       }
@@ -427,7 +437,7 @@ export function DesignerStudioCanvas({
         onChange({ ...designer, buildAreas: [...designer.buildAreas, buildArea] });
         onSelect({ type: "build_area", id: buildArea.id });
       } else {
-        const next = designer.zones.length + 1;
+        const next = nextDesignerItemNumber(designer.zones, "zone_");
         const zone: DesignerZoneForm = {
           id: `zone_${next}`,
           name: `Zone ${next}`,
@@ -455,6 +465,17 @@ export function DesignerStudioCanvas({
   }
 
   function handlePointerMove(event: React.PointerEvent<HTMLCanvasElement>) {
+    if (primitiveDraft) {
+      const point = eventPoint(event);
+      setPrimitiveDraft({
+        ...primitiveDraft,
+        bounds: primitiveShapeBounds(primitiveDraft.start, point, designer.snapCm, {
+          preserveAspect: event.ctrlKey || event.metaKey,
+          fromCenter: event.shiftKey
+        })
+      });
+      return;
+    }
     if (tool === "measure" && measurement?.start && !measurement.locked) {
       const point = eventPoint(event);
       setMeasurement({ ...measurement, end: { x: snapValue(point.x, designer.snapCm), y: snapValue(point.y, designer.snapCm) } });
@@ -590,6 +611,25 @@ export function DesignerStudioCanvas({
       startPanDrag(event);
       return;
     }
+    if (tool === "build_area_rect" || tool === "build_area_ellipse" || tool === "zone_rect" || tool === "zone_ellipse") {
+      const target = tool.startsWith("build_area") ? "build_area" : "zone";
+      const shape = tool.endsWith("ellipse") ? "ellipse" : "rect";
+      if (target === "build_area" && ((activeLayer !== "reference" && activeLayer !== "artwork") || designer.layers.artwork.locked || !designer.layers.artwork.visible)) return;
+      if (target === "zone" && (activeLayer !== "zones" || designer.layers.zones.locked || !designer.layers.zones.visible)) return;
+      const rawPoint = eventPoint(event);
+      const start = { x: snapValue(rawPoint.x, designer.snapCm), y: snapValue(rawPoint.y, designer.snapCm) };
+      event.stopPropagation();
+      event.currentTarget.setPointerCapture(event.pointerId);
+      onSelect(null);
+      setPrimitiveDraft({
+        target,
+        shape,
+        start,
+        bounds: { x: start.x, y: start.y, width: 0, height: 0 },
+        clientStart: { x: event.clientX, y: event.clientY }
+      });
+      return;
+    }
     if (tool === "image_place") {
       if (activeLayer !== "artwork" || designer.layers.artwork.locked || !designer.layers.artwork.visible) return;
       const rawPoint = eventPoint(event);
@@ -621,6 +661,7 @@ export function DesignerStudioCanvas({
       const handle = node ? pickBezierHandle(node, point, tolerance) : null;
       if (handle) {
         onSelect({ type: "build_area", id: selectedBuildAreaId, pointIndex: selectedBuildAreaPointIndex });
+        if (designer.layers.artwork.locked) return;
         event.currentTarget.setPointerCapture(event.pointerId);
         setDrag({ type: "build-area-handle", buildAreaId: selectedBuildAreaId, pointIndex: selectedBuildAreaPointIndex, handle });
         return;
@@ -632,6 +673,7 @@ export function DesignerStudioCanvas({
       const handle = node ? pickBezierHandle(node, point, tolerance) : null;
       if (handle) {
         onSelect({ type: "zone", id: selectedZoneId, pointIndex: selectedZonePointIndex });
+        if (designer.layers.zones.locked) return;
         event.currentTarget.setPointerCapture(event.pointerId);
         setDrag({ type: "zone-handle", zoneId: selectedZoneId, pointIndex: selectedZonePointIndex, handle });
         return;
@@ -643,6 +685,7 @@ export function DesignerStudioCanvas({
       const handle = node ? pickBezierHandle(node, point, tolerance) : null;
       if (handle) {
         onSelect({ type: "channel", id: selectedChannelId, pointIndex: selectedChannelPointIndex });
+        if (designer.layers.zones.locked) return;
         event.currentTarget.setPointerCapture(event.pointerId);
         setDrag({ type: "channel-handle", channelId: selectedChannelId, pointIndex: selectedChannelPointIndex, handle });
         return;
@@ -665,76 +708,89 @@ export function DesignerStudioCanvas({
       const buildArea = designer.buildAreas.find((entry) => entry.id === hit.id);
       if (!buildArea) return;
       onSelect({ type: "build_area", id: buildArea.id });
+      if (designer.layers.artwork.locked) return;
       setDrag({ type: "build-area-move", buildAreaId: buildArea.id, start: point, original: buildArea });
     }
     if (hit.type === "artwork") {
       const artwork = designer.artwork.find((entry) => entry.id === hit.id);
       if (!artwork) return;
       onSelect({ type: "artwork", id: artwork.id });
+      if (designer.layers.artwork.locked) return;
       setDrag({ type: "artwork-move", artworkId: artwork.id, start: point, original: artwork });
     }
     if (hit.type === "artwork_resize") {
       const artwork = designer.artwork.find((entry) => entry.id === hit.id);
       if (!artwork) return;
       onSelect({ type: "artwork", id: artwork.id });
+      if (designer.layers.artwork.locked) return;
       setDrag({ type: "artwork-resize", artworkId: artwork.id, handle: hit.handle, start: point, original: artwork });
     }
     if (hit.type === "build_area_resize") {
       const buildArea = designer.buildAreas.find((entry) => entry.id === hit.id);
       if (!buildArea) return;
       onSelect({ type: "build_area", id: buildArea.id });
+      if (designer.layers.artwork.locked) return;
       setDrag({ type: "build-area-resize", buildAreaId: buildArea.id, handle: hit.handle, start: point, original: buildArea });
     }
     if (hit.type === "build_area_point") {
       onSelect({ type: "build_area", id: hit.id, pointIndex: hit.pointIndex });
+      if (designer.layers.artwork.locked) return;
       setDrag({ type: "build-area-point", buildAreaId: hit.id, pointIndex: hit.pointIndex });
     }
     if (hit.type === "zone") {
       const zone = designer.zones.find((entry) => entry.id === hit.id);
       if (!zone) return;
       onSelect({ type: "zone", id: zone.id });
+      if (designer.layers.zones.locked) return;
       setDrag({ type: "zone-move", zoneId: zone.id, start: point, original: zone });
     }
     if (hit.type === "zone_resize") {
       const zone = designer.zones.find((entry) => entry.id === hit.id);
       if (!zone) return;
       onSelect({ type: "zone", id: zone.id });
+      if (designer.layers.zones.locked) return;
       setDrag({ type: "zone-resize", zoneId: zone.id, handle: hit.handle, start: point, original: zone });
     }
     if (hit.type === "zone_point") {
       onSelect({ type: "zone", id: hit.id, pointIndex: hit.pointIndex });
+      if (designer.layers.zones.locked) return;
       setDrag({ type: "zone-point", zoneId: hit.id, pointIndex: hit.pointIndex });
     }
     if (hit.type === "channel") {
       const channel = designer.channels.find((entry) => entry.id === hit.id);
       if (!channel) return;
       onSelect({ type: "channel", id: channel.id });
+      if (designer.layers.zones.locked) return;
       setDrag({ type: "channel-move", channelId: channel.id, start: point, original: channel });
     }
     if (hit.type === "channel_point") {
       onSelect({ type: "channel", id: hit.id, pointIndex: hit.pointIndex });
+      if (designer.layers.zones.locked) return;
       setDrag({ type: "channel-point", channelId: hit.id, pointIndex: hit.pointIndex });
     }
     if (hit.type === "route") {
       const route = designer.routes.find((entry) => entry.id === hit.id);
       if (!route) return;
       onSelect({ type: "route", id: route.id });
+      if (designer.layers.strings.locked) return;
       setDrag({ type: "route-move", routeId: route.id, start: point, original: route });
     }
     if (hit.type === "route_point") {
       const route = designer.routes.find((entry) => entry.id === hit.id);
       if (!route) return;
+      onSelect({ type: "route", id: route.id, pointIndex: hit.pointIndex });
+      if (designer.layers.strings.locked) return;
       if (tool === "cut") {
         onCutRoutePoint(route.id, hit.pointIndex);
         return;
       }
       const routePoint = route.points[hit.pointIndex];
       const jointGroup = routePoint?.joint ? findJointGroup(designer.routes, route.id, hit.pointIndex, designer.snapCm) : [{ routeId: route.id, pointIndex: hit.pointIndex }];
-      onSelect({ type: "route", id: route.id, pointIndex: hit.pointIndex });
       setDrag({ type: "route-point", routeId: route.id, pointIndex: hit.pointIndex, jointGroup });
     }
     if (hit.type === "controller") {
       onSelect({ type: "controller", id: designer.controller.id });
+      if (designer.layers.hardware.locked) return;
       setDrag({ type: "controller-move", start: point, original: designer.controller, originalRoutes: designer.routes });
     }
   }
@@ -778,7 +834,7 @@ export function DesignerStudioCanvas({
       <div ref={canvasHostRef} className={`relative min-h-0 min-w-0 overflow-hidden ${colorMode === "night" ? "bg-slate-950" : "bg-slate-100"}`}>
         <canvas
           ref={canvasRef}
-          className={`absolute inset-0 block h-full w-full ${colorMode === "night" ? "bg-slate-950" : "bg-slate-100"} ${drag?.type === "pan" ? "cursor-grabbing" : tool === "pan" ? "cursor-grab" : tool === "measure" || tool === "image_place" || tool === "led_string" || tool === "data_cable" || tool === "build_area_polygon" || tool === "build_area_bezier" || tool === "zone_polygon" || tool === "zone_bezier" || tool === "channel_bezier" ? "cursor-crosshair" : "cursor-default"}`}
+          className={`absolute inset-0 block h-full w-full ${colorMode === "night" ? "bg-slate-950" : "bg-slate-100"} ${drag?.type === "pan" ? "cursor-grabbing" : tool === "pan" ? "cursor-grab" : tool !== "select" && tool !== "cut" ? "cursor-crosshair" : "cursor-default"}`}
           role="img"
           aria-label="Designer studio canvas"
           onPointerDown={handleCanvasPointerDown}
@@ -786,6 +842,7 @@ export function DesignerStudioCanvas({
           onWheel={handleCanvasWheel}
           onPointerUp={(event) => {
             const endedDrag = drag;
+            const endedPrimitiveDraft = primitiveDraft;
             const point = eventPoint(event);
             const rawFinalPoint = { x: snapValue(point.x, designer.snapCm), y: snapValue(point.y, designer.snapCm) };
             const snappedFinalPoint = endedDrag?.type === "route-point" && endedDrag.jointGroup.length === 1
@@ -794,11 +851,55 @@ export function DesignerStudioCanvas({
             const finalPoint = { ...snappedFinalPoint, joint: false };
             if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
             setDrag(null);
+            setPrimitiveDraft(null);
+            if (endedPrimitiveDraft) {
+              const bounds = primitiveShapeBounds(endedPrimitiveDraft.start, point, designer.snapCm, {
+                preserveAspect: event.ctrlKey || event.metaKey,
+                fromCenter: event.shiftKey
+              });
+              const draggedPixels = Math.hypot(event.clientX - endedPrimitiveDraft.clientStart.x, event.clientY - endedPrimitiveDraft.clientStart.y);
+              if (draggedPixels >= 3 && bounds.width > 0 && bounds.height > 0) {
+                if (endedPrimitiveDraft.target === "build_area") {
+                  const next = designer.buildAreas.length + 1;
+                  const buildArea: DesignerBuildAreaForm = {
+                    id: `build_area_${next}`,
+                    name: next === 1 ? "Build Area" : `Build Area ${next}`,
+                    shape: endedPrimitiveDraft.shape,
+                    ...bounds,
+                    visible: true,
+                    locked: false,
+                    opacity: 1
+                  };
+                  onChange({ ...designer, buildAreas: [...designer.buildAreas, buildArea] });
+                  onSelect({ type: "build_area", id: buildArea.id });
+                } else {
+                  const next = nextDesignerItemNumber(designer.zones, "zone_");
+                  const zone: DesignerZoneForm = {
+                    id: `zone_${next}`,
+                    name: `Zone ${next}`,
+                    shape: endedPrimitiveDraft.shape,
+                    ...bounds,
+                    visible: true,
+                    locked: false,
+                    opacity: 1
+                  };
+                  onChange({ ...designer, zones: [...designer.zones, zone] });
+                  onSelect({ type: "zone", id: zone.id });
+                }
+                onToolChange("select");
+              }
+              return;
+            }
             if (endedDrag?.type === "route-point" && endedDrag.jointGroup.length > 1) {
               onSolderedTerminalsDragEnd(endedDrag.jointGroup, { ...finalPoint, joint: true });
               return;
             }
             if (endedDrag?.type === "route-point") onRoutePointDragEnd(endedDrag.routeId, endedDrag.pointIndex, finalPoint);
+          }}
+          onPointerCancel={(event) => {
+            if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+            setDrag(null);
+            setPrimitiveDraft(null);
           }}
           onDoubleClick={handleCanvasDoubleClick}
         />

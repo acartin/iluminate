@@ -29,6 +29,20 @@ assert(
   "rendered frame should contain non-black pixels"
 );
 
+const chase = structuredClone(valid);
+chase.scenes[0].tracks[0].clips[0] = {
+  ...chase.scenes[0].tracks[0].clips[0],
+  effect: "chase",
+  startMs: 0,
+  durationMs: 1000,
+  params: { color: "#FFFFFF", backgroundColor: "#123456", width: 1, cycles: 1, direction: "forward" }
+};
+const chaseFrame = renderSceneFrame(chase, "normal", 0);
+assert(
+  chaseFrame.pixels.some((pixel) => pixel.color.r === 0x12 && pixel.color.g === 0x34 && pixel.color.b === 0x56),
+  "linear effect background color should reach inactive pixels unchanged"
+);
+
 const wsFrame = simulateWs2812bFrame(valid, "normal", 1000);
 assert(wsFrame.outputs.length === 1, "WS2812B simulator should produce declared outputs");
 assert(wsFrame.outputs[0].pixels.length === 3, "output 1 should include all pixels");

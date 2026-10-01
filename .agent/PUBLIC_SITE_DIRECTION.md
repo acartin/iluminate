@@ -56,6 +56,14 @@ Login, signup and `Use this template` actions hand off to
 `app.iluminate.space`. Authentication and private editing do not move into the
 public application.
 
+Local development keeps both applications on the same host with independent
+ports (`8430` public and `8420` dashboard by default). Public links go through
+the server-side `/handoff` route: when `ILUMINATE_APP_URL` is empty it preserves
+the hostname used by the browser and changes only to `ILUMINATE_WEB_PORT`. This
+avoids hardcoded LAN addresses and also avoids build-time `NEXT_PUBLIC_*`
+configuration. Production must set `ILUMINATE_APP_URL` to the complete external
+dashboard URL before publishing authenticated handoffs.
+
 ## Public Projects And Templates
 
 The first projects are Iluminate-created concepts, not customer case studies.

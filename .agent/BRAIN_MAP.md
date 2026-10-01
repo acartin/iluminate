@@ -1,9 +1,9 @@
 # BRAIN_MAP
 
-- Generated UTC: `2026-09-22T21:34:31Z`
+- Generated UTC: `2026-10-01T00:15:13Z`
 - Repo root: `/srv/iluminate`
-- Git branch: `HETZNER-DEV-2026-Setiembre-20`
-- Git commit: `4716411`
+- Git branch: `main`
+- Git commit: `86f6802`
 
 ## 1. MAPA DE INTENCIONES (ILUMINATE)
 
@@ -85,6 +85,7 @@ services/web/iluminate-public
 services/web/iluminate-public/app
 services/web/iluminate-public/app/about
 services/web/iluminate-public/app/for-sign-makers
+services/web/iluminate-public/app/handoff
 services/web/iluminate-public/app/learn
 services/web/iluminate-public/app/projects
 services/web/iluminate-public/app/technology
@@ -105,6 +106,7 @@ services/web/iluminate/app/partituras
 services/web/iluminate/app/projects
 services/web/iluminate/app/reset-password
 services/web/iluminate/app/settings
+services/web/iluminate/app/start
 services/web/iluminate/components
 services/web/iluminate/components/crud
 services/web/iluminate/components/lighting
@@ -236,9 +238,11 @@ services/web/iluminate/app/not-found.tsx
 services/web/iluminate/app/page.tsx
 services/web/iluminate/docs/theme-standard.md
 services/web/iluminate/lib/api.ts
+services/web/iluminate/lib/client-debug.ts
 services/web/iluminate/lib/feedback.ts
 services/web/iluminate/lib/modules.ts
 services/web/iluminate/lib/request-url.ts
+services/web/iluminate/lib/start-intent.ts
 services/web/iluminate/lib/types.ts
 services/web/iluminate/lib/utils.ts
 services/web/iluminate/next-env.d.ts
@@ -248,11 +252,13 @@ services/web/iluminate/package.json
 services/web/iluminate/postcss.config.mjs
 services/web/iluminate/tailwind.config.ts
 services/web/iluminate/tsconfig.json
+services/web/iluminate/tsconfig.tsbuildinfo
 .agent/AI_CONTEXT_LED_ORCHESTRATION_PLATFORM.md
 .agent/AI_CONTEXT_PACK.md
 .agent/BRAIN_MAP.md
 .agent/DATABASE_MODEL.md
 .agent/DESIGNER_HANDOFF.md
+.agent/DESIGNER_UX_CONTRACT.md
 .agent/EFFECT_TARGETING_MODEL.md
 .agent/EXECUTION_MAP.md
 .agent/FILESYSTEM_GUARDRAILS.md

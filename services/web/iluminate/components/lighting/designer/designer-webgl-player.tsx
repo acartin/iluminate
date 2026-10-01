@@ -3,14 +3,12 @@
 import { useEffect, useRef, useState } from "react";
 import type { DesignerForm } from "@/lib/lighting/partitura-model";
 import type { CompiledDesignerLayout } from "./designer-compiler";
-import { channelContainsPoint, clamp, pointInsideDesignerShape, pointNearShapeStroke, worldHitTolerance } from "./designer-geometry";
+import { clamp, pickAnimationTarget, worldHitTolerance } from "./designer-geometry";
 import type { DesignerSelection, DesignerViewport } from "./types";
 import type { DesignerAnimationDiffuser, DesignerAnimationPixel } from "./designer-paper-canvas";
 import {
-  clearDiffuserFrame,
   DEFAULT_DIFFUSER_RENDER_SETTINGS,
-  renderDiffuserFrame,
-  renderDirectLedFrame,
+  renderPixiAnimationFrame,
   type DiffuserRenderSettings
 } from "./rendering/designer-player-renderers";
 
@@ -24,8 +22,10 @@ export function DesignerWebglPlayer({
   viewport,
   selectedZoneId,
   selectedChannelId,
+  selectedZoneIds,
+  selectedChannelIds,
   animationPixels = [],
-  animationDiffuser = "none",
+  animationDiffuser = "as_built",
   diffuserSettings = DEFAULT_DIFFUSER_RENDER_SETTINGS,
   onViewportChange,
   onSelect
@@ -35,14 +35,15 @@ export function DesignerWebglPlayer({
   viewport: DesignerViewport;
   selectedZoneId?: string;
   selectedChannelId?: string;
+  selectedZoneIds?: string[];
+  selectedChannelIds?: string[];
   animationPixels?: DesignerAnimationPixel[];
   animationDiffuser?: DesignerAnimationDiffuser;
   diffuserSettings?: DiffuserRenderSettings;
   onViewportChange: (viewport: DesignerViewport) => void;
-  onSelect: (selection: DesignerSelection) => void;
+  onSelect: (selection: DesignerSelection, additive?: boolean) => void;
 }) {
   const hostRef = useRef<HTMLDivElement | null>(null);
-  const diffuserCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const appRef = useRef<PixiApp | null>(null);
   const pixiRef = useRef<PixiModule | null>(null);
   const panRef = useRef<{ clientX: number; clientY: number; viewport: DesignerViewport } | null>(null);
@@ -52,7 +53,6 @@ export function DesignerWebglPlayer({
   const presentationViewport = canvasSize.width > 0 && canvasSize.height > 0
     ? normalizePresentationViewport(viewport, designer, canvasSize.width / canvasSize.height)
     : viewport;
-  const diffused = animationDiffuser !== "none";
 
   useEffect(() => {
     const syncColorMode = () => setColorMode(window.document.documentElement.classList.contains("dark") ? "night" : "day");
@@ -102,7 +102,8 @@ export function DesignerWebglPlayer({
         resizeTo: host
       });
       if (cancelled) {
-        app.destroy(true);
+        destroyPixiApplication(app);
+        app = null;
         return;
       }
       appRef.current = app;
@@ -114,10 +115,9 @@ export function DesignerWebglPlayer({
       cancelled = true;
       setReady(false);
       if (appRef.current) {
-        appRef.current.destroy(true);
+        destroyPixiApplication(appRef.current);
         appRef.current = null;
-      } else if (app) {
-        app.destroy(true);
+        app = null;
       }
       pixiRef.current = null;
     };
@@ -127,38 +127,23 @@ export function DesignerWebglPlayer({
     const app = appRef.current;
     const pixi = pixiRef.current;
     if (!ready || !app || !pixi || canvasSize.width < 1 || canvasSize.height < 1) return;
-    app.canvas.style.display = diffused ? "none" : "block";
-    if (diffused) {
-      app.renderer.resize(canvasSize.width, canvasSize.height);
-      app.stage.removeChildren().forEach((child) => child.destroy({ children: true }));
-      app.render();
-      return;
-    }
-    renderDirectLedFrame({ app, pixi, designer, layout, viewport: presentationViewport, canvasSize, selectedZoneId, selectedChannelId, animationPixels, showOutlines: diffuserSettings.showOutlines, colorMode });
-  }, [animationPixels, canvasSize, colorMode, designer, diffused, diffuserSettings, layout, presentationViewport, ready, selectedChannelId, selectedZoneId]);
-
-  useEffect(() => {
-    const canvas = diffuserCanvasRef.current;
-    if (!canvas) return;
-    canvas.style.display = diffused ? "block" : "none";
-    if (!diffused || canvasSize.width < 1 || canvasSize.height < 1) {
-      clearDiffuserFrame(canvas, canvasSize);
-      return;
-    }
-    renderDiffuserFrame({
-      canvas,
+    renderPixiAnimationFrame({
+      app,
+      pixi,
       designer,
       layout,
       viewport: presentationViewport,
       canvasSize,
       selectedZoneId,
       selectedChannelId,
+      selectedZoneIds,
+      selectedChannelIds,
       animationPixels,
-      diffuser: animationDiffuser,
+      presentation: animationDiffuser,
       settings: diffuserSettings,
       colorMode
     });
-  }, [animationPixels, animationDiffuser, canvasSize, colorMode, designer, diffuserSettings, diffused, layout, presentationViewport, selectedChannelId, selectedZoneId]);
+  }, [animationPixels, animationDiffuser, canvasSize, colorMode, designer, diffuserSettings, layout, presentationViewport, ready, selectedChannelId, selectedChannelIds, selectedZoneId, selectedZoneIds]);
 
   function screenToWorld(clientX: number, clientY: number) {
     const rect = hostRef.current?.getBoundingClientRect();
@@ -172,16 +157,9 @@ export function DesignerWebglPlayer({
   function handlePointerDown(event: React.PointerEvent<HTMLDivElement>) {
     const point = screenToWorld(event.clientX, event.clientY);
     const tolerance = worldHitTolerance(presentationViewport, canvasSize) * 2.25;
-    const pickedZone = designer.zones.find((zone) => (
-      zone.visible !== false && (pointInsideDesignerShape(zone, point) || pointNearShapeStroke(zone, point, tolerance))
-    ));
-    if (pickedZone) {
-      onSelect({ type: "zone", id: pickedZone.id });
-      return;
-    }
-    const pickedChannel = designer.channels.find((channel) => channel.visible !== false && channelContainsPoint(channel, point, tolerance));
-    if (pickedChannel) {
-      onSelect({ type: "channel", id: pickedChannel.id });
+    const target = pickAnimationTarget(designer, point, tolerance);
+    if (target) {
+      onSelect(target, event.shiftKey || event.ctrlKey || event.metaKey);
       return;
     }
     onSelect(null);
@@ -222,15 +200,25 @@ export function DesignerWebglPlayer({
   return (
     <div
       ref={hostRef}
-      className="relative h-full min-h-0 w-full cursor-grab overflow-hidden rounded-md border border-border bg-muted active:cursor-grabbing [&>canvas]:block [&>canvas]:h-full [&>canvas]:w-full"
+      className="relative h-full min-h-0 w-full cursor-grab overflow-hidden bg-muted active:cursor-grabbing [&>canvas]:block [&>canvas]:h-full [&>canvas]:w-full"
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
       onPointerCancel={handlePointerUp}
       onWheel={handleWheel}
     >
-      <canvas ref={diffuserCanvasRef} className="absolute inset-0 hidden h-full w-full" />
     </div>
+  );
+}
+
+function destroyPixiApplication(app: PixiApp) {
+  // Pixi 8 interprets rendererDestroyOptions=true as both "remove the canvas"
+  // and "release every global resource pool". Viewer and Animate can briefly
+  // own separate applications, so releasing those shared pools while the
+  // other renderer is alive invalidates its managed text/filter textures.
+  app.destroy(
+    { removeView: true, releaseGlobalResources: false },
+    { children: true, context: true }
   );
 }
 

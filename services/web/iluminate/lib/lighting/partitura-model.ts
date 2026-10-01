@@ -54,6 +54,43 @@ export type DesignerChannelForm = {
   opacity: number;
 };
 
+export type DesignerOpticalMode = "front" | "halo" | "wall_wash";
+export type DesignerOpticalMaterial = "none" | "silicone" | "milky_white" | "day_night" | "opaque";
+export type DesignerOpticalReceiverType = "canvas" | "build_area" | "zone";
+
+/**
+ * Physical light mounts are presentation/fabrication metadata. They consume the
+ * compiled pixel map but never change electrical topology or effect targeting.
+ */
+export type DesignerLightSource = {
+  id: string;
+  name: string;
+  targetType: "zone" | "channel";
+  targetId: string;
+  stringIds: string[];
+  visible: boolean;
+  locked: boolean;
+  mode: DesignerOpticalMode;
+  receiverType: DesignerOpticalReceiverType;
+  receiverId?: string;
+  material: DesignerOpticalMaterial;
+  transmissionPct: number;
+  faceColor: string;
+  intensity: number;
+  sourceDistanceCm: number;
+  spreadCm: number;
+  softnessCm: number;
+  falloff: number;
+  directionDeg: number;
+  throwCm: number;
+  beamAngleDeg: number;
+  occludeSource: boolean;
+  enabled: boolean;
+};
+
+/** @deprecated Read-only compatibility name for pre-Light Sources documents. */
+export type DesignerOpticalTreatment = DesignerLightSource;
+
 export type DesignerRouteKind = "led_string" | "data_cable";
 
 export type DesignerRouteForm = {
@@ -85,6 +122,7 @@ export type DesignerLayersForm = {
   artwork: DesignerLayerSettings;
   reference: DesignerLayerSettings;
   zones: DesignerLayerSettings;
+  lightSources: DesignerLayerSettings;
   hardware: DesignerLayerSettings;
   strings: DesignerLayerSettings;
 };
@@ -134,6 +172,9 @@ export type DesignerForm = {
   zones: DesignerZoneForm[];
   groups: DesignerGroupForm[];
   channels: DesignerChannelForm[];
+  lightSources: DesignerLightSource[];
+  /** Legacy input field. Normalization migrates it into lightSources. */
+  opticalTreatments?: DesignerOpticalTreatment[];
   routes: DesignerRouteForm[];
 };
 
@@ -142,6 +183,7 @@ export type ClipParams = Record<string, string | number | boolean | null | strin
 export type ClipForm = {
   id: string;
   name: string;
+  enabled?: boolean;
   target: string;
   coordinateSpace?: "serial" | "local" | "global";
   effect: string;
@@ -301,11 +343,24 @@ export function createClipIdentity(clips: Array<{ id: string; name: string }>, l
   return { id, name: `${labelPrefix} ${index}` };
 }
 
+/** Uses the last empty track, or returns the next track when all are occupied. */
+export function nextEmptyClipLayer(scene: Pick<SceneForm, "laneCount" | "clips">) {
+  const declaredLaneCount = typeof scene.laneCount === "number" && Number.isFinite(scene.laneCount)
+    ? Math.max(1, Math.round(scene.laneCount))
+    : 1;
+  const laneCount = Math.max(declaredLaneCount, inferSceneLaneCount(scene.clips));
+  const occupied = new Set(scene.clips.map((clip) => Math.max(0, Math.round(clip.layer))));
+  for (let layer = laneCount - 1; layer >= 0; layer -= 1) {
+    if (!occupied.has(layer)) return layer;
+  }
+  return laneCount;
+}
+
 export function normalizeDefaultSignLayout(document: PartituraDocument) {
   const fallback = createDefaultPartituraDocument(document.projectId);
   const source = clonePartituraDocument(document);
-  const designer = normalizeDesigner(source.designer);
-  const targetIds = new Set(["full_sign", ...designer.zones.map((zone) => zone.id), ...designer.channels.map((channel) => channel.id), ...designer.groups.map((group) => group.id)]);
+  const designer = normalizeDesigner(source.designer, source.compiledLayout);
+  const targetIds = new Set(["full_sign", ...designer.lightSources.map((source) => source.id), ...designer.zones.map((zone) => zone.id), ...designer.channels.map((channel) => channel.id), ...designer.groups.map((group) => group.id)]);
   // An empty scene list is a valid authoring state while Animate is being composed.
   const scenes = Array.isArray(source.scenes) ? source.scenes : fallback.scenes;
 
@@ -314,8 +369,9 @@ export function normalizeDefaultSignLayout(document: PartituraDocument) {
     scenes: scenes.map((scene) => ({
       ...scene,
       laneCount: Math.max(1, Math.round(positiveNumber(scene.laneCount, inferSceneLaneCount(scene.clips ?? [])))),
-      clips: ensureUniqueClipNames((scene.clips ?? []).map((clip) => ({
+      clips: ensureUniqueClipNames(migrateClipsToLightSources(scene.clips ?? [], designer).map((clip) => ({
         ...clip,
+        enabled: clip.enabled !== false,
         target: targetIds.has(clip.target) ? clip.target : "full_sign",
         coordinateSpace: "local"
       })))
@@ -370,6 +426,7 @@ export function createDefaultDesigner(): DesignerForm {
     },
     groups: [],
     channels: [],
+    lightSources: [],
     zones: [
       {
         id: "fondo",
@@ -412,9 +469,19 @@ export function createDefaultDesigner(): DesignerForm {
   };
 }
 
-function normalizeDesigner(designer?: DesignerForm): DesignerForm {
+function normalizeDesigner(designer?: DesignerForm, compiledLayout?: PartituraDocument["compiledLayout"]): DesignerForm {
   const fallback = createDefaultDesigner();
   if (!designer) return fallback;
+  const routes = Array.isArray(designer.routes) && designer.routes.length ? designer.routes.map((route, index): DesignerRouteForm => ({
+    id: typeof route.id === "string" && route.id ? route.id : `route_${index + 1}`,
+    name: typeof route.name === "string" && route.name ? route.name : `Route ${index + 1}`,
+    kind: route.kind === "data_cable" ? "data_cable" : "led_string",
+    visible: route.visible !== false,
+    points: Array.isArray(route.points) ? route.points.filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y)).map((point) => ({ x: point.x, y: point.y, ...(point.joint ? { joint: true } : {}) })) : []
+  })).filter((route) => route.points.length >= 2) : fallback.routes;
+  const rawLightSources = Array.isArray(designer.lightSources) && (designer.lightSources.length > 0 || !Array.isArray(designer.opticalTreatments))
+    ? designer.lightSources
+    : Array.isArray(designer.opticalTreatments) ? designer.opticalTreatments : [];
   return {
     canvasWidthCm: positiveNumber(designer.canvasWidthCm, fallback.canvasWidthCm),
     canvasHeightCm: positiveNumber(designer.canvasHeightCm, fallback.canvasHeightCm),
@@ -432,14 +499,98 @@ function normalizeDesigner(designer?: DesignerForm): DesignerForm {
     zones: Array.isArray(designer.zones) && designer.zones.length ? designer.zones.map(normalizeDesignerZone) : fallback.zones,
     groups: Array.isArray(designer.groups) ? designer.groups.filter((group) => typeof group.id === "string" && typeof group.name === "string").map((group) => ({ id: group.id, name: group.name, members: Array.isArray(group.members) ? group.members.filter((member) => member?.type === "zone" || member?.type === "group") : [] })) : [],
     channels: normalizeDesignerChannels(designer.channels),
-    routes: Array.isArray(designer.routes) && designer.routes.length ? designer.routes.map((route, index): DesignerRouteForm => ({
-      id: typeof route.id === "string" && route.id ? route.id : `route_${index + 1}`,
-      name: typeof route.name === "string" && route.name ? route.name : `Route ${index + 1}`,
-      kind: route.kind === "data_cable" ? "data_cable" : "led_string",
-      visible: route.visible !== false,
-      points: Array.isArray(route.points) ? route.points.filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y)).map((point) => ({ x: point.x, y: point.y, ...(point.joint ? { joint: true } : {}) })) : []
-    })).filter((route) => route.points.length >= 2) : fallback.routes
+    lightSources: normalizeLightSources(rawLightSources, routes, compiledLayout),
+    routes
   };
+}
+
+export function createDefaultLightSource(targetType: "zone" | "channel", targetId: string, mode: DesignerOpticalMode = "front"): DesignerLightSource {
+  return {
+    id: `source_${targetType}_${targetId}_${mode}`,
+    name: `${targetId} · ${mode === "front" ? "Front" : mode === "halo" ? "Halo" : "Wall Wash"}`,
+    targetType,
+    targetId,
+    stringIds: [],
+    visible: true,
+    locked: false,
+    mode,
+    receiverType: "canvas",
+    material: mode === "front" ? "none" : mode === "halo" ? "opaque" : "none",
+    transmissionPct: 100,
+    faceColor: "#16181d",
+    intensity: 1,
+    sourceDistanceCm: mode === "halo" ? 4 : 8,
+    spreadCm: mode === "halo" ? 5 : 3,
+    softnessCm: mode === "front" ? 0 : 2,
+    falloff: 1.4,
+    directionDeg: 90,
+    throwCm: 18,
+    beamAngleDeg: 55,
+    occludeSource: mode === "halo",
+    enabled: true
+  };
+}
+
+export const createDefaultOpticalTreatment = createDefaultLightSource;
+
+function normalizeLightSources(sources: DesignerLightSource[], routes: DesignerRouteForm[], compiledLayout?: PartituraDocument["compiledLayout"]): DesignerLightSource[] {
+  const ledStringIds = routes.filter((route) => route.kind === "led_string").map((route) => route.id);
+  const validStringIds = new Set(ledStringIds);
+  const pixelsById = new Map((compiledLayout?.pixelMap ?? []).map((pixel) => [pixel.id, pixel]));
+  const compiledTargets = new Map((compiledLayout?.zones ?? []).map((zone) => [zone.id, zone]));
+  return sources
+    .filter((treatment) => treatment && typeof treatment.targetId === "string" && treatment.targetId)
+    .map((treatment) => {
+      const legacyMode = treatment.mode as DesignerOpticalMode | "direct" | "face_diffuser";
+      const mode: DesignerOpticalMode = legacyMode === "halo" || legacyMode === "wall_wash" ? legacyMode : "front";
+      const fallback = createDefaultLightSource(treatment.targetType === "channel" ? "channel" : "zone", treatment.targetId, mode);
+      const receiverType: DesignerOpticalReceiverType = treatment.receiverType === "build_area" || treatment.receiverType === "zone" ? treatment.receiverType : "canvas";
+      const material: DesignerOpticalMaterial = legacyMode === "face_diffuser" && treatment.material === "none"
+        ? "milky_white"
+        : treatment.material === "silicone" || treatment.material === "milky_white" || treatment.material === "day_night" || treatment.material === "opaque" ? treatment.material : "none";
+      const inferredStringIds = compiledTargets.get(treatment.targetId)?.pixelIds
+        .map((pixelId) => pixelsById.get(pixelId)?.stringId)
+        .filter((stringId): stringId is string => Boolean(stringId && validStringIds.has(stringId))) ?? [];
+      const authoredStringIds = Array.isArray(treatment.stringIds) ? treatment.stringIds.filter((id) => validStringIds.has(id)) : [];
+      return {
+        ...fallback,
+        id: typeof treatment.id === "string" && treatment.id ? treatment.id : fallback.id,
+        name: typeof treatment.name === "string" && treatment.name ? treatment.name : fallback.name,
+        stringIds: Array.from(new Set(authoredStringIds.length ? authoredStringIds : inferredStringIds.length ? inferredStringIds : ledStringIds)),
+        visible: treatment.visible !== false,
+        locked: treatment.locked === true,
+        mode,
+        receiverType,
+        ...(receiverType !== "canvas" && typeof treatment.receiverId === "string" && treatment.receiverId ? { receiverId: treatment.receiverId } : {}),
+        material,
+        transmissionPct: Number.isFinite(treatment.transmissionPct) ? clampNumber(treatment.transmissionPct, 1, 100) : fallback.transmissionPct,
+        faceColor: typeof treatment.faceColor === "string" && /^#[0-9a-f]{6}$/i.test(treatment.faceColor) ? treatment.faceColor : fallback.faceColor,
+        intensity: clampNumber(treatment.intensity, 0, 3),
+        sourceDistanceCm: clampNumber(treatment.sourceDistanceCm, 0, 30),
+        spreadCm: clampNumber(treatment.spreadCm, 0, 30),
+        softnessCm: clampNumber(treatment.softnessCm, 0, 20),
+        falloff: clampNumber(treatment.falloff, 0.25, 4),
+        directionDeg: clampNumber(treatment.directionDeg, -360, 360),
+        throwCm: clampNumber(treatment.throwCm, 1, 200),
+        beamAngleDeg: clampNumber(treatment.beamAngleDeg, 5, 170),
+        occludeSource: typeof treatment.occludeSource === "boolean" ? treatment.occludeSource : fallback.occludeSource,
+        enabled: typeof treatment.enabled === "boolean" ? treatment.enabled : true
+      };
+    });
+}
+
+function migrateClipsToLightSources(clips: ClipForm[], designer: DesignerForm) {
+  return clips.flatMap((clip) => {
+    if (designer.lightSources.some((source) => source.id === clip.target)) return [{ ...clip }];
+    const sources = designer.lightSources.filter((source) => source.targetId === clip.target && source.enabled);
+    if (!sources.length) return [{ ...clip }];
+    return sources.map((source, index) => ({
+      ...clip,
+      id: index === 0 ? clip.id : `${clip.id}__${source.id}`,
+      name: index === 0 ? clip.name : `${clip.name} · ${source.mode === "front" ? "Front" : source.mode === "halo" ? "Halo" : "Wall Wash"}`,
+      target: source.id
+    }));
+  });
 }
 
 function normalizeDesignerZone(zone: DesignerZoneForm): DesignerZoneForm {
@@ -502,6 +653,7 @@ function defaultDesignerLayers(): DesignerLayersForm {
     artwork: { visible: true, locked: false, opacity: 1 },
     reference: { visible: true, locked: false, opacity: 0.75 },
     zones: { visible: true, locked: false, opacity: 0.35 },
+    lightSources: { visible: true, locked: false, opacity: 1 },
     hardware: { visible: true, locked: false, opacity: 1 },
     strings: { visible: true, locked: false, opacity: 1 }
   };
@@ -513,6 +665,7 @@ function normalizeDesignerLayers(layers: (Partial<DesignerLayersForm> & { svg?: 
     artwork: normalizeDesignerLayer(layers?.artwork, fallback.artwork),
     reference: normalizeDesignerLayer(reference, fallback.reference),
     zones: normalizeDesignerLayer(layers?.zones, fallback.zones),
+    lightSources: normalizeDesignerLayer(layers?.lightSources, fallback.lightSources),
     hardware: normalizeDesignerLayer(layers?.hardware, fallback.hardware),
     strings: normalizeDesignerLayer(layers?.strings, fallback.strings)
   };

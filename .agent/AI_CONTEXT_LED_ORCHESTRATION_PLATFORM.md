@@ -226,8 +226,11 @@ cableado. Se permiten grupos anidados, pero el validador debe impedir ciclos.
 - **Tramo de fabricación:** sección entre dos nodos de una ruta; detalle de construcción.
 - **Zona:** geometría visual que selecciona píxeles por posición.
 - **Grupo:** composición semántica de zonas/grupos.
+- **Light Source:** fuente Front, Halo o Wall Wash que vincula una zona/channel
+  con una o más strings físicas y se convierte en un target independiente de clips.
 
-Los efectos normales se aplican a zonas o grupos. El motor puede ordenar los
+Cuando existen Light Sources, los efectos normales se aplican a fuentes o
+grupos; las zonas sin fuentes continúan siendo targets compatibles. El motor puede ordenar los
 píxeles seleccionados por serial (`serial`) o evaluarlos en coordenadas locales
 o globales (`local`, `global`).
 
@@ -247,7 +250,8 @@ Una partitura puede almacenar múltiples escenas.
 
 Una **pista** es una fila del timeline y apunta a un objetivo:
 
-- Zona, como opción normal.
+- Light Source, como opción normal cuando una zona tiene fuentes configuradas.
+- Zona, para geometría legacy o sin fuentes.
 - Segmento, para control específico.
 - Cadena completa, para casos avanzados o diagnóstico.
 - Instalación completa, para efectos globales.
