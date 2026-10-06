@@ -52,6 +52,37 @@ SVG/canvas of real sign
 -> spatial/linear effects
 ```
 
+Designer fabrication upgrade checkpoint (2026-10-06): phases 0–10 of
+`docs/upgrade.doc` are complete. The persisted Designer schema is version 2,
+build areas/zones/channels reference shared canonical geometry, geometry and
+electrical APIs are separated, and geometric tools dispatch through a common
+layer policy. Face Graphic is now a native authoring category with shared
+vector tools, pass mode/filter color and no electrical compile impact.
+Associative `Project Geometry` references follow canonical source edits, remain
+read-only until `Break Link`, preserve and relink broken sources, reject cycles,
+and remain outside electrical compilation. Compound paths persist real holes
+with even-odd fill, and the shared engine now supports Union, Subtract,
+Intersect and Exclude with topology validation. Zone compounds affect pixel
+membership and Compile; Face Graphic/reference compounds remain electrically
+neutral. Persisted derived geometry now provides live signed offsets with join
+styles and live fillets with corner selection, warnings and dependency
+recalculation across projection → offset → fillet chains. Derived results remain
+electrically neutral until `Break Link` materializes them. Editable text now
+uses controlled, hash-verified Iluminate font resources and converts
+deterministically into normal compound Bezier profiles with glyph holes. The
+Animate renderer now separates rear/external and front-light buffers, applies
+Face Graphic RGB transmission only to frontal light, preserves compound mask
+holes and ordering, and leaves Halo, Wall Wash and raw LED Map diagnostics
+unfiltered. Design now exports validated 1:1 millimeter SVG with native paths
+and metric DXF with deterministic curve flattening, grouped by fabrication
+operation/material. Editable text outlines at export time; construction guides,
+artwork and electrical objects remain excluded.
+
+Phase 10 makes current-document normalization idempotent, preserves intentional
+empty zone/route collections, carries Face Graphic pass/color through live
+derived profiles into Animate and fabrication export, and exercises the full
+geometry/electrical/renderer/export chain in deterministic regression tests.
+
 The hidden mega matrix is useful as an internal coordinate field for effects, but the operator should not be forced to see or manage it. Matrix presets remain useful only inside `Effect Lab`.
 
 See `.agent/PIXELMAP_COMPOSER_DIRECTION.md` before redesigning the composer, pixelMap model, effect scope, or UI workflow. For current Designer behavior, read `.agent/DESIGNER_HANDOFF.md` first.
@@ -71,7 +102,7 @@ UX direction after starting the Designer branch:
 - Formal import direction is SVG-only for the production model. Raster images may be references later, but SVG is the geometry source.
 - Designer route vocabulary is split into `LED string` and `Data cable`. `LED string` is amber/orange and compiles into the physical pixelMap. `Data cable` is green and establishes serial signal connectivity between controller ports and LED strings.
 - Addressable pixel count is derived from real route length and `Pixels/m`. Example: at `60 Pixels/m`, a `100 cm` LED string should compile to about 60 addressable pixels. `LEDs/m` is separate and represents physical emitters for preview/simulation, so WS2811 strips can model multiple physical LEDs per addressable pixel.
-- Every Designer document owns one controller card on the canvas. The controller is movable and persisted, but not deletable. It starts with 3 data connectors; future configuration should support different controller profiles, including 12-output controllers.
+- Every Designer document owns one controller card on the canvas. The controller is movable and persisted, but not deletable. The current repository contract supports exactly 3 data connectors. Controller profiles with a different count, including a possible 12-output profile, are future direction and require an explicit schema, validator, firmware-contract and product decision before implementation.
 - Route points are fabrication nodes, not LEDs. Double-clicking a route segment inserts a node/bend. Selecting an internal node enables point deletion and route cutting. Cutting splits one continuous route into two continuous routes. LED points are sampled inside each leg with a half-step offset, so cuts/bends sit between LEDs instead of replacing LEDs.
 - Route direction convention: green node = start/input/DIN, red node = end/output/DOUT, arrow = serial flow.
 - Direction must be visible beyond terminal color: route segments render inline flow arrows and controller ports render arrows inside the PCB pointing toward the port.
@@ -382,7 +413,7 @@ concept into a private editable project.
 - [ ] Keep `.agent/RULES.md` aligned with architecture.
 - [ ] Keep `.agent/FILESYSTEM_GUARDRAILS.md` aligned with services.
 - [ ] Keep `.agent/AI_CONTEXT_LED_ORCHESTRATION_PLATFORM.md` aligned with product decisions.
-- [ ] Regenerate `.agent/BRAIN_MAP.md` and `.agent/AI_CONTEXT_PACK.md` after major structure changes.
+- [ ] Regenerate the compact `.agent/BRAIN_MAP.md` and `.agent/AI_CONTEXT_PACK.md` manifests after major structure or context-inventory changes; they are not routine startup context.
 
 ### Validation
 

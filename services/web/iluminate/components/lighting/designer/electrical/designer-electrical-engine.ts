@@ -1,0 +1,30 @@
+/** Electrical topology API. It is deliberately separate from vector geometry. */
+export {
+  canSolderRoutes,
+  clearFloatingTerminalJoints,
+  controllerConnectedPorts,
+  controllerPortPoint,
+  createRouteFromDraft,
+  detachSolderedRoutePoint,
+  findJointGroup,
+  findMatchingControllerPort,
+  findMatchingSolderTerminal,
+  findNearbyControllerPort,
+  findNearbySolderTerminal,
+  isRouteTerminal,
+  moveControllerWithSolderedCables,
+  moveRoutePoint,
+  moveRouteTerminals,
+  moveRouteWithSolderedTerminals,
+  nearestRouteInsertIndex,
+  resolveRouteOutputs,
+  routeColor,
+  routeDirectionMarkers,
+  routeLengthCm,
+  routePointFill,
+  routeSelectedColor,
+  sampleRouteLedDots,
+  sameSnapPoint,
+  summarizeRoute
+} from "../designer-geometry";
+

@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <meta name="description" content="Generador interno de contratos de cambio para Iluminate.">
+    <title>Iluminate · Change Contract Builder</title>
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <header class="app-header">
+      <a class="brand" href="#top" aria-label="Iluminate Change Contract Builder">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><b></b></span>
+        <span>ILUMINATE</span>
+      </a>
+      <div class="header-copy">
+        <span class="eyebrow">INTERNAL TOOL</span>
+        <strong>Change Contract Builder</strong>
+      </div>
+      <div class="header-status"><span></span> Repo-aware · local only</div>
+    </header>
+
+    <main id="top" class="page-shell">
+      <section class="intro">
+        <div>
+          <p class="kicker">Una sesión. Un resultado verificable.</p>
+          <h1>Describe el cambio.<br><em>Protege todo lo demás.</em></h1>
+        </div>
+        <p class="intro-copy">Todo dominio empieza protegido. Habilita únicamente lo que la nueva sesión puede modificar; el generador añade rutas, contexto, validaciones y un protocolo de ampliación.</p>
+      </section>
+
+      <div class="workspace">
+        <section class="builder" aria-label="Configuración del contrato">
+          <div class="panel step-panel">
+            <div class="step-heading">
+              <span class="step-number">01</span>
+              <div><h2>Resultado</h2><p>Escribe el comportamiento observable, sin explicar todavía la solución.</p></div>
+            </div>
+            <label class="field-label" for="objective">¿Qué quieres corregir o implementar?</label>
+            <textarea id="objective" rows="4" placeholder="Ejemplo: El player no reproduce los efectos definidos en los clips activos."></textarea>
+            <div class="mode-row">
+              <label class="field-label" for="mode">Modo de trabajo</label>
+              <select id="mode"></select>
+            </div>
+          </div>
+
+          <div class="panel step-panel">
+            <div class="step-heading">
+              <span class="step-number">02</span>
+              <div><h2>Atajos frecuentes</h2><p>Aplican un alcance inicial; después puedes afinarlo.</p></div>
+            </div>
+            <div id="presets" class="preset-grid"></div>
+          </div>
+
+          <div class="panel step-panel">
+            <div class="step-heading domain-heading">
+              <span class="step-number">03</span>
+              <div><h2>Dominios modificables</h2><p>Protegidos por defecto. Cambia a “Permitido” solo lo indispensable.</p></div>
+              <div class="heading-actions">
+                <button id="protect-all" class="text-button" type="button">Proteger todo</button>
+              </div>
+            </div>
+            <div class="search-wrap">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21 21-4.35-4.35m2.1-5.4a7.5 7.5 0 1 1-15 0 7.5 7.5 0 0 1 15 0Z"/></svg>
+              <input id="domain-search" type="search" placeholder="Buscar player, clips, cableado, base de datos…">
+            </div>
+            <div id="domain-groups" class="domain-groups"></div>
+          </div>
+
+          <div class="panel step-panel">
+            <div class="step-heading">
+              <span class="step-number">04</span>
+              <div><h2>Superficies sensibles</h2><p>Estas prohibiciones se incluyen explícitamente. Desprotege solo si el cambio las necesita.</p></div>
+            </div>
+            <div id="surface-grid" class="surface-grid"></div>
+          </div>
+
+          <div class="panel step-panel">
+            <div class="step-heading">
+              <span class="step-number">05</span>
+              <div><h2>Límites y validación adicional</h2><p>Opcional: agrega una restricción particular o una prueba que quieras exigir.</p></div>
+            </div>
+            <div class="two-columns">
+              <label>Límites adicionales<textarea id="extra-limits" rows="3" placeholder="Ejemplo: no modifiques la representación visual de los LEDs."></textarea></label>
+              <label>Validación adicional<textarea id="extra-validation" rows="3" placeholder="Ejemplo: prueba el fixture default_installation."></textarea></label>
+            </div>
+          </div>
+        </section>
+
+        <aside class="output-panel" aria-label="Prompt generado">
+          <div class="output-head">
+            <div><span class="eyebrow">CONTRATO GENERADO</span><h2>Nueva sesión</h2></div>
+            <span id="save-status" class="save-status">Guardado local</span>
+          </div>
+          <div id="selection-stats" class="stats"></div>
+          <textarea id="prompt-output" readonly spellcheck="false" aria-label="Prompt generado"></textarea>
+          <div class="output-actions">
+            <button id="copy-prompt" class="primary-button" type="button">Copiar prompt</button>
+            <button id="download-prompt" class="secondary-button" type="button">Descargar .txt</button>
+            <button id="reset-form" class="icon-button" type="button" aria-label="Restablecer formulario" title="Restablecer formulario">↺</button>
+          </div>
+          <p class="output-note">El prompt no copia contexto: indica exactamente qué documentos y rutas debe consultar la siguiente sesión.</p>
+        </aside>
+      </div>
+    </main>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+    <script type="module" src="./app.mjs"></script>
+  </body>
+</html>

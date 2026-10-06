@@ -1,5 +1,6 @@
 import type { DesignerForm, DesignerPoint, DesignerRouteForm, PartituraDocument } from "@/lib/lighting/partitura-model";
-import { channelContainsPoint, channelWidthCm, controllerPortPoint, pointInsideDesignerShape, pointNearShapeStroke, sameSnapPoint, sampleRouteLedDots } from "./designer-geometry";
+import { channelContainsPoint, channelWidthCm, pointInsideDesignerShape, pointNearShapeStroke, validateDesignerGeometryTopology } from "./geometry/designer-geometry-engine";
+import { controllerPortPoint, sameSnapPoint, sampleRouteLedDots } from "./electrical/designer-electrical-engine";
 
 export type CompiledDesignerLayout = {
   outputs: Array<{ id: string; name: string; output: 1 | 2 | 3; pixelCount: number }>;
@@ -14,7 +15,7 @@ export function designerCompileSignature(designer: DesignerForm) {
   return JSON.stringify({
     controller: designer.controller,
     routes: designer.routes,
-    zones: designer.zones.map(({ id, name, shape, x, y, width, height, points, pathMode }) => ({ id, name, shape, x, y, width, height, points, pathMode })),
+    zones: designer.zones.map(({ id, name, shape, x, y, width, height, points, contours, pathMode, fillRule }) => ({ id, name, shape, x, y, width, height, points, contours, pathMode, fillRule })),
     channels: designer.channels.map(({ id, name, points, pathMode, widthMm, closed, cap }) => ({ id, name, points, pathMode, widthMm, closed, cap })),
     lightSources: designer.lightSources.map(({ id, name, targetType, targetId, stringIds }) => ({ id, name, targetType, targetId, stringIds })),
     groups: designer.groups,
@@ -30,6 +31,23 @@ export function compileDesignerLayout(designer: DesignerForm): CompiledDesignerL
   const pixelMap: CompiledDesignerLayout["pixelMap"] = [];
   const serialStarts: Record<number, number> = { 1: 0, 2: 0, 3: 0 };
   const ordered = orderedRoutesByOutput(designer, errors, warnings);
+
+  designer.zones.filter((zone) => zone.shape === "polygon").forEach((zone) => {
+    const issues = validateDesignerGeometryTopology({
+      id: zone.geometryId ?? zone.id,
+      kind: "path",
+      x: zone.x,
+      y: zone.y,
+      width: zone.width,
+      height: zone.height,
+      points: zone.points,
+      contours: zone.contours,
+      pathMode: zone.pathMode,
+      closed: true,
+      fillRule: zone.fillRule
+    });
+    issues.forEach((issue) => errors.push(`${zone.name}: invalid closed profile (${issue.replaceAll("-", " ")}).`));
+  });
 
   ordered.forEach(({ output, route }) => {
     if (route.kind !== "led_string") return;

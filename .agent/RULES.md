@@ -1,148 +1,227 @@
-# RULES
+# Iluminate AI Working Rules
 
-## 1. Fuente de verdad de contexto
+**Authority:** mandatory operating instructions for AI work in this repository.
+**Human entry point:** `.agent/ILUMINATE_BOOTSTRAP.md`.
+**Goal:** load the smallest reliable context, preserve architectural decisions,
+make scoped changes and validate them without turning generated context into a
+second source of truth.
 
-Precondicion recomendada al iniciar cada nueva sesion:
+## 1. Start Every Task Here
 
-1. Carga base:
-   - Leer `.agent/RULES.md`.
-   - Leer `.agent/EXECUTION_MAP.md`.
-   - Leer `.agent/FILESYSTEM_GUARDRAILS.md`.
-   - Leer `.agent/IMPLEMENTATION_PLAN.md` cuando la tarea afecte roadmap, fases o priorizacion.
-   - Leer `.agent/DESIGNER_UX_CONTRACT.md` y `.agent/DESIGNER_HANDOFF.md` antes de cambiar el Designer, sus barras, herramientas, Layers, canvas o flujo Animate.
-   - Leer `.agent/EFFECT_TARGETING_MODEL.md` antes de cambiar el compilador, pixelMap, zonas, grupos, efectos o simulador.
-   - Leer `.agent/ILUMINATE_UI_STANDARDS.md` si se toca `services/web/iluminate`.
-   - Leer `.agent/PUBLIC_SITE_DIRECTION.md` si se toca el sitio publico, catalogo, templates, configurador publico, SEO o area de aprendizaje.
-   - Leer `.agent/AI_CONTEXT_LED_ORCHESTRATION_PLATFORM.md` para decisiones de producto/dominio.
-2. Determinar si se requiere regeneracion de contexto:
-   - faltan `.agent/BRAIN_MAP.md` o `.agent/AI_CONTEXT_PACK.md`;
-   - el commit actual difiere del registrado en `.agent/BRAIN_MAP.md`;
-   - el usuario pide actualizacion completa de contexto;
-   - hubo cambio grande de arquitectura, compose o estructura de `services/`.
-3. Solo si aplica el punto 2, ejecutar `bash .agent/regenerar_contexto.sh`.
-4. Leer `BRAIN_MAP` y `AI_CONTEXT_PACK` solo por secciones necesarias.
-5. Recien despues iniciar implementacion, debug o review.
+Do not preload every file in `.agent` or `docs`.
 
-Regla de precedencia:
+1. Read this file.
+2. Classify the request by work mode and area using sections 2 and 3.
+3. Read only the required context for that area.
+4. Inspect the current code, tests and configuration in the affected paths.
+5. State scope and assumptions before tool use when the task requires tools.
+6. Perform the requested work in small, reviewable changes.
+7. Validate according to `.agent/EXECUTION_MAP.md` only when implementation or
+   configuration changed.
+8. Update authoritative documentation only when a contract, architecture,
+   operation or durable workflow actually changed.
 
-1. Codigo ejecutable vigente.
-2. `.agent/RULES.md`.
-3. `.agent/DESIGNER_UX_CONTRACT.md` para estructura y controles del Designer.
-4. `.agent/FILESYSTEM_GUARDRAILS.md`.
-5. `.agent/EXECUTION_MAP.md`.
-6. `.agent/IMPLEMENTATION_PLAN.md`.
-7. `.agent/ILUMINATE_UI_STANDARDS.md`.
-8. `.agent/AI_CONTEXT_LED_ORCHESTRATION_PLATFORM.md`.
-9. `.agent/BRAIN_MAP.md`.
-10. `.agent/AI_CONTEXT_PACK.md`.
+The normal mandatory context is this file plus the task-specific row in section
+3. `BRAIN_MAP.md` and `AI_CONTEXT_PACK.md` are not startup requirements.
 
-## 2. Scope operativo actual
+## 2. Classify The Work Mode
 
-Servicios principales:
+| Mode | Permitted behavior | Expected result |
+|---|---|---|
+| Explain or review | Read code/context and report findings. Do not modify files. | Evidence-backed answer. |
+| Diagnose | Reproduce or inspect enough to identify cause. Do not fix unless requested. | Cause, evidence and impact. |
+| Implement or refactor | Modify the smallest responsible surface and validate it. | Working change plus validation. |
+| Plan or design | Inspect current implementation before proposing future structure. | Decisions, tradeoffs and ordered work. |
+| Operate or deploy | Read the operational runbook, verify targets and protect secrets. | Explicit command/result and rollback awareness. |
 
-- `services/web/iluminate`: frontend Next.js, shell, UI, editor y simulador inicial.
-- `services/web/iluminate-public`: sitio publico Next.js previsto para `iluminate.space`, proyectos, templates, configurador publico y aprendizaje.
-- `services/lighting-core`: dominio LED, partitura, schemas, validadores, API del dominio y persistencia futura.
-- `services/auth`: identidad, organizaciones, membresias, roles, permisos, sesiones y auth API.
-- `services/simulator`: simulacion reusable cuando salga del primer prototipo web.
-- `services/device-protocol`: contratos cloud/controlador.
-- `services/firmware`: notas de contrato con el firmware externo; no contiene el build ESP32.
+If the request mixes modes, use the least expansive interpretation that still
+fulfills it. A request to review does not authorize implementation or external
+deployment.
 
-## 3. Arquitectura innegociable
+## 3. Context Router By Area
 
-- El core compilado define capacidades; la partitura define la instalacion.
-- No crear firmware distinto por instalacion.
-- `lighting-core` es la fuente de verdad del dominio LED.
-- `web/iluminate` no debe conectarse directo a Postgres ni poseer reglas canonicas de la partitura.
-- `auth` no debe depender de detalles internos del dominio LED.
-- Este repo produce y valida partituras; el firmware ESP32 que interpreta esas partituras se construye fuera de este monorepo.
-- En este repo solo se modelan tres salidas logicas del controlador: `chain.output` 1, 2 y 3.
-- El sistema es multitenant por diseno. La notacion canonica de tenant en PostgreSQL/backend es `client_id`, alineada con el auth copiado desde `datasyncsa`.
-- PostgreSQL es la base de datos objetivo para persistencia de auth, proyectos, controladores, revisiones de partitura, despliegues y estado.
-- Mantener separados el modelo fisico de cableado (`controller`, data cables, LED strings y nodos de fabricacion) y el modelo visual (`zone`, `group`). Los segmentos/rangos logicos no forman parte del flujo normal del operador; el pixelMap los deriva cuando haga falta.
-- Preferir contratos claros entre servicios: API, schemas, DTOs y fixtures versionados.
+Read the first column for every task. Add only the documents in the matching
+row. "Required context" means the relevant headings for the concrete task; read
+the whole document only when the change crosses most of its contract. A task
+spanning several areas may combine rows, but duplicated documents are read once.
 
-## 4. Seguridad y entorno
+| Area or affected path | Required context | Read additionally only when relevant |
+|---|---|---|
+| Any task | `.agent/RULES.md` | `.agent/BRAIN_MAP.md` only for unfamiliar structure or ownership. |
+| Product scope, architecture or roadmap | `.agent/AI_CONTEXT_LED_ORCHESTRATION_PLATFORM.md` | `.agent/IMPLEMENTATION_PLAN.md` for phases/priorities; relevant current code before accepting the document as current behavior. |
+| Service ownership, new folders, moves or cross-service dependencies | `.agent/FILESYSTEM_GUARDRAILS.md` | Service README files; `BRAIN_MAP.md` for the current high-level topology. |
+| Designer canvas interaction, tools, bars, Layers or selection UX | Relevant headings in `.agent/DESIGNER_UX_CONTRACT.md` and `.agent/DESIGNER_HANDOFF.md` | `.agent/ILUMINATE_UI_STANDARDS.md` for shared UI conventions. |
+| Designer geometry engine, projections, booleans, text or fabrication export | Relevant implementation headings in `.agent/DESIGNER_HANDOFF.md` | UX contract only when controls/interactions change; `docs/upgrade.doc` only for regression history or unfinished acceptance checks. |
+| Animate renderer or optical preview | Animate/rendering headings in `.agent/DESIGNER_HANDOFF.md` | UX contract for operator behavior; effect model/lifecycle only if their contracts change. |
+| Composer, routes, controller, LED density or generated pixelMap | `.agent/PIXELMAP_COMPOSER_DIRECTION.md`, `.agent/DESIGNER_HANDOFF.md` | `.agent/EFFECT_TARGETING_MODEL.md` when targets/effect coordinates change; `docs/partitura-lifecycle.md` when Compile/Generate state changes. |
+| Effects, zones, groups, simulator or playback semantics | `.agent/EFFECT_TARGETING_MODEL.md` | `.agent/PIXELMAP_COMPOSER_DIRECTION.md`, `docs/partitura-lifecycle.md`, and current effect/player code as applicable. |
+| Partitura schema, Compile, Generate, publication or device artifact | `docs/partitura-lifecycle.md` | `.agent/DATABASE_MODEL.md`, schema/validator fixtures and device/firmware README files. |
+| PostgreSQL, persistence, tenancy or migrations | `.agent/DATABASE_MODEL.md` | `.agent/FILESYSTEM_GUARDRAILS.md`; `docs/production-deployment.md` only when production operation is involved. |
+| Auth, sessions, roles or permissions | `.agent/FILESYSTEM_GUARDRAILS.md`, relevant `services/auth` README/code | `.agent/DATABASE_MODEL.md` for persisted ownership; production runbook only for deployment. |
+| Authenticated web UI outside Designer | `.agent/ILUMINATE_UI_STANDARDS.md` | `.agent/DESIGNER_UX_CONTRACT.md` only for shared Designer surfaces. |
+| Public site, catalog, templates, SEO or learning | `.agent/PUBLIC_SITE_DIRECTION.md` | `.agent/ILUMINATE_UI_STANDARDS.md` only for intentionally shared primitives; production runbook for publishing. |
+| Internal prompt builder or domain/guardrail catalog | `services/web/iluminate-prompt-builder/README.md`, `.agent/RULES.md` | `.agent/FILESYSTEM_GUARDRAILS.md` when ownership or service topology changes. |
+| Compose, environment, infrastructure or production deployment | `.agent/EXECUTION_MAP.md`, `docs/production-deployment.md` | `.agent/FILESYSTEM_GUARDRAILS.md` for ownership changes. |
+| External firmware or device protocol | `docs/partitura-lifecycle.md`, relevant `services/firmware` or `services/device-protocol` README | `.agent/EFFECT_TARGETING_MODEL.md` if playback contract changes. |
+| Validation only | `.agent/EXECUTION_MAP.md` | The contract document for the changed area if a failure reveals ambiguity. |
 
-Preflight para tareas con DB/Docker/env:
+### Should `docs/` Be Read?
 
-- Validar variables criticas por nombre, sin volcar secretos.
-- Prohibido hacer `cat .env` completo salvo instruccion explicita del usuario.
-- Para comandos que necesiten `.env`, usar patron:
-  `set -a; source .env; set +a; <comando>`
-- Si falta una variable critica, detener ejecucion y reportar.
+Yes, conditionally. `docs/` contains operational and lifecycle truth that is
+too detailed for the permanent AI rules:
 
-Reglas:
+- `docs/partitura-lifecycle.md` is authoritative for editable, compiled,
+  generated and device-facing partitura states.
+- `docs/production-deployment.md` is the human operational runbook and is read
+  only for infrastructure, production or deployment work.
+- `docs/upgrade.doc` records the Designer upgrade specification, completed
+  phases and regression expectations. It is historical/supporting context, not
+  routine Designer startup context.
 
-- Credenciales por variables de entorno; nunca hardcodeadas.
-- Logout y mutaciones por POST, no por GET/Link.
-- Permisos autoritativos en backend/auth.
-- No confiar en tenant/organizacion/rol enviados libremente desde el frontend.
-- Resolver `client_id` desde sesion, credenciales de dispositivo o contexto backend confiable; nunca desde un campo libre enviado por UI como autoridad.
+Never read all of `docs/` by default. When a new durable document is added, add
+one routing entry here and state whether it is authoritative, operational,
+supporting or historical.
 
-## 5. Datos y APIs
+## 4. Context Budget And Progressive Disclosure
 
-- APIs viven dentro del servicio que posee el dominio.
-- `services/auth/api` administra identidad y permisos.
-- `services/lighting-core/api` administra proyectos LED, revisiones, validaciones, despliegues y estado de controlador.
-- Los modelos persistentes de negocio deben incluir `client_id` desde el primer diseno de tablas, aunque las pantallas multitenant se implementen mas adelante.
-- Next API routes en `services/web/iluminate/app/api` son adaptadores UI o placeholders temporales.
-- Si una ruta Next empieza a tener reglas de dominio, mover la regla al service propietario.
+Use three levels:
 
-## 6. Frontend Iluminate
+1. **Level 0 — Route:** this file and the user's request.
+2. **Level 1 — Contract:** only the required documents from section 3 and the
+   directly affected code/tests.
+3. **Level 2 — Expansion:** neighboring modules, history, plans or generated
+   maps only when Level 1 leaves a concrete question unanswered.
 
-- Seguir `.agent/ILUMINATE_UI_STANDARDS.md`.
-- Para cualquier cambio del Designer, cumplir `.agent/DESIGNER_UX_CONTRACT.md`; la barra global, barra contextual y rail de herramientas no se pueden volver a mezclar por conveniencia de espacio.
-- Preservar `AppShell`, `Sidebar`, `Topbar` y UI primitives existentes.
-- No introducir templates externos.
-- No construir landing marketing dentro del portal operativo.
-- El editor debe usar el vocabulario del core: chain, segment, zone, partitura, scene, track, clip, effect.
-- Mocks locales deben estar explicitamente marcados.
+Stop loading context as soon as ownership, applicable contracts, current
+behavior and validation are clear. Prefer targeted headings, symbol search and
+specific code paths over reading an entire large document.
 
-## 7. Infra y operacion
+Do not load the same information from an original document and from
+`AI_CONTEXT_PACK.md`. Originals win.
 
-- Compose operativo actual: `compose.yml`.
-- Servicio web actual: `iluminate-web`.
-- Puerto local por defecto: `8420`.
-- Dominio publico registrado: `iluminate.space`.
-- Dominio previsto para dashboard/Designer: `app.iluminate.space`.
-- El sitio publico debe desplegarse en un contenedor independiente `iluminate-public-web`; no debe recibir credenciales de PostgreSQL, escritura R2, sesiones o dispositivos.
-- No cambiar nombres de servicios, puertos o URLs base sin ajustar:
-  - `compose.yml`;
-  - `.env.example`;
-  - `.agent/*` relevante;
-  - README del servicio afectado.
+## 5. Authority And Conflict Resolution
 
-## 8. Testing minimo por cambio
+Use this precedence for statements about current behavior:
 
-- Usar `.agent/EXECUTION_MAP.md` para decidir validacion.
-- Si cambias `services/web/iluminate`, validar con Docker build/smoke cuando sea posible.
-- Si cambias `compose.yml`, ejecutar `docker compose config`.
-- Si cambias scripts shell, ejecutar `bash -n`.
-- Si no se ejecutan pruebas, documentar exactamente que no se valido y por que.
+1. Current executable code, schemas, migrations and deterministic tests.
+2. `.agent/RULES.md` for AI procedure, safety and context routing.
+3. The area-specific contract named in section 3.
+4. Current operational documentation in `docs/`.
+5. Current handoff and implementation plan.
+6. Product/background direction.
+7. Generated maps and manifests.
 
-## 9. Checklist de rechazo inmediato
+This does not mean silently overriding a declared product decision with an
+accidental implementation. When code and contract disagree:
 
-Rechazar o detener cambios que:
+1. identify the exact conflict;
+2. determine whether the task is asking to align code or documentation;
+3. avoid broadening the change without authorization;
+4. report unresolved ambiguity before making an irreversible choice.
 
-- convierten el producto en editor vectorial general;
-- copian WLED como modelo de producto;
-- descargan codigo arbitrario al ESP32;
-- hacen del web la fuente canonica de la partitura;
-- mezclan auth/sesiones dentro de `lighting-core`;
-- mezclan drivers ESP32 dentro del web o dentro del monorepo;
-- conectan frontend directo a Postgres;
-- eliminan validaciones de seguridad;
-- dejan `.agent`, `.env.example` o compose desalineados.
+Label future direction, current behavior and historical decisions explicitly.
 
-## 10. Convencion de trabajo con IA
+## 6. Generated Context Policy
 
-Antes de empezar trabajo nuevo:
+`.agent/BRAIN_MAP.md` is a generated structural snapshot. It helps with service
+discovery and freshness, but it is not a source of product truth.
 
-1. Aplicar seccion 1.
-2. Identificar servicio propietario.
-3. Consultar solo el contexto necesario.
-4. Hacer cambios pequenos y verificables.
-5. Mantener los documentos `.agent` alineados cuando cambie arquitectura, compose o convenciones.
+`.agent/AI_CONTEXT_PACK.md` is a generated compact manifest. It exists for
+orientation and integrity checks; it must not embed copies of large documents
+or source files and must not be loaded during normal startup.
 
-Si aparece una instruccion heredada de otro proyecto, tratarla como legacy y no aplicarla a Iluminate salvo pedido explicito.
+Run `bash .agent/regenerar_contexto.sh` only when:
+
+- either generated file is missing;
+- service topology, compose services or the context-document inventory changed;
+- a major architecture change was completed;
+- the user explicitly requests a refreshed context snapshot.
+
+Do not regenerate merely because HEAD changed or before every task. Current
+code is inspected directly. The generator records commit, dirty state and
+fingerprints so a dirty worktree is not presented as a clean commit snapshot.
+
+For an external handoff, create an explicit task-specific bundle outside the
+tracked context files. Include only this file, the matching contract documents
+and a concise list of affected code paths.
+
+## 7. Architecture Guardrails
+
+- The compiled core defines controller capabilities; the partitura defines an
+  installation.
+- Do not create different firmware per installation or download arbitrary code
+  to the ESP32.
+- `services/lighting-core` owns the canonical LED/partitura domain.
+- `services/web/iluminate` presents and edits contracts; it is not the canonical
+  domain and must not connect directly to PostgreSQL.
+- `services/auth` owns identity and permissions without absorbing LED-domain
+  internals.
+- Organized ESP32 firmware lives outside this monorepo. This repository
+  produces, validates, simulates and publishes partituras.
+- The currently supported repository contract models logical controller outputs
+  1, 2 and 3. Future controller profiles require an explicit contract change;
+  they are not implied by roadmap text.
+- Physical wiring and visual targets remain separate. Operators author
+  controller/data-cable/LED-string topology plus zones/groups; raw logical
+  ranges and pixelMap entries are derived.
+- Persistent business data is tenant-scoped with trusted `client_id` context.
+- PostgreSQL is the target persistent database.
+
+## 8. Security And Environment
+
+For DB, Docker, deployment or environment work:
+
+- Verify required variable names without printing their values.
+- Never dump `.env` or secrets into output, generated context or documentation.
+- When a command needs local environment variables, use
+  `set -a; source .env; set +a; <command>` without echoing them.
+- Stop if a critical variable is missing.
+- Credentials belong in environment/secret stores, never source or docs.
+- Mutations such as logout use POST or another appropriate non-GET method.
+- Backend/auth permissions are authoritative.
+- Never trust a freely submitted tenant, organization or role as authority;
+  derive `client_id` from session, device credentials or trusted backend state.
+- The public web container must not receive database, R2-write, session or
+  device secrets.
+
+## 9. Implementation Practice
+
+- Identify the owning service before editing.
+- Inspect local instructions and current tests near the target path.
+- Preserve unrelated user changes in a dirty worktree.
+- Prefer the smallest coherent patch; avoid opportunistic rewrites.
+- Reuse existing contracts, primitives and domain vocabulary.
+- Put APIs and persistent rules in the service that owns the domain.
+- Keep Next API routes as UI adapters; move canonical domain logic to its owner.
+- Mark temporary mocks explicitly.
+- Add or update deterministic tests for behavior changes and regressions.
+- Do not modify documentation merely to narrate code churn. Update it when a
+  durable rule, workflow, contract, topology or operator behavior changes.
+
+## 10. Validation And Completion
+
+For changes, read `.agent/EXECUTION_MAP.md` near the validation stage and run
+the smallest relevant checks. At minimum:
+
+- shell changes: `bash -n`;
+- compose changes: `docker compose config`;
+- web/core changes: the mapped build/test and focused regression checks;
+- documentation/context changes: link/path review, generator syntax and
+  consistency checks.
+
+Report what ran and what did not run. A task is complete when the requested
+outcome exists, relevant validation passes or limitations are explicit, and
+authoritative documentation is aligned.
+
+## 11. Immediate Rejection Conditions
+
+Stop or challenge changes that would:
+
+- turn Iluminate into a general vector editor, WLED clone or video system;
+- make the web application the canonical partitura implementation;
+- mix auth/session logic into `lighting-core`;
+- move organized firmware drivers into the web or this monorepo;
+- connect a browser directly to PostgreSQL;
+- remove tenant, permission, schema or deployment safety checks;
+- treat generated context as more authoritative than source documents/code;
+- require reading the entire `.agent` or `docs` tree for every task.

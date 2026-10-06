@@ -1,5 +1,9 @@
 # Partitura Lifecycle
 
+**Status:** authoritative lifecycle contract. Read for partitura source,
+Compile, preview, Generate/Publish and device-consumption work; it is not global
+startup context.
+
 This document defines where a partitura lives today, which copy is authoritative, and how the firmware path should evolve.
 
 ## Current Sources And Truth Rules
@@ -54,6 +58,18 @@ error. Disconnected LED strings are warnings unless no mapped pixels can be
 generated at all.
 
 Operators must not edit `compiledLayout` directly. Any change to controller outputs, data cables, LED strings, zones, groups, pixel density or snap can make `compiledLayout` stale. The UI must then require a new `Compile` before Animate, Generate or firmware export uses the layout.
+
+Fabrication SVG/DXF export is separate from firmware generation and does not
+consume or mutate `compiledLayout`. It reads canonical Designer geometry,
+validates the selected fabrication categories, outlines controlled text in
+memory and downloads a 1:1 vector interchange file. Electrical routes,
+controller graphics, pixelMap and linked construction projections are not part
+of these files.
+
+Designer normalization treats explicit empty arrays as intentional authoring
+state. Deleting every zone or every route and saving must reopen empty; only a
+legacy document in which the field is absent receives historical defaults.
+Repeated normalization of a current document must be idempotent.
 
 Reference artwork changes do not require compile unless they change zones, groups or LED routes. Scene/clip/effect changes do not require physical compile, but they invalidate any old animation preview or generated firmware artifact.
 

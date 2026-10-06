@@ -1,89 +1,60 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MAX_LINES_PER_FILE="${MAX_LINES_PER_FILE:-180}"
-MAX_FILE_SIZE_KB="${MAX_FILE_SIZE_KB:-256}"
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repo_root="$(git -C "$script_dir/.." rev-parse --show-toplevel 2>/dev/null || true)"
 
-OUT_DIR=".agent"
-BRAIN_FILE="$OUT_DIR/BRAIN_MAP.md"
-OUT_FILE="$OUT_DIR/AI_CONTEXT_PACK.md"
+if [[ -z "$repo_root" ]]; then
+  echo "No se encontro el repositorio Git de Iluminate." >&2
+  exit 1
+fi
 
-mkdir -p "$OUT_DIR"
+cd "$repo_root"
 
-repo_root="$(pwd)"
+out_dir=".agent"
+brain_file="$out_dir/BRAIN_MAP.md"
+pack_file="$out_dir/AI_CONTEXT_PACK.md"
 now_utc="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
 branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "N/A")"
 commit="$(git rev-parse --short HEAD 2>/dev/null || echo "N/A")"
 
-tmp_file="$(mktemp)"
-trap 'rm -f "$tmp_file"' EXIT
-
-append() {
-  printf "%s\n" "$*" >> "$tmp_file"
+hash_stream() {
+  sha256sum | awk '{print $1}'
 }
 
-append_section() {
-  append ""
-  append "## $1"
-  append ""
-}
+status_snapshot="$(
+  git status --porcelain=v1 --untracked-files=all -- . \
+    ':(exclude).agent/BRAIN_MAP.md' \
+    ':(exclude).agent/AI_CONTEXT_PACK.md'
+)"
+status_fingerprint="$(printf '%s' "$status_snapshot" | hash_stream)"
+tracked_diff_fingerprint="$(
+  git diff --binary HEAD -- . \
+    ':(exclude).agent/BRAIN_MAP.md' \
+    ':(exclude).agent/AI_CONTEXT_PACK.md' |
+    hash_stream
+)"
 
-append_codeblock() {
-  local lang="$1"
-  shift
-  append '```'"$lang"
-  printf "%s\n" "$@" >> "$tmp_file"
-  append '```'
-}
-
-append_file_excerpt() {
-  local file="$1"
-  if [[ ! -f "$file" ]]; then
-    return 0
-  fi
-
-  local size_kb
-  size_kb="$(du -k "$file" | cut -f1)"
-  if (( size_kb > MAX_FILE_SIZE_KB )); then
-    append "- \`$file\` (omitido: ${size_kb}KB > ${MAX_FILE_SIZE_KB}KB)"
-    return 0
-  fi
-
-  append "### \`$file\`"
-  append ""
-  append '```'
-  sed -n "1,${MAX_LINES_PER_FILE}p" "$file" >> "$tmp_file"
-  append '```'
-}
-
-append_range_excerpt() {
-  local file="$1"
-  local start="$2"
-  local end="$3"
-
-  if [[ ! -f "$file" ]]; then
-    return 0
-  fi
-
-  append "### \`$file:$start-$end\`"
-  append ""
-  append '```'
-  sed -n "${start},${end}p" "$file" >> "$tmp_file"
-  append '```'
-}
+if [[ -n "$status_snapshot" ]]; then
+  worktree_state="dirty"
+  changed_path_count="$(printf '%s\n' "$status_snapshot" | awk 'NF { count++ } END { print count + 0 }')"
+else
+  worktree_state="clean"
+  changed_path_count="0"
+fi
 
 compose_services() {
   local compose_file="${1:-compose.yml}"
 
   if [[ ! -f "$compose_file" ]]; then
+    echo "(compose no encontrado)"
     return 0
   fi
 
-  if command -v docker >/dev/null 2>&1; then
-    if docker compose -f "$compose_file" config --services >/dev/null 2>&1; then
-      docker compose -f "$compose_file" config --services
-      return 0
-    fi
+  if command -v docker >/dev/null 2>&1 &&
+    docker compose -f "$compose_file" config --services >/dev/null 2>&1; then
+    docker compose -f "$compose_file" config --services
+    return 0
   fi
 
   awk '
@@ -96,130 +67,162 @@ compose_services() {
   ' "$compose_file"
 }
 
-tree_if_exists() {
-  local path="$1"
-  if [[ -d "$path" ]]; then
-    find "$path" -maxdepth 4 \
-      \( -path '*/__pycache__' -o -path '*/.next' -o -path '*/node_modules' -o -path '*/dist' -o -path '*/build' \) -prune \
-      -o -type d -print | sort | sed 's|^\./||'
-  fi
+service_topology() {
+  find services -mindepth 1 -maxdepth 2 -type d \
+    \( -name node_modules -o -name .next -o -name dist -o -name build \) -prune \
+    -o -type d -print |
+    sort
 }
 
-files_if_exists() {
-  local path="$1"
-  if [[ -d "$path" ]]; then
-    find "$path" -maxdepth 4 \
-      \( -path '*/__pycache__' -o -path '*/.next' -o -path '*/node_modules' -o -path '*/dist' -o -path '*/build' -o -name '*.pyc' \) -prune \
-      -o -type f -print | sort | sed 's|^\./||' | head -n 260
-  fi
-}
+brain_tmp="$(mktemp)"
+pack_tmp="$(mktemp)"
+trap 'rm -f "$brain_tmp" "$pack_tmp"' EXIT
 
-cat > "$BRAIN_FILE" <<EOF
-# BRAIN_MAP
+cat > "$brain_tmp" <<EOF
+# Iluminate Brain Map
+
+> Generated structural snapshot. It is not an instruction file or a source of
+> product truth. Start with \`.agent/RULES.md\`.
+
+## Snapshot
 
 - Generated UTC: \`$now_utc\`
-- Repo root: \`$repo_root\`
+- Repository root: \`$repo_root\`
 - Git branch: \`$branch\`
 - Git commit: \`$commit\`
+- Worktree: \`$worktree_state\` ($changed_path_count changed paths, excluding generated context files)
+- Status fingerprint: \`$status_fingerprint\`
+- Tracked diff fingerprint: \`$tracked_diff_fingerprint\`
 
-## 1. MAPA DE INTENCIONES (ILUMINATE)
+The commit identifies the base revision. When the worktree is dirty, the two
+fingerprints distinguish the local state without copying diffs or secrets into
+this file. Untracked file contents are never read for fingerprinting.
 
-| Carpeta | Responsabilidad tecnica | Importancia (1-5) |
-|---|---|---:|
-| \`compose.yml\` | Compose local actual; validar antes de tocar infraestructura. | 4 |
-| \`services/web/iluminate\` | Next.js UI, portal, editor/simulador inicial y adaptadores temporales. | 5 |
-| \`services/lighting-core\` | Dominio LED: rutas fisicas, pixelMap, zones, groups, partitura, scenes, validation y deployments. | 5 |
-| \`services/auth\` | Identidad, organizaciones, roles, permisos, sesiones y auth API. | 4 |
-| \`services/simulator\` | Simulacion reusable cuando salga del prototipo web. | 4 |
-| \`services/device-protocol\` | Contratos cloud/controlador y estado deseado/reportado. | 4 |
-| \`services/firmware\` | Notas de contrato y spikes temporales; firmware PlatformIO organizado en repo externo. | 4 |
-| \`docs\` | Documentacion de arquitectura y ciclo de vida de partitura. | 5 |
-| \`.agent\` | Reglas operativas y contexto maestro para agentes. | 5 |
+## Service Ownership
 
-## 2. LIMITES DE ARQUITECTURA
+| Path | Owner |
+|---|---|
+| \`services/web/iluminate\` | Authenticated Next.js UI, Designer and UI adapters. |
+| \`services/web/iluminate-public\` | Public site and read-only public experiences. |
+| \`services/web/iluminate-prompt-builder\` | Internal generator for scoped AI change contracts. |
+| \`services/lighting-core\` | Canonical LED, effect, partitura and validation domain. |
+| \`services/auth\` | Identity, sessions, organizations, roles and permissions. |
+| \`services/simulator\` | Reusable simulation domain as it leaves the web prototype. |
+| \`services/device-protocol\` | Cloud/controller protocol contracts. |
+| \`services/firmware\` | Compatibility notes and temporary spikes; organized firmware is external. |
+| \`docs\` | Lifecycle and operational runbooks selected by task. |
+| \`.agent\` | AI router, durable contracts and generated context metadata. |
 
-- Este repo produce y valida partituras; el firmware ESP32 organizado vive en repo externo PlatformIO.
-- El modelo de dominio vive en \`lighting-core\`, no en el web.
-- Auth vive en \`auth\`, no en \`lighting-core\`.
-- El web no se conecta directo a Postgres.
-- El ESP32 externo ejecuta partitura validada, no codigo arbitrario.
-- El hardware se modela aqui solo como tres salidas logicas: \`chain.output\` 1, 2 y 3.
-- El sistema es multitenant por diseno; toda tabla persistente de negocio debe contemplar \`client_id\`.
-- PostgreSQL es la base de datos objetivo.
-- Mantener separados el cableado fisico (controller, data cables, LED strings y nodos) y los objetivos visuales (zones y groups). Los segmentos/rangos logicos no son flujo normal de autoria; el pixelMap los deriva cuando haga falta.
-- Leer \`.agent/EFFECT_TARGETING_MODEL.md\` antes de cambiar compilacion, pixelMap, zonas, grupos, efectos o simulador.
-
-## 3. SERVICIOS DOCKER ACTUALES
+## Compose Services
 
 \`\`\`text
 $(compose_services compose.yml)
 \`\`\`
 
-## 4. TOPOLOGIA DE TRABAJO
+## Context Inventory
+
+| Document | Role |
+|---|---|
+| \`AGENTS.md\` | Repository-level pointer to the mandatory AI rules. |
+| \`.agent/RULES.md\` | Mandatory AI procedure and context router. |
+| \`.agent/ILUMINATE_BOOTSTRAP.md\` | Human guide for assigning work to AI. |
+| \`.agent/AI_CONTEXT_LED_ORCHESTRATION_PLATFORM.md\` | Product/domain direction. |
+| \`.agent/FILESYSTEM_GUARDRAILS.md\` | Service ownership and dependency boundaries. |
+| \`.agent/DESIGNER_UX_CONTRACT.md\` | Authoritative Designer interaction contract. |
+| \`.agent/DESIGNER_HANDOFF.md\` | Current Designer implementation handoff. |
+| \`.agent/PIXELMAP_COMPOSER_DIRECTION.md\` | Composer and physical mapping direction. |
+| \`.agent/EFFECT_TARGETING_MODEL.md\` | Effect targets and coordinate semantics. |
+| \`.agent/ILUMINATE_UI_STANDARDS.md\` | Authenticated web UI standards. |
+| \`.agent/PUBLIC_SITE_DIRECTION.md\` | Public-site product and visual direction. |
+| \`.agent/DATABASE_MODEL.md\` | Persistence and tenant model. |
+| \`.agent/IMPLEMENTATION_PLAN.md\` | Roadmap and phase status. |
+| \`.agent/EXECUTION_MAP.md\` | Validation routes and commands. |
+| \`services/web/iluminate-prompt-builder/README.md\` | Internal prompt-builder usage and ownership. |
+| \`docs/partitura-lifecycle.md\` | Partitura source/compile/generate/device lifecycle. |
+| \`docs/production-deployment.md\` | Production operations runbook. |
+| \`docs/upgrade.doc\` | Completed Designer upgrade specification and regression history. |
+
+## Current Service Topology
 
 \`\`\`text
-$(tree_if_exists services)
+$(service_topology)
 \`\`\`
 
-## 5. ARCHIVOS RELEVANTES
-
-\`\`\`text
-$(files_if_exists services)
-$(files_if_exists .agent)
-\`\`\`
+Use \`rg --files <affected-path>\` for file-level discovery. A complete file
+inventory is intentionally omitted because it is expensive, noisy and quickly
+stale.
 EOF
 
-append "# AI Context Pack"
-append ""
-append "- Generated UTC: \`$now_utc\`"
-append "- Repo root: \`$repo_root\`"
-append "- Git branch: \`$branch\`"
-append "- Git commit: \`$commit\`"
-append "- Policy: high-signal only; enfocado en Iluminate."
+mv "$brain_tmp" "$brain_file"
 
-append_section "Contexto Maestro"
-append_file_excerpt "$BRAIN_FILE"
-append_file_excerpt ".agent/AI_CONTEXT_LED_ORCHESTRATION_PLATFORM.md"
-append_file_excerpt ".agent/FILESYSTEM_GUARDRAILS.md"
+manifest_row() {
+  local file="$1"
+  local role="$2"
+  local lines
+  local digest
 
-append_section "Reglas Operativas"
-append_file_excerpt ".agent/RULES.md"
-append_file_excerpt ".agent/DESIGNER_UX_CONTRACT.md"
-append_file_excerpt ".agent/EXECUTION_MAP.md"
-append_file_excerpt ".agent/IMPLEMENTATION_PLAN.md"
-append_file_excerpt ".agent/ILUMINATE_UI_STANDARDS.md"
-append_file_excerpt ".agent/ILUMINATE_BOOTSTRAP.md"
-append_file_excerpt ".agent/EFFECT_TARGETING_MODEL.md"
-append_file_excerpt ".agent/PUBLIC_SITE_DIRECTION.md"
+  if [[ ! -f "$file" ]]; then
+    printf '| `%s` | missing | - | %s |\n' "$file" "$role" >> "$pack_tmp"
+    return 0
+  fi
 
-append_section "Documentacion de Arquitectura"
-append_file_excerpt "docs/partitura-lifecycle.md"
+  lines="$(wc -l < "$file" | tr -d ' ')"
+  digest="$(sha256sum "$file" | awk '{print substr($1, 1, 16)}')"
+  printf '| `%s` | %s | `%s` | %s |\n' "$file" "$lines" "$digest" "$role" >> "$pack_tmp"
+}
 
-append_section "Compose y Variables"
-append "### Servicios del compose principal"
-append ""
-append_codeblock text "$(compose_services compose.yml)"
-append_range_excerpt "compose.yml" 1 220
-append_file_excerpt ".env.example"
+cat > "$pack_tmp" <<EOF
+# Iluminate AI Context Manifest
 
-append_section "Topologia"
-append_codeblock text "$(tree_if_exists services)"
+> Optional generated manifest. Do not load it during normal startup and do not
+> use it instead of the original documents. Start with \`.agent/RULES.md\`.
 
-append_section "Archivos"
-append_codeblock text "$(files_if_exists services)"
+## Snapshot
 
-append_section "Extractos de Servicio"
-append_file_excerpt "services/README.md"
-append_file_excerpt "services/web/iluminate/README.md"
-append_file_excerpt "services/web/iluminate/package.json"
-append_file_excerpt "services/web/iluminate/lib/api.ts"
-append_file_excerpt "services/web/iluminate/lib/modules.ts"
-append_file_excerpt "services/lighting-core/README.md"
-append_file_excerpt "services/auth/README.md"
-append_file_excerpt "services/simulator/README.md"
-append_file_excerpt "services/device-protocol/README.md"
-append_file_excerpt "services/firmware/README.md"
+- Generated UTC: \`$now_utc\`
+- Git branch: \`$branch\`
+- Git commit: \`$commit\`
+- Worktree: \`$worktree_state\` ($changed_path_count changed paths, excluding generated context files)
+- Status fingerprint: \`$status_fingerprint\`
+- Tracked diff fingerprint: \`$tracked_diff_fingerprint\`
 
-mv "$tmp_file" "$OUT_FILE"
+## How To Use
 
-echo "Generated $BRAIN_FILE and $OUT_FILE"
+1. Read \`.agent/RULES.md\`.
+2. Select the task area in its Context Router.
+3. Read the named original documents and affected code.
+4. Use this manifest only to confirm document presence or detect snapshot drift.
+
+No document or source excerpt is embedded here. This avoids duplicate tokens,
+partial 180-line copies and conflicts with the originals.
+
+## Document Integrity
+
+| File | Lines | SHA-256 prefix | Role |
+|---|---:|---|---|
+EOF
+
+manifest_row "AGENTS.md" "Repository AI entry point"
+manifest_row ".agent/RULES.md" "AI procedure and router"
+manifest_row ".agent/ILUMINATE_BOOTSTRAP.md" "Human workflow"
+manifest_row ".agent/BRAIN_MAP.md" "Generated structural snapshot"
+manifest_row ".agent/AI_CONTEXT_LED_ORCHESTRATION_PLATFORM.md" "Product/domain direction"
+manifest_row ".agent/FILESYSTEM_GUARDRAILS.md" "Service boundaries"
+manifest_row ".agent/DESIGNER_UX_CONTRACT.md" "Designer UX contract"
+manifest_row ".agent/DESIGNER_HANDOFF.md" "Current Designer handoff"
+manifest_row ".agent/PIXELMAP_COMPOSER_DIRECTION.md" "Composer/pixelMap direction"
+manifest_row ".agent/EFFECT_TARGETING_MODEL.md" "Effect targeting"
+manifest_row ".agent/ILUMINATE_UI_STANDARDS.md" "Authenticated UI standards"
+manifest_row ".agent/PUBLIC_SITE_DIRECTION.md" "Public site direction"
+manifest_row ".agent/DATABASE_MODEL.md" "Persistence model"
+manifest_row ".agent/IMPLEMENTATION_PLAN.md" "Roadmap"
+manifest_row ".agent/EXECUTION_MAP.md" "Validation map"
+manifest_row "services/web/iluminate-prompt-builder/README.md" "Internal prompt builder"
+manifest_row "docs/partitura-lifecycle.md" "Partitura lifecycle"
+manifest_row "docs/production-deployment.md" "Production runbook"
+manifest_row "docs/upgrade.doc" "Designer upgrade history/regression"
+
+mv "$pack_tmp" "$pack_file"
+
+echo "Generated $brain_file and $pack_file"
+echo "Snapshot: commit=$commit worktree=$worktree_state changed_paths=$changed_path_count"

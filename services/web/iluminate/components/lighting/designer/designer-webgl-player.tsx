@@ -6,8 +6,10 @@ import type { CompiledDesignerLayout } from "./designer-compiler";
 import { clamp, pickAnimationTarget, worldHitTolerance } from "./designer-geometry";
 import type { DesignerSelection, DesignerViewport } from "./types";
 import type { DesignerAnimationDiffuser, DesignerAnimationPixel } from "./designer-paper-canvas";
+import { recordClientDebug } from "@/lib/client-debug";
 import {
   DEFAULT_DIFFUSER_RENDER_SETTINGS,
+  releasePixiFrameResources,
   renderPixiAnimationFrame,
   type DiffuserRenderSettings
 } from "./rendering/designer-player-renderers";
@@ -87,6 +89,9 @@ export function DesignerWebglPlayer({
   useEffect(() => {
     let cancelled = false;
     let app: PixiApp | null = null;
+    let canvas: HTMLCanvasElement | null = null;
+    const handleContextLost = () => recordClientDebug("webgl_context_lost", { path: window.location.pathname });
+    const handleContextRestored = () => recordClientDebug("webgl_context_restored", { path: window.location.pathname });
     async function start() {
       const host = hostRef.current;
       if (!host) return;
@@ -107,13 +112,19 @@ export function DesignerWebglPlayer({
         return;
       }
       appRef.current = app;
-      host.appendChild(app.canvas);
+      canvas = app.canvas;
+      canvas.addEventListener("webglcontextlost", handleContextLost);
+      canvas.addEventListener("webglcontextrestored", handleContextRestored);
+      host.appendChild(canvas);
       setReady(true);
     }
     start();
     return () => {
       cancelled = true;
       setReady(false);
+      canvas?.removeEventListener("webglcontextlost", handleContextLost);
+      canvas?.removeEventListener("webglcontextrestored", handleContextRestored);
+      canvas = null;
       if (appRef.current) {
         destroyPixiApplication(appRef.current);
         appRef.current = null;
@@ -212,6 +223,7 @@ export function DesignerWebglPlayer({
 }
 
 function destroyPixiApplication(app: PixiApp) {
+  releasePixiFrameResources(app);
   // Pixi 8 interprets rendererDestroyOptions=true as both "remove the canvas"
   // and "release every global resource pool". Viewer and Animate can briefly
   // own separate applications, so releasing those shared pools while the

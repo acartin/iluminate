@@ -1,4 +1,6 @@
-import type { DesignerBuildAreaForm, DesignerChannelForm, DesignerControllerForm, DesignerForm, DesignerPoint, DesignerPointNodeType, DesignerRouteForm, DesignerRouteKind, DesignerZoneForm } from "@/lib/lighting/partitura-model";
+import type { DesignerBuildAreaForm, DesignerChannelForm, DesignerContour, DesignerControllerForm, DesignerForm, DesignerPoint, DesignerPointNodeType, DesignerRouteForm, DesignerRouteKind, DesignerZoneForm } from "@/lib/lighting/partitura-model";
+import { designerGeometryAsShape, resolveDesignerDerivedGeometry, resolveDesignerProjectionGeometry } from "@/lib/lighting/partitura-model";
+import { estimateDesignerTextBounds } from "@/lib/lighting/designer-text-geometry";
 import type { DesignerActiveLayer, DesignerCanvasHit, DesignerRouteTerminal, DesignerViewport, ResizeHandle } from "./types";
 
 export function primitiveShapeBounds(
@@ -93,7 +95,7 @@ export function resizedZone(
       y: snapValue(centerY - next.height / 2, snapCm)
     };
   }
-  return zone.shape === "polygon" && zone.points ? { ...next, points: scaleShapePoints(zone, next) } : next;
+  return zone.shape === "polygon" && zone.points ? { ...next, points: scaleShapePoints(zone, next), ...(zone.contours ? { contours: scaleShapeContours(zone, next) } : {}) } : next;
 }
 
 export function resizedBuildArea(buildArea: DesignerBuildAreaForm, handle: ResizeHandle, deltaX: number, deltaY: number, snapCm: number, modifiers?: { preserveAspect?: boolean; fromCenter?: boolean }): DesignerBuildAreaForm {
@@ -103,7 +105,9 @@ export function resizedBuildArea(buildArea: DesignerBuildAreaForm, handle: Resiz
     x: next.x ?? buildArea.x,
     y: next.y ?? buildArea.y,
     width: next.width ?? buildArea.width,
-    height: next.height ?? buildArea.height
+    height: next.height ?? buildArea.height,
+    points: next.points ?? buildArea.points,
+    contours: next.contours ?? buildArea.contours
   };
 }
 
@@ -113,7 +117,7 @@ export function snapValue(value: number, snapCm: number) {
   return Math.round(value / step) * step;
 }
 
-export function movedShape<T extends { x: number; y: number; points?: DesignerPoint[] }>(shape: T, deltaX: number, deltaY: number, snapCm: number): T {
+export function movedShape<T extends { x: number; y: number; points?: DesignerPoint[]; contours?: DesignerContour[] }>(shape: T, deltaX: number, deltaY: number, snapCm: number): T {
   const x = snapValue(shape.x + deltaX, snapCm);
   const y = snapValue(shape.y + deltaY, snapCm);
   const pointDeltaX = x - shape.x;
@@ -122,16 +126,17 @@ export function movedShape<T extends { x: number; y: number; points?: DesignerPo
     ...shape,
     x,
     y,
-    points: shape.points?.map((point) => ({ ...point, x: point.x + pointDeltaX, y: point.y + pointDeltaY }))
+    points: shape.points?.map((point) => ({ ...point, x: point.x + pointDeltaX, y: point.y + pointDeltaY })),
+    contours: shape.contours?.map((contour) => ({ ...contour, points: contour.points.map((point) => ({ ...point, x: point.x + pointDeltaX, y: point.y + pointDeltaY })) }))
   };
 }
 
-export function updatePolygonPoint<T extends { x: number; y: number; width: number; height: number; points?: DesignerPoint[] }>(shape: T, pointIndex: number, point: DesignerPoint, snapCm: number): T {
+export function updatePolygonPoint<T extends { x: number; y: number; width: number; height: number; points?: DesignerPoint[]; contours?: DesignerContour[] }>(shape: T, pointIndex: number, point: DesignerPoint, snapCm: number): T {
   if (!shape.points?.[pointIndex]) return shape;
   const points = shape.points.map((entry, index) => (index === pointIndex ? { ...entry, x: snapValue(point.x, snapCm), y: snapValue(point.y, snapCm) } : entry));
   const bounds = pointsBounds(points);
   if (!bounds) return { ...shape, points };
-  return { ...shape, ...bounds, points };
+  return { ...shape, ...bounds, points, ...(shape.contours ? { contours: shape.contours.map((contour, index) => index === 0 ? { ...contour, points } : contour) } : {}) };
 }
 
 export function insertPolygonPoint<T extends { x: number; y: number; width: number; height: number; points?: DesignerPoint[] }>(shape: T, insertIndex: number, point: DesignerPoint, snapCm: number): T {
@@ -162,6 +167,11 @@ export function scaleShapePoints(shape: { x: number; y: number; width: number; h
     ...(point.handleIn ? { handleIn: { x: point.handleIn.x * scaleX, y: point.handleIn.y * scaleY } } : {}),
     ...(point.handleOut ? { handleOut: { x: point.handleOut.x * scaleX, y: point.handleOut.y * scaleY } } : {})
   }));
+}
+
+function scaleShapeContours(shape: { x: number; y: number; width: number; height: number; contours?: DesignerContour[] }, next: { x: number; y: number; width: number; height: number }) {
+  if (!shape.contours) return undefined;
+  return shape.contours.map((contour) => ({ ...contour, points: scaleShapePoints({ ...shape, points: contour.points }, next) ?? [] }));
 }
 
 export function pointsBounds(points: DesignerPoint[]) {
@@ -373,6 +383,34 @@ export function routePointFill(route: DesignerRouteForm, pointIndex: number, poi
 
 export function pickDesignerHit(designer: DesignerForm, activeLayer: DesignerActiveLayer | null, point: DesignerPoint, viewport: DesignerViewport, canvasSize: { width: number; height: number }): DesignerCanvasHit {
   const tolerance = worldHitTolerance(viewport, canvasSize);
+  if (activeLayer === "artwork" || activeLayer === "reference" || activeLayer === "zones" || activeLayer === "faceGraphic") {
+    for (const text of [...designer.texts].reverse()) {
+      const targetsActiveLayer = text.targetLayer === "reference" ? activeLayer === "artwork" || activeLayer === "reference" : text.targetLayer === activeLayer;
+      const layerVisible = text.targetLayer === "reference" ? designer.layers.artwork.visible && designer.layers.reference.visible : designer.layers[text.targetLayer].visible;
+      if (!text.visible || !targetsActiveLayer || !layerVisible) continue;
+      if (pointInsideRect(estimateDesignerTextBounds(text), point, tolerance)) return { type: "text", id: text.id };
+    }
+    for (const operation of [...designer.derivedGeometries].reverse()) {
+      const targetsActiveLayer = operation.targetLayer === "reference"
+        ? activeLayer === "artwork" || activeLayer === "reference"
+        : operation.targetLayer === activeLayer;
+      if (!operation.visible || !targetsActiveLayer) continue;
+      const resolved = resolveDesignerDerivedGeometry(designer, operation.id);
+      if (!resolved.geometry) continue;
+      const shape = designerGeometryAsShape(resolved.geometry);
+      if (pointInsideDesignerShape(shape, point) || pointNearShapeStroke(shape, point, tolerance * 2)) return { type: "derived_geometry", id: operation.id };
+    }
+    for (const projection of [...designer.projections].reverse()) {
+      const targetsActiveLayer = projection.targetLayer === "reference"
+        ? activeLayer === "artwork" || activeLayer === "reference"
+        : projection.targetLayer === activeLayer;
+      if (!projection.visible || !targetsActiveLayer) continue;
+      const resolved = resolveDesignerProjectionGeometry(designer, projection.id);
+      if (!resolved.geometry) continue;
+      const shape = designerGeometryAsShape(resolved.geometry);
+      if (pointInsideDesignerShape(shape, point) || pointNearShapeStroke(shape, point, tolerance * 2)) return { type: "projection", id: projection.id };
+    }
+  }
   if (activeLayer === "artwork" && designer.layers.artwork.visible) {
     for (const artwork of [...designer.artwork].reverse()) {
       if (artwork.visible === false) continue;
@@ -398,7 +436,7 @@ export function pickDesignerHit(designer: DesignerForm, activeLayer: DesignerAct
   if (activeLayer === "zones" && designer.layers.zones.visible) {
     for (const zone of designer.zones) {
       if (zone.visible === false) continue;
-      const pointHit = zone.shape === "polygon" && zone.points ? pickPolygonPointHit(zone.id, zone.points, point, tolerance, "zone_point") : null;
+      const pointHit = zone.shape === "polygon" && zone.points && !zone.contours ? pickPolygonPointHit(zone.id, zone.points, point, tolerance, "zone_point") : null;
       if (pointHit) return pointHit;
       const resizeHit = pickResizeHandleHit(zone, point, tolerance, "zone_resize");
       if (resizeHit) return resizeHit;
@@ -411,10 +449,20 @@ export function pickDesignerHit(designer: DesignerForm, activeLayer: DesignerAct
       if (channelContainsPoint(channel, point, tolerance)) return { type: "channel", id: channel.id };
     }
   }
+  if (activeLayer === "faceGraphic" && designer.layers.faceGraphic.visible) {
+    for (const element of designer.faceGraphics) {
+      if (element.visible === false) continue;
+      const pointHit = element.shape === "polygon" && element.points && !element.contours ? pickPolygonPointHit(element.id, element.points, point, tolerance, "face_graphic_point") : null;
+      if (pointHit) return pointHit;
+      const resizeHit = pickResizeHandleHit(element, point, tolerance, "face_graphic_resize");
+      if (resizeHit) return resizeHit;
+      if (pointInsideDesignerShape(element, point) || pointNearShapeStroke(element, point, tolerance * 2)) return { type: "face_graphic", id: element.id };
+    }
+  }
   if ((activeLayer === "reference" || activeLayer === "artwork") && designer.layers.artwork.visible) {
     for (const buildArea of [...designer.buildAreas].reverse()) {
       if (buildArea.visible === false) continue;
-      const pointHit = buildArea.shape === "polygon" && buildArea.points ? pickPolygonPointHit(buildArea.id, buildArea.points, point, tolerance, "build_area_point") : null;
+      const pointHit = buildArea.shape === "polygon" && buildArea.points && !buildArea.contours ? pickPolygonPointHit(buildArea.id, buildArea.points, point, tolerance, "build_area_point") : null;
       if (pointHit) return pointHit;
       const resizeHit = pickResizeHandleHit(buildArea, point, tolerance, "build_area_resize");
       if (resizeHit) return resizeHit;
@@ -467,14 +515,14 @@ export function pickRoutePointHit(route: DesignerRouteForm, point: DesignerPoint
   return null;
 }
 
-export function pickPolygonPointHit(id: string, points: DesignerPoint[], point: DesignerPoint, tolerance: number, type: "build_area_point" | "zone_point" | "channel_point"): DesignerCanvasHit {
+export function pickPolygonPointHit(id: string, points: DesignerPoint[], point: DesignerPoint, tolerance: number, type: "build_area_point" | "zone_point" | "channel_point" | "face_graphic_point"): DesignerCanvasHit {
   for (let index = points.length - 1; index >= 0; index -= 1) {
     if (distanceBetweenPoints(points[index], point) <= tolerance) return { type, id, pointIndex: index };
   }
   return null;
 }
 
-export function pickResizeHandleHit(shape: { id: string; x: number; y: number; width: number; height: number }, point: DesignerPoint, tolerance: number, type: "artwork_resize" | "build_area_resize" | "zone_resize"): DesignerCanvasHit {
+export function pickResizeHandleHit(shape: { id: string; x: number; y: number; width: number; height: number }, point: DesignerPoint, tolerance: number, type: "artwork_resize" | "build_area_resize" | "zone_resize" | "face_graphic_resize"): DesignerCanvasHit {
   const handles: Array<{ handle: ResizeHandle; point: DesignerPoint }> = [
     { handle: "nw", point: { x: shape.x, y: shape.y } },
     { handle: "ne", point: { x: shape.x + shape.width, y: shape.y } },
@@ -492,8 +540,12 @@ export function pointInsideRect(shape: { x: number; y: number; width: number; he
     && point.y <= shape.y + shape.height + tolerance;
 }
 
-export function pointInsideDesignerShape(shape: DesignerBuildAreaForm | DesignerZoneForm, point: DesignerPoint) {
+export function pointInsideDesignerShape(shape: Pick<DesignerBuildAreaForm, "shape" | "x" | "y" | "width" | "height" | "points" | "contours" | "pathMode" | "fillRule">, point: DesignerPoint) {
   if (shape.shape === "polygon" && shape.points) {
+    if (shape.contours?.length) {
+      const contained = shape.contours.reduce((count, contour) => count + (pointInPolygon(point, contourOutlinePoints(contour)) ? 1 : 0), 0);
+      return shape.fillRule === "nonzero" ? contained > 0 : contained % 2 === 1;
+    }
     const outline = shapeOutlinePoints(shape);
     const bounds = pointsBounds(outline);
     if (!bounds || !pointInsideRect(bounds, point)) return false;
@@ -510,8 +562,9 @@ export function pointInsideDesignerShape(shape: DesignerBuildAreaForm | Designer
   return point.x >= shape.x && point.x <= shape.x + shape.width && point.y >= shape.y && point.y <= shape.y + shape.height;
 }
 
-export function pointNearShapeStroke(shape: DesignerBuildAreaForm | DesignerZoneForm, point: DesignerPoint, tolerance: number) {
+export function pointNearShapeStroke(shape: Pick<DesignerBuildAreaForm, "shape" | "x" | "y" | "width" | "height" | "points" | "contours" | "pathMode">, point: DesignerPoint, tolerance: number) {
   if (shape.shape === "polygon" && shape.points) {
+    if (shape.contours?.length) return shape.contours.some((contour) => polygonSegments(contourOutlinePoints(contour)).some((segment) => pointToSegmentDistance(point, segment.start, segment.end) <= tolerance));
     const outline = shapeOutlinePoints(shape);
     const bounds = pointsBounds(outline);
     if (!bounds || !pointInsideRect(bounds, point, tolerance)) return false;
@@ -527,6 +580,10 @@ export function pointNearShapeStroke(shape: DesignerBuildAreaForm | DesignerZone
     return distanceBetweenPoints(point, edge) <= tolerance;
   }
   return polygonSegments(rectanglePoints(shape)).some((segment) => pointToSegmentDistance(point, segment.start, segment.end) <= tolerance);
+}
+
+function contourOutlinePoints(contour: DesignerContour) {
+  return shapeOutlinePoints({ shape: "polygon", points: contour.points, pathMode: contour.pathMode });
 }
 
 export function shapeOutlinePoints(shape: Pick<DesignerZoneForm, "shape" | "pathMode" | "points"> | Pick<DesignerBuildAreaForm, "shape" | "pathMode" | "points">) {

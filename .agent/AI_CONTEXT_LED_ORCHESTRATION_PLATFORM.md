@@ -3,13 +3,13 @@
 **Estado:** documento base de producto y arquitectura  
 **Fecha:** 18 de agosto de 2026  
 **Nombre del producto:** Iluminate  
-**Propósito del documento:** permitir que otra IA o desarrollador comprenda rápidamente qué se quiere construir, por qué, cuáles decisiones ya están tomadas y cómo debe evolucionar el sistema.
+**Propósito del documento:** conservar la dirección de producto y arquitectura de Iluminate. No es el punto de entrada operativo de una sesión; la selección de contexto y los procedimientos viven en `.agent/RULES.md`.
 
 ---
 
-## 1. Instrucciones para la IA que continúe el proyecto
+## 1. Decisiones de producto para quien continúe el proyecto
 
-Este documento es la referencia conceptual principal del proyecto. Antes de proponer código o arquitectura:
+Este documento es la referencia conceptual de producto. Debe leerse solo cuando la tarea afecte producto, dominio o arquitectura, según el router de `.agent/RULES.md`. Antes de proponer cambios en esas áreas:
 
 1. Conservar las decisiones marcadas como **decididas**.
 2. No convertir el producto en un editor vectorial general, una copia de WLED ni un sistema de video.

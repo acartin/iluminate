@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle, ArrowLeft, Cable, Circle, CircleDotDashed, Cloud, Copy, Grid2X2, Hammer, Hand, Image as ImageIcon, LampWallUp, Layers, Maximize2, MousePointer2, Pause, PenLine, Play, Plus, Redo2, Ruler, Route, RotateCcw, Save, Scissors, Settings2, Sparkles, Spline, Square, Sun, SunMoon, Trash2, Undo2, Waves } from "lucide-react";
+import { AlertCircle, ArrowLeft, Cable, Circle, CircleDotDashed, Cloud, Copy, Download, Grid2X2, Hammer, Hand, Image as ImageIcon, LampWallUp, Layers, Lock, Maximize2, MousePointer2, Pause, PenLine, Play, Plus, Redo2, Ruler, Route, RotateCcw, Save, Scissors, Settings2, Sparkles, Spline, Square, Sun, SunMoon, Trash2, Type, Undo2, Waves } from "lucide-react";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -14,47 +14,55 @@ import { ThemeToggle } from "@/components/ui/theme-toggle";
 import { buildDocumentFromDesigner, designerCompileSignature } from "./designer/designer-compiler";
 import { DesignerAnimateTimeline } from "./designer/designer-animate-timeline";
 import {
-  clearFloatingTerminalJoints,
-  canSolderRoutes,
   clamp,
+  fitViewportToDesigner,
+  nextDesignerItemNumber,
+  snapValue
+} from "./designer/designer-geometry";
+import {
+  applyDesignerBooleanOperation,
   deleteChannelPoint as deleteChannelPointPath,
   deletePolygonPoint,
+  insertChannelPoint as insertChannelPointPath,
+  insertPolygonPoint,
+  movedShape,
+  rectanglePoints,
+  resizedBuildArea,
+  resizedZone,
+  setChannelNodeType as setChannelNodeTypePath,
+  setPolygonNodeType,
+  updateChannelBezierHandle,
+  updateChannelPoint as updateChannelPointPath,
+  updatePolygonPoint,
+  type DesignerBooleanOperation
+} from "./designer/geometry/designer-geometry-engine";
+import {
+  clearFloatingTerminalJoints,
+  canSolderRoutes,
   detachSolderedRoutePoint,
   findMatchingControllerPort,
   findMatchingSolderTerminal,
   findNearbyControllerPort,
   findNearbySolderTerminal,
-  fitViewportToDesigner,
-  insertChannelPoint as insertChannelPointPath,
-  insertPolygonPoint,
   isRouteTerminal,
   moveRoutePoint,
   moveRouteTerminals,
-  movedShape,
-  nextDesignerItemNumber,
   nearestRouteInsertIndex,
-  rectanglePoints,
   resolveRouteOutputs,
-  resizedBuildArea,
-  resizedZone,
   routeLengthCm,
   sameSnapPoint,
-  setChannelNodeType as setChannelNodeTypePath,
-  setPolygonNodeType,
   sampleRouteLedDots,
-  snapValue,
-  summarizeRoute,
-  updateChannelBezierHandle,
-  updateChannelPoint as updateChannelPointPath,
-  updatePolygonPoint
-} from "./designer/designer-geometry";
+  summarizeRoute
+} from "./designer/electrical/designer-electrical-engine";
 import { DesignerStudioCanvas, type DesignerAnimationDiffuser, type DesignerAnimationPixel } from "./designer/designer-paper-canvas";
 import { DEFAULT_DIFFUSER_RENDER_SETTINGS, DesignerWebglPlayer, type DiffuserRenderSettings } from "./designer/designer-webgl-player";
+import { requestPlaybackPreview, resolvePlaybackPixels } from "./designer/designer-playback-frame";
 import { DesignerLayersPanel, NodeTypePicker, ToolbarField, ToolbarNumber, ToolButton } from "./designer/designer-ui";
 import { designerLayerForSelection, designerSelectionForClipTarget, type DesignerActiveLayer, type DesignerRouteTerminal, type DesignerSelection, type DesignerTool, type DesignerViewport } from "./designer/types";
 import type { EffectDefinition, EffectParameterDefinition } from "@/lib/lighting/effect-catalog";
 import { installClientDebugHandlers, recordClientDebug } from "@/lib/client-debug";
 import {
+  canonicalizeDesignerGeometry,
   clonePartituraDocument,
   createDefaultOpticalTreatment,
   createClipIdentity,
@@ -64,29 +72,49 @@ import {
   DesignerBuildAreaForm,
   DesignerChannelForm,
   DesignerControllerForm,
+  DesignerDerivedGeometry,
   DesignerForm,
+  DesignerFaceGraphicForm,
   DesignerGroupForm,
+  DesignerGeometry,
   DesignerLayerSettings,
   DesignerLayersForm,
   DesignerOpticalMode,
   DesignerOpticalTreatment,
   DesignerPoint,
   DesignerPointNodeType,
+  DesignerProjection,
+  DesignerProjectionLayer,
   DesignerRouteKind,
   DesignerRouteForm,
+  DesignerText,
   DesignerZoneForm,
   nextEmptyClipLayer,
   normalizeDefaultSignLayout,
+  designerGeometryAsShape,
+  resolveDesignerDerivedGeometry,
+  resolveDesignerProjectionGeometry,
+  wouldCreateDesignerDerivedGeometryCycle,
+  wouldCreateDesignerProjectionCycle,
   PartituraDocument,
   PersistedPartitura,
   SceneForm
 } from "@/lib/lighting/partitura-model";
+import { DEFAULT_DESIGNER_FONT_ID, DESIGNER_FONT_CATALOG, designerFontResource, designerFontUrl } from "@/lib/lighting/designer-font-catalog";
+import { designerTextToGeometry } from "@/lib/lighting/designer-text-geometry";
+import { DEFAULT_FABRICATION_EXPORT_OPTIONS, generateDesignerFabricationExport, type FabricationExportFormat, type FabricationExportOptions, type FabricationExportResult } from "./designer/fabrication/designer-fabrication-export";
 
 type ProjectAsset = {
   id: string;
   fileName: string;
   mimeType: string;
 };
+
+type DesignerGeometrySelection = Extract<Exclude<DesignerSelection, null>, { type: "build_area" | "zone" | "face_graphic" | "projection" | "derived_geometry" }>;
+
+function isDesignerGeometrySelection(selection: DesignerSelection): selection is DesignerGeometrySelection {
+  return selection?.type === "build_area" || selection?.type === "zone" || selection?.type === "face_graphic" || selection?.type === "projection" || selection?.type === "derived_geometry";
+}
 
 type ApiResult = {
   ok: boolean;
@@ -139,6 +167,7 @@ const ACTIVE_LAYER_LABELS: Record<DesignerActiveLayer, string> = {
   artwork: "Artwork",
   reference: "Reference",
   zones: "Zones",
+  faceGraphic: "Face Graphic",
   lightSources: "Light Sources",
   hardware: "Hardware",
   strings: "Strings"
@@ -153,11 +182,18 @@ const DESIGNER_TOOL_LABELS: Record<DesignerTool, string> = {
   build_area_ellipse: "Ellipse reference",
   build_area_polygon: "Polygon reference",
   build_area_bezier: "Bezier reference",
+  reference_text: "Reference text",
   zone_rect: "Rectangle zone",
   zone_ellipse: "Ellipse zone",
   zone_polygon: "Polygon zone",
   zone_bezier: "Bezier zone",
+  zone_text: "Zone text",
   channel_bezier: "Channel",
+  face_graphic_rect: "Rectangle face graphic",
+  face_graphic_ellipse: "Ellipse face graphic",
+  face_graphic_polygon: "Polygon face graphic",
+  face_graphic_bezier: "Bezier face graphic",
+  face_graphic_text: "Face Graphic text",
   led_string: "LED string",
   data_cable: "Data cable",
   cut: "Cut route"
@@ -219,8 +255,9 @@ function designerToolInstruction(tool: DesignerTool) {
   if (tool === "pan") return "Drag the canvas to move the view";
   if (tool === "measure") return "Drag between two points to measure";
   if (tool === "image_place") return "Drag on the canvas to place the image container";
-  if (tool === "build_area_rect" || tool === "build_area_ellipse" || tool === "zone_rect" || tool === "zone_ellipse") return "Drag on the canvas to create it";
-  if (tool === "build_area_polygon" || tool === "build_area_bezier" || tool === "zone_polygon" || tool === "zone_bezier" || tool === "channel_bezier") return "Click to add nodes and close the path to finish";
+  if (tool === "reference_text" || tool === "zone_text" || tool === "face_graphic_text") return "Click to place editable text";
+  if (tool === "build_area_rect" || tool === "build_area_ellipse" || tool === "zone_rect" || tool === "zone_ellipse" || tool === "face_graphic_rect" || tool === "face_graphic_ellipse") return "Drag on the canvas to create it";
+  if (tool === "build_area_polygon" || tool === "build_area_bezier" || tool === "zone_polygon" || tool === "zone_bezier" || tool === "channel_bezier" || tool === "face_graphic_polygon" || tool === "face_graphic_bezier") return "Click to add nodes and close the path to finish";
   if (tool === "led_string" || tool === "data_cable") return "Click to draw the route";
   return "Click a route point to split it";
 }
@@ -255,7 +292,9 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
   // No work plane is active until the operator picks a category in the Layers
   // panel. Until then the canvas must not select or drag any object.
   const [activeLayer, setActiveLayer] = useState<DesignerActiveLayer | null>(null);
+  const [projectionTargetLayer, setProjectionTargetLayer] = useState<DesignerProjectionLayer>("faceGraphic");
   const [selection, setSelection] = useState<DesignerSelection>(null);
+  const [geometrySelections, setGeometrySelections] = useState<DesignerGeometrySelection[]>([]);
   const [opticalTargetSelection, setOpticalTargetSelection] = useState<OpticalTargetRef[]>([]);
   const undoHistoryRef = useRef<DesignerHistoryEntry[]>([]);
   const redoHistoryRef = useRef<DesignerHistoryEntry[]>([]);
@@ -264,6 +303,10 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
   const [, setHistoryRevision] = useState(0);
   const [clipboard, setClipboard] = useState<DesignerSelection>(null);
   const [fabricationNotice, setFabricationNotice] = useState("Ready");
+  const [fabricationExportOpen, setFabricationExportOpen] = useState(false);
+  const [fabricationExporting, setFabricationExporting] = useState(false);
+  const [fabricationExportOptions, setFabricationExportOptions] = useState<FabricationExportOptions>(DEFAULT_FABRICATION_EXPORT_OPTIONS);
+  const [fabricationExportResult, setFabricationExportResult] = useState<FabricationExportResult | null>(null);
   const [compileIssuesOpen, setCompileIssuesOpen] = useState(false);
   const [viewport, setViewport] = useState<DesignerViewport | null>(null);
   const [layersPanelOpen, setLayersPanelOpen] = useState(true);
@@ -275,7 +318,10 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
   const [projectAssets, setProjectAssets] = useState<ProjectAsset[]>([]);
   const [assetsVersion, setAssetsVersion] = useState(0);
   const artworkUrls = useMemo(() => Object.fromEntries(projectAssets.map((asset) => [asset.id, `/api/lighting/projects/${encodeURIComponent(document.projectId)}/assets/${encodeURIComponent(asset.id)}`])), [document.projectId, projectAssets]);
-  const animationPixels = animationResult?.preview?.outputRows.flatMap((row) => row.pixels) ?? [];
+  const animationPixels = resolvePlaybackPixels(
+    animationResult?.preview?.outputRows.flatMap((row) => row.pixels),
+    document.compiledLayout?.pixelMap ?? []
+  );
 
   useEffect(() => {
     documentRef.current = document;
@@ -325,24 +371,27 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
     async function tick(now: number) {
       const result = animationResultRef.current;
       if (cancelled || !result?.partitura) return;
+      requestAnimationFrame(tick);
       const elapsed = now - (animationStartRef.current ?? now);
       const timeMs = Math.floor((animationOffsetRef.current + elapsed) % durationMs);
       if (!animationRequestInFlightRef.current && now - animationLastRequestRef.current >= 33) {
         animationRequestInFlightRef.current = true;
         animationLastRequestRef.current = now;
         try {
-          const response = await fetch("/api/lighting/partituras/simulate-frame", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ partitura: result.partitura, sceneId: document.activeSceneId, timeMs })
+          const preview = await requestPlaybackPreview<Preview>(async () => {
+            const response = await fetch("/api/lighting/partituras/simulate-frame", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ partitura: result.partitura, sceneId: document.activeSceneId, timeMs })
+            });
+            if (!response.ok) return { ok: false };
+            return response.json() as Promise<{ ok: boolean; preview?: Preview }>;
           });
-          const payload = (await response.json()) as { ok: boolean; preview?: Preview };
-          if (!cancelled && payload.ok && payload.preview) setAnimationResult({ ...result, preview: payload.preview });
+          if (!cancelled && preview) setAnimationResult({ ...result, preview });
         } finally {
           animationRequestInFlightRef.current = false;
         }
       }
-      requestAnimationFrame(tick);
     }
 
     const frame = requestAnimationFrame(tick);
@@ -360,6 +409,13 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
   const selectedLightSource = selection?.type === "light_source" ? designer.lightSources.find((source) => source.id === selection.id) ?? null : null;
   const selectedZone = selection?.type === "zone" ? designer.zones.find((zone) => zone.id === selection.id) ?? null : selectedLightSource?.targetType === "zone" ? designer.zones.find((zone) => zone.id === selectedLightSource.targetId) ?? null : null;
   const selectedZonePointIndex = selection?.type === "zone" ? selection.pointIndex : undefined;
+  const selectedFaceGraphic = selection?.type === "face_graphic" ? designer.faceGraphics.find((element) => element.id === selection.id) ?? null : null;
+  const selectedFaceGraphicPointIndex = selection?.type === "face_graphic" ? selection.pointIndex : undefined;
+  const selectedProjection = selection?.type === "projection" ? designer.projections.find((projection) => projection.id === selection.id) ?? null : null;
+  const selectedProjectionResolution = selectedProjection ? resolveDesignerProjectionGeometry(designer, selectedProjection.id) : null;
+  const selectedDerivedGeometry = selection?.type === "derived_geometry" ? designer.derivedGeometries.find((operation) => operation.id === selection.id) ?? null : null;
+  const selectedDerivedGeometryResolution = selectedDerivedGeometry ? resolveDesignerDerivedGeometry(designer, selectedDerivedGeometry.id) : null;
+  const selectedText = selection?.type === "text" ? designer.texts.find((entry) => entry.id === selection.id) ?? null : null;
   const selectedChannel = selection?.type === "channel" ? designer.channels.find((channel) => channel.id === selection.id) ?? null : selectedLightSource?.targetType === "channel" ? designer.channels.find((channel) => channel.id === selectedLightSource.targetId) ?? null : null;
   const selectedChannelPointIndex = selection?.type === "channel" ? selection.pointIndex : undefined;
   const selectedRoute = selection?.type === "route" ? designer.routes.find((route) => route.id === selection.id) ?? null : null;
@@ -369,6 +425,12 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
     ? designer.layers.artwork.locked
     : selection?.type === "zone" || selection?.type === "channel"
       ? designer.layers.zones.locked
+      : selection?.type === "face_graphic"
+        ? designer.layers.faceGraphic.locked || selectedFaceGraphic?.locked === true
+      : selection?.type === "derived_geometry" && selectedDerivedGeometry
+        ? designer.layers[selectedDerivedGeometry.targetLayer === "reference" ? "artwork" : selectedDerivedGeometry.targetLayer].locked
+      : selection?.type === "text" && selectedText
+        ? designer.layers[selectedText.targetLayer === "reference" ? "artwork" : selectedText.targetLayer].locked || selectedText.locked
       : selection?.type === "light_source"
         ? designer.layers.lightSources.locked
         : selection?.type === "route"
@@ -376,6 +438,16 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
           : selection?.type === "controller"
             ? designer.layers.hardware.locked
             : false;
+  const selectedGeometryId = selectedBuildArea?.geometryId ?? selectedZone?.geometryId ?? selectedFaceGraphic?.geometryId ?? selectedProjection?.geometryId ?? selectedDerivedGeometry?.geometryId;
+  const selectedCompoundContours = selectedBuildArea?.contours ?? selectedZone?.contours ?? selectedFaceGraphic?.contours;
+  const projectionSourceOptions = [
+    ...designer.buildAreas.map((entry) => ({ geometryId: entry.geometryId, label: `Reference · ${entry.name}` })),
+    ...designer.zones.map((entry) => ({ geometryId: entry.geometryId, label: `Zone · ${entry.name}` })),
+    ...designer.faceGraphics.map((entry) => ({ geometryId: entry.geometryId, label: `Face Graphic · ${entry.name}` })),
+    ...designer.projections.map((entry) => ({ geometryId: entry.geometryId, label: `Projection · ${entry.name}` })),
+    ...designer.derivedGeometries.map((entry) => ({ geometryId: entry.geometryId, label: `${entry.operation === "offset" ? "Offset" : "Fillet"} · ${entry.name}` }))
+  ].filter((entry): entry is { geometryId: string; label: string } => Boolean(entry.geometryId));
+  const selectedGeometryKeys = geometrySelections.map((entry) => `${entry.type}:${entry.id}`);
   const selectedOpticalTarget = selectedZone ? { type: "zone" as const, id: selectedZone.id } : selectedChannel ? { type: "channel" as const, id: selectedChannel.id } : null;
   const selectedOpticalTargets = (opticalTargetSelection.length ? opticalTargetSelection : selectedOpticalTarget ? [selectedOpticalTarget] : [])
     .filter((target) => target.type === "zone" ? designer.zones.some((zone) => zone.id === target.id) : designer.channels.some((channel) => channel.id === target.id));
@@ -472,6 +544,10 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
       if (activeLayer === "zones" && event.key.toLowerCase() === "p") setTool("zone_polygon");
       if (activeLayer === "zones" && event.key.toLowerCase() === "b") setTool("zone_bezier");
       if (activeLayer === "zones" && event.key.toLowerCase() === "c" && !event.ctrlKey && !event.metaKey) setTool("channel_bezier");
+      if (activeLayer === "faceGraphic" && event.key.toLowerCase() === "r") setTool("face_graphic_rect");
+      if (activeLayer === "faceGraphic" && event.key.toLowerCase() === "e") setTool("face_graphic_ellipse");
+      if (activeLayer === "faceGraphic" && event.key.toLowerCase() === "p") setTool("face_graphic_polygon");
+      if (activeLayer === "faceGraphic" && event.key.toLowerCase() === "b") setTool("face_graphic_bezier");
       if (activeLayer === "artwork" && event.key.toLowerCase() === "i") setTool("image_place");
       if ((activeLayer === "artwork" || activeLayer === "reference") && event.key.toLowerCase() === "p") setTool("build_area_polygon");
       if ((activeLayer === "artwork" || activeLayer === "reference") && event.key.toLowerCase() === "b") setTool("build_area_bezier");
@@ -586,8 +662,61 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
     }
   }
 
+  async function loadFabricationFonts(options: FabricationExportOptions) {
+    const enabled = (targetLayer: DesignerProjectionLayer) => targetLayer === "reference" ? options.includeReference : targetLayer === "zones" ? options.includeZones : options.includeFaceGraphic;
+    const fontIds = Array.from(new Set(designer.texts.filter((text) => enabled(text.targetLayer)).map((text) => text.fontId)));
+    const entries = await Promise.all(fontIds.map(async (fontId) => {
+      const resource = designerFontResource(fontId);
+      if (!resource) return null;
+      try {
+        const response = await fetch(designerFontUrl(fontId));
+        if (!response.ok) return null;
+        const data = await response.arrayBuffer();
+        const digest = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", data))).map((value) => value.toString(16).padStart(2, "0")).join("");
+        return `sha256:${digest}` === resource.hash ? [fontId, data] as const : null;
+      } catch {
+        return null;
+      }
+    }));
+    return new Map(entries.filter((entry): entry is readonly [string, ArrayBuffer] => Boolean(entry)));
+  }
+
+  async function exportFabrication(format: FabricationExportFormat) {
+    setFabricationExporting(true);
+    try {
+      const fontDataById = await loadFabricationFonts(fabricationExportOptions);
+      const result = await generateDesignerFabricationExport({
+        designer,
+        identity: { projectId: partitura.projectId, partituraId: partitura.id, partituraKey: partitura.partituraKey, partituraName: partitura.name },
+        sourceDocument: document,
+        fontDataById,
+        options: fabricationExportOptions
+      });
+      setFabricationExportResult(result);
+      const errorCount = result.issues.filter((issue) => issue.severity === "error").length;
+      const warningCount = result.issues.filter((issue) => issue.severity === "warning").length;
+      if (errorCount) {
+        setFabricationNotice(`Export blocked · ${errorCount} error${errorCount === 1 ? "" : "s"}`);
+        return;
+      }
+      const content = format === "svg" ? result.svg : result.dxf;
+      const blob = new Blob([content], { type: format === "svg" ? "image/svg+xml;charset=utf-8" : "application/dxf;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const anchor = window.document.createElement("a");
+      anchor.href = url;
+      anchor.download = `${partitura.partituraKey.replace(/[^A-Za-z0-9_-]+/g, "_")}-fabrication.${format}`;
+      anchor.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 0);
+      setFabricationNotice(`${format.toUpperCase()} exported · ${result.pathCount} paths${warningCount ? ` · ${warningCount} warnings` : ""}`);
+    } finally {
+      setFabricationExporting(false);
+    }
+  }
+
   function updateDesigner(nextDesigner: DesignerForm) {
-    updateLiveDocument((current) => ({ ...current, designer: nextDesigner }), { invalidateRuntime: true });
+    const canonical = canonicalizeDesignerGeometry(nextDesigner);
+    const invalidatesRuntime = designerCompileSignature(designer) !== designerCompileSignature(canonical);
+    updateLiveDocument((current) => ({ ...current, designer: canonical }), { invalidateRuntime: invalidatesRuntime });
   }
 
   function patchDesigner(patch: Partial<DesignerForm>) {
@@ -612,7 +741,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
     });
   }
 
-  function reorderDesignerItems(layer: "artwork" | "reference" | "zones" | "strings", activeId: string, overId: string) {
+  function reorderDesignerItems(layer: "artwork" | "reference" | "zones" | "faceGraphic" | "strings", activeId: string, overId: string) {
     if (layer === "artwork") {
       if (designer.layers.artwork.locked) return;
       updateDesigner({ ...designer, artwork: reorderById(designer.artwork, activeId, overId) });
@@ -629,6 +758,12 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
       if (designer.layers.zones.locked) return;
       updateDesigner({ ...designer, zones: reorderById(designer.zones, activeId, overId) });
       setSelection({ type: "zone", id: activeId });
+      return;
+    }
+    if (layer === "faceGraphic") {
+      if (designer.layers.faceGraphic.locked) return;
+      updateDesigner({ ...designer, faceGraphics: reorderById(designer.faceGraphics, activeId, overId) });
+      setSelection({ type: "face_graphic", id: activeId });
       return;
     }
     if (designer.layers.strings.locked) return;
@@ -749,7 +884,31 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
       setOpticalTargetSelection(opticalTarget ? [opticalTarget] : []);
     } else {
       setOpticalTargetSelection([]);
-      const selectionLayer = designerLayerForSelection(nextSelection);
+      const projection = nextSelection?.type === "projection" ? designer.projections.find((entry) => entry.id === nextSelection.id) : null;
+      const derived = nextSelection?.type === "derived_geometry" ? designer.derivedGeometries.find((entry) => entry.id === nextSelection.id) : null;
+      const text = nextSelection?.type === "text" ? designer.texts.find((entry) => entry.id === nextSelection.id) : null;
+      const geometryTarget = projection?.targetLayer ?? derived?.targetLayer ?? text?.targetLayer;
+      const selectionLayer = geometryTarget ? geometryTarget === "reference" ? "artwork" : geometryTarget : designerLayerForSelection(nextSelection);
+      if (additive && isDesignerGeometrySelection(nextSelection) && selectionLayer) {
+        const sameLayer = geometrySelections.every((entry) => {
+          const selectedProjection = entry.type === "projection" ? designer.projections.find((projectionEntry) => projectionEntry.id === entry.id) : null;
+          const selectedDerived = entry.type === "derived_geometry" ? designer.derivedGeometries.find((operation) => operation.id === entry.id) : null;
+          const selectedTarget = selectedProjection?.targetLayer ?? selectedDerived?.targetLayer;
+          const layer = selectedTarget ? selectedTarget === "reference" ? "artwork" : selectedTarget : designerLayerForSelection(entry);
+          return layer === selectionLayer;
+        });
+        const base = sameLayer ? geometrySelections : [];
+        const exists = base.some((entry) => entry.type === nextSelection.type && entry.id === nextSelection.id);
+        const nextSelections = exists
+          ? base.filter((entry) => entry.type !== nextSelection.type || entry.id !== nextSelection.id)
+          : [...base, nextSelection];
+        setGeometrySelections(nextSelections);
+        setSelection(nextSelections.at(-1) ?? null);
+        setActiveLayer(selectionLayer);
+        setLayersPanelOpen(true);
+        return;
+      }
+      setGeometrySelections(isDesignerGeometrySelection(nextSelection) ? [nextSelection] : []);
       if (selectionLayer) {
         setActiveLayer(selectionLayer);
         setLayersPanelOpen(true);
@@ -765,6 +924,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
     setActiveLayer(layer);
     setTool("select");
     setSelection(null);
+    setGeometrySelections([]);
   }
 
   function openLightingSetup(target: OpticalTargetRef) {
@@ -790,6 +950,342 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
       zones: designer.zones.map((zone) => (zone.id === zoneId ? { ...zone, ...nextPatch } : zone))
     });
     if (patch.id && patch.id !== zoneId) setSelection({ type: "zone", id: patch.id });
+  }
+
+  function patchFaceGraphic(elementId: string, patch: Partial<DesignerFaceGraphicForm>) {
+    if (designer.layers.faceGraphic.locked) return;
+    const current = designer.faceGraphics.find((element) => element.id === elementId);
+    if (!current || current.locked && !Object.keys(patch).every((key) => key === "locked" || key === "visible")) return;
+    const nextPatch = patch.shape === "polygon" && !current.points
+      ? { ...patch, points: rectanglePoints(current) }
+      : patch.shape && patch.shape !== "polygon"
+        ? { ...patch, points: undefined }
+        : patch;
+    updateDesigner({ ...designer, faceGraphics: designer.faceGraphics.map((element) => element.id === elementId ? { ...element, ...nextPatch } : element) });
+  }
+
+  function createTextAt(point: DesignerPoint) {
+    const targetLayer: DesignerProjectionLayer = tool === "zone_text" ? "zones" : tool === "face_graphic_text" ? "faceGraphic" : "reference";
+    const layerKey = targetLayer === "reference" ? "artwork" : targetLayer;
+    if (designer.layers[layerKey].locked || !designer.layers[layerKey].visible) return;
+    const next = nextDesignerItemNumber(designer.texts, "text_");
+    const font = designerFontResource(DEFAULT_DESIGNER_FONT_ID)!;
+    const text: DesignerText = {
+      id: `text_${next}`,
+      name: `Text ${next}`,
+      text: "Text",
+      fontId: font.id,
+      fontHash: font.hash,
+      fontSizeMm: 30,
+      trackingMm: 0,
+      lineHeight: 1.2,
+      alignment: "left",
+      x: point.x,
+      y: point.y,
+      targetLayer,
+      visible: true,
+      locked: false,
+      opacity: 1
+    };
+    updateDesigner({ ...designer, texts: [...designer.texts, text] });
+    setSelection({ type: "text", id: text.id });
+    setFabricationNotice("Editable text created. Convert it to paths when the typography is final.");
+  }
+
+  function patchText(textId: string, patch: Partial<DesignerText>) {
+    const current = designer.texts.find((entry) => entry.id === textId);
+    if (!current) return;
+    const layerKey = current.targetLayer === "reference" ? "artwork" : current.targetLayer;
+    if (designer.layers[layerKey].locked || current.locked && !Object.keys(patch).every((key) => key === "locked" || key === "visible")) return;
+    const requestedFont = patch.fontId ? designerFontResource(patch.fontId) : null;
+    updateDesigner({
+      ...designer,
+      texts: designer.texts.map((entry) => entry.id === textId ? {
+        ...entry,
+        ...patch,
+        ...(requestedFont ? { fontId: requestedFont.id, fontHash: requestedFont.hash } : {})
+      } : entry)
+    });
+  }
+
+  async function convertTextToPaths(textId: string) {
+    const text = designer.texts.find((entry) => entry.id === textId);
+    const resource = text ? designerFontResource(text.fontId) : null;
+    if (!text || !resource || resource.hash !== text.fontHash) {
+      setFabricationNotice("Text conversion blocked: its controlled font resource is unresolved.");
+      return;
+    }
+    const layerKey = text.targetLayer === "reference" ? "artwork" : text.targetLayer;
+    if (designer.layers[layerKey].locked) return;
+    try {
+      const response = await fetch(designerFontUrl(resource.id));
+      if (!response.ok) throw new Error("Font resource unavailable");
+      const fontData = await response.arrayBuffer();
+      const digest = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", fontData))).map((value) => value.toString(16).padStart(2, "0")).join("");
+      if (`sha256:${digest}` !== resource.hash) throw new Error("Font resource hash mismatch");
+      const resultGeometryId = `geometry_text_outline_${text.id}`;
+      const geometry = designerTextToGeometry(text, fontData, resultGeometryId);
+      if (!geometry) {
+        setFabricationNotice("Text has no visible glyphs to convert.");
+        return;
+      }
+      const shape = designerGeometryAsShape(geometry);
+      const texts = designer.texts.filter((entry) => entry.id !== text.id);
+      if (text.targetLayer === "reference") {
+        const next = nextDesignerItemNumber(designer.buildAreas, "build_area_");
+        const item: DesignerBuildAreaForm = { id: `build_area_${next}`, geometryId: resultGeometryId, name: text.name, ...shape, visible: true, locked: false, opacity: text.opacity };
+        updateDesigner({ ...designer, texts, buildAreas: [...designer.buildAreas, item] });
+        setSelection({ type: "build_area", id: item.id });
+        setGeometrySelections([{ type: "build_area", id: item.id }]);
+      } else if (text.targetLayer === "zones") {
+        const next = nextDesignerItemNumber(designer.zones, "zone_");
+        const item: DesignerZoneForm = { id: `zone_${next}`, geometryId: resultGeometryId, name: text.name, ...shape, visible: true, locked: false, opacity: text.opacity };
+        updateDesigner({ ...designer, texts, zones: [...designer.zones, item] });
+        setSelection({ type: "zone", id: item.id });
+        setGeometrySelections([{ type: "zone", id: item.id }]);
+      } else {
+        const next = nextDesignerItemNumber(designer.faceGraphics, "face_graphic_");
+        const item: DesignerFaceGraphicForm = { id: `face_graphic_${next}`, geometryId: resultGeometryId, name: text.name, ...shape, passMode: "translucent", filterColor: "#FFFFFF", visible: true, locked: false, opacity: text.opacity };
+        updateDesigner({ ...designer, texts, faceGraphics: [...designer.faceGraphics, item] });
+        setSelection({ type: "face_graphic", id: item.id });
+        setGeometrySelections([{ type: "face_graphic", id: item.id }]);
+      }
+      setFabricationNotice("Text converted to deterministic compound Bezier paths. Undo restores editable text.");
+    } catch (error) {
+      setFabricationNotice(error instanceof Error ? error.message : "Text conversion failed.");
+    }
+  }
+
+  function patchProjection(projectionId: string, patch: Partial<DesignerProjection>) {
+    const current = designer.projections.find((projection) => projection.id === projectionId);
+    if (!current) return;
+    const layerKey = current.targetLayer === "reference" ? "artwork" : current.targetLayer;
+    if (designer.layers[layerKey].locked) return;
+    const sourceGeometryId = patch.sourceGeometryId ?? current.sourceGeometryId;
+    if (wouldCreateDesignerProjectionCycle(designer, projectionId, sourceGeometryId)) {
+      setFabricationNotice("Projection cycle rejected. Choose a source outside this dependency chain.");
+      return;
+    }
+    updateDesigner({ ...designer, projections: designer.projections.map((projection) => projection.id === projectionId ? { ...projection, ...patch, linked: true } : projection) });
+  }
+
+  function patchDerivedGeometry(derivedId: string, patch: Partial<DesignerDerivedGeometry>) {
+    const current = designer.derivedGeometries.find((operation) => operation.id === derivedId);
+    if (!current) return;
+    const layerKey = current.targetLayer === "reference" ? "artwork" : current.targetLayer;
+    if (designer.layers[layerKey].locked) return;
+    const sourceGeometryId = patch.sourceGeometryId ?? current.sourceGeometryId;
+    if (wouldCreateDesignerDerivedGeometryCycle(designer, derivedId, sourceGeometryId)) {
+      setFabricationNotice("Derived-operation cycle rejected. Choose a source outside this dependency chain.");
+      return;
+    }
+    updateDesigner({ ...designer, derivedGeometries: designer.derivedGeometries.map((operation) => operation.id === derivedId ? { ...operation, ...patch } : operation) });
+  }
+
+  function createDerivedGeometry(operation: DesignerDerivedGeometry["operation"]) {
+    if (!selectedGeometryId) return;
+    const targetLayer: DesignerProjectionLayer = selectedBuildArea ? "reference"
+      : selectedZone ? "zones"
+        : selectedFaceGraphic ? "faceGraphic"
+          : selectedProjection?.targetLayer ?? selectedDerivedGeometry?.targetLayer ?? "faceGraphic";
+    const layerKey = targetLayer === "reference" ? "artwork" : targetLayer;
+    if (designer.layers[layerKey].locked) return;
+    const next = nextDesignerItemNumber(designer.derivedGeometries, "derived_");
+    const sourceLabel = projectionSourceOptions.find((entry) => entry.geometryId === selectedGeometryId)?.label.replace(/^.* · /, "") ?? `Geometry ${next}`;
+    const derived: DesignerDerivedGeometry = {
+      id: `derived_${next}`,
+      name: `${sourceLabel} ${operation}`,
+      geometryId: `geometry_derived_${next}`,
+      sourceGeometryId: selectedGeometryId,
+      targetLayer,
+      operation,
+      ...(operation === "offset" ? { distanceMm: 2, join: "round" as const, miterLimit: 4 } : { radiusMm: 2 }),
+      ...(targetLayer === "faceGraphic" ? {
+        passMode: selectedFaceGraphic?.passMode ?? selectedDerivedGeometry?.passMode ?? "translucent",
+        filterColor: selectedFaceGraphic?.filterColor ?? selectedDerivedGeometry?.filterColor ?? "#FFFFFF"
+      } : {}),
+      visible: true
+    };
+    updateDesigner({ ...designer, derivedGeometries: [...designer.derivedGeometries, derived] });
+    setActiveLayer(targetLayer === "reference" ? "artwork" : targetLayer);
+    setSelection({ type: "derived_geometry", id: derived.id });
+    setGeometrySelections([{ type: "derived_geometry", id: derived.id }]);
+    setFabricationNotice(`${operation === "offset" ? "Offset" : "Fillet"} profile created with a live source link.`);
+  }
+
+  function breakDerivedGeometryLink(derivedId: string) {
+    const operation = designer.derivedGeometries.find((entry) => entry.id === derivedId);
+    const resolved = operation ? resolveDesignerDerivedGeometry(designer, operation.id) : null;
+    if (!operation || !resolved?.geometry) {
+      setFabricationNotice("Cannot materialize an unresolved derived profile. Repair its source or parameters first.");
+      return;
+    }
+    const layerKey = operation.targetLayer === "reference" ? "artwork" : operation.targetLayer;
+    if (designer.layers[layerKey].locked) return;
+    const shape = designerGeometryAsShape(resolved.geometry);
+    const derivedGeometries = designer.derivedGeometries.filter((entry) => entry.id !== derivedId);
+    if (operation.targetLayer === "reference") {
+      const next = nextDesignerItemNumber(designer.buildAreas, "build_area_");
+      const item: DesignerBuildAreaForm = { id: `build_area_${next}`, name: operation.name, ...shape, visible: true, locked: false, opacity: 1 };
+      updateDesigner({ ...designer, derivedGeometries, buildAreas: [...designer.buildAreas, item] });
+      setSelection({ type: "build_area", id: item.id });
+      setGeometrySelections([{ type: "build_area", id: item.id }]);
+    } else if (operation.targetLayer === "zones") {
+      const next = nextDesignerItemNumber(designer.zones, "zone_");
+      const item: DesignerZoneForm = { id: `zone_${next}`, name: operation.name, ...shape, visible: true, locked: false, opacity: 1 };
+      updateDesigner({ ...designer, derivedGeometries, zones: [...designer.zones, item] });
+      setSelection({ type: "zone", id: item.id });
+      setGeometrySelections([{ type: "zone", id: item.id }]);
+    } else {
+      const next = nextDesignerItemNumber(designer.faceGraphics, "face_graphic_");
+      const item: DesignerFaceGraphicForm = { id: `face_graphic_${next}`, name: operation.name, ...shape, passMode: operation.passMode ?? "translucent", filterColor: operation.filterColor ?? "#FFFFFF", visible: true, locked: false, opacity: 1 };
+      updateDesigner({ ...designer, derivedGeometries, faceGraphics: [...designer.faceGraphics, item] });
+      setSelection({ type: "face_graphic", id: item.id });
+      setGeometrySelections([{ type: "face_graphic", id: item.id }]);
+    }
+    setFabricationNotice("Derived link broken. The resolved profile is now independently editable.");
+  }
+
+  function projectSelectedGeometry() {
+    if (!selectedGeometryId) return;
+    const layerKey = projectionTargetLayer === "reference" ? "artwork" : projectionTargetLayer;
+    if (designer.layers[layerKey].locked) return;
+    const next = nextDesignerItemNumber(designer.projections, "projection_");
+    const sourceLabel = projectionSourceOptions.find((entry) => entry.geometryId === selectedGeometryId)?.label.replace(/^.* · /, "") ?? `Geometry ${next}`;
+    const projection: DesignerProjection = {
+      id: `projection_${next}`,
+      name: `${sourceLabel} projection`,
+      geometryId: `geometry_projection_${next}`,
+      sourceGeometryId: selectedGeometryId,
+      targetLayer: projectionTargetLayer,
+      linked: true,
+      visible: true
+    };
+    updateDesigner({ ...designer, projections: [...designer.projections, projection] });
+    setActiveLayer(projectionTargetLayer === "reference" ? "artwork" : projectionTargetLayer);
+    setSelection({ type: "projection", id: projection.id });
+    setFabricationNotice(`Linked projection created in ${projectionTargetLayer === "faceGraphic" ? "Face Graphic" : projectionTargetLayer === "zones" ? "Diffusors" : "Reference"}.`);
+  }
+
+  function breakProjectionLink(projectionId: string) {
+    const projection = designer.projections.find((entry) => entry.id === projectionId);
+    const resolved = projection ? resolveDesignerProjectionGeometry(designer, projection.id) : null;
+    if (!projection || !resolved?.geometry) {
+      setFabricationNotice("Cannot break a projection with an unresolved source. Relink it first.");
+      return;
+    }
+    const layerKey = projection.targetLayer === "reference" ? "artwork" : projection.targetLayer;
+    if (designer.layers[layerKey].locked) return;
+    const shape = designerGeometryAsShape(resolved.geometry);
+    const projections = designer.projections.filter((entry) => entry.id !== projectionId);
+    if (projection.targetLayer === "reference") {
+      const next = nextDesignerItemNumber(designer.buildAreas, "build_area_");
+      const buildArea: DesignerBuildAreaForm = { id: `build_area_${next}`, name: projection.name, ...shape, visible: true, locked: false, opacity: 1 };
+      updateDesigner({ ...designer, projections, buildAreas: [...designer.buildAreas, buildArea] });
+      setSelection({ type: "build_area", id: buildArea.id });
+    } else if (projection.targetLayer === "zones") {
+      const next = nextDesignerItemNumber(designer.zones, "zone_");
+      const zone: DesignerZoneForm = { id: `zone_${next}`, name: projection.name, ...shape, visible: true, locked: false, opacity: 1 };
+      updateDesigner({ ...designer, projections, zones: [...designer.zones, zone] });
+      setSelection({ type: "zone", id: zone.id });
+    } else {
+      const next = nextDesignerItemNumber(designer.faceGraphics, "face_graphic_");
+      const element: DesignerFaceGraphicForm = { id: `face_graphic_${next}`, name: projection.name, ...shape, passMode: "translucent", filterColor: "#FFFFFF", visible: true, locked: false, opacity: 1 };
+      updateDesigner({ ...designer, projections, faceGraphics: [...designer.faceGraphics, element] });
+      setSelection({ type: "face_graphic", id: element.id });
+    }
+    setFabricationNotice("Projection link broken. The geometry is now an independent editable object.");
+  }
+
+  function applyBooleanOperation(operation: DesignerBooleanOperation) {
+    if (geometrySelections.length < 2) return;
+    const paper = window.paper;
+    if (!paper) {
+      setFabricationNotice("The geometry engine is still loading. Try the boolean operation again.");
+      return;
+    }
+    const geometryById = new Map((designer.geometries ?? []).map((geometry) => [geometry.id, geometry]));
+    const operands = geometrySelections.map((entry): { selection: DesignerGeometrySelection; geometry: DesignerGeometry | null; target: DesignerProjectionLayer } => {
+      if (entry.type === "projection") {
+        const projection = designer.projections.find((candidate) => candidate.id === entry.id);
+        return { selection: entry, geometry: projection ? resolveDesignerProjectionGeometry(designer, projection.id).geometry : null, target: projection?.targetLayer ?? "faceGraphic" };
+      }
+      if (entry.type === "derived_geometry") {
+        const operation = designer.derivedGeometries.find((candidate) => candidate.id === entry.id);
+        return { selection: entry, geometry: operation ? resolveDesignerDerivedGeometry(designer, operation.id).geometry : null, target: operation?.targetLayer ?? "faceGraphic" };
+      }
+      const owner = entry.type === "build_area"
+        ? designer.buildAreas.find((candidate) => candidate.id === entry.id)
+        : entry.type === "zone"
+          ? designer.zones.find((candidate) => candidate.id === entry.id)
+          : designer.faceGraphics.find((candidate) => candidate.id === entry.id);
+      return {
+        selection: entry,
+        geometry: owner?.geometryId ? geometryById.get(owner.geometryId) ?? null : null,
+        target: entry.type === "build_area" ? "reference" : entry.type === "zone" ? "zones" : "faceGraphic"
+      };
+    });
+    const target = operands[0]?.target;
+    if (!target || operands.some((operand) => operand.target !== target)) {
+      setFabricationNotice("Boolean operations require closed geometry from the same target layer.");
+      return;
+    }
+    const layerKey = target === "reference" ? "artwork" : target;
+    if (designer.layers[layerKey].locked) return;
+    if (operands.some((operand) => !operand.geometry)) {
+      setFabricationNotice("Boolean operation blocked: one selected geometry is missing or broken.");
+      return;
+    }
+    const operationLabel = operation === "union" ? "Union" : operation === "subtract" ? "Subtract" : operation === "intersect" ? "Intersect" : "Exclude";
+    const nextNumber = target === "reference"
+      ? nextDesignerItemNumber(designer.buildAreas, "build_area_")
+      : target === "zones"
+        ? nextDesignerItemNumber(designer.zones, "zone_")
+        : nextDesignerItemNumber(designer.faceGraphics, "face_graphic_");
+    const resultObjectId = target === "reference" ? `build_area_${nextNumber}` : target === "zones" ? `zone_${nextNumber}` : `face_graphic_${nextNumber}`;
+    const geometryId = `geometry_${target === "reference" ? "build_area" : target === "zones" ? "zone" : "face_graphic"}_${resultObjectId}`;
+    const result = applyDesignerBooleanOperation(paper, operands.map((operand) => operand.geometry!), operation, geometryId);
+    if (!result.geometry) {
+      const issueLabels = result.issues.map((issue) => issue === "open-profile" ? "open profile" : issue === "self-intersection" ? "self-intersection" : issue === "duplicate-contour" ? "duplicate contour" : "empty result");
+      setFabricationNotice(`Boolean operation blocked: ${issueLabels.join(", ") || "invalid topology"}.`);
+      return;
+    }
+    const shape = designerGeometryAsShape(result.geometry);
+    const removedBuildAreas = new Set(geometrySelections.filter((entry) => entry.type === "build_area").map((entry) => entry.id));
+    const removedZones = new Set(geometrySelections.filter((entry) => entry.type === "zone").map((entry) => entry.id));
+    const removedFaceGraphics = new Set(geometrySelections.filter((entry) => entry.type === "face_graphic").map((entry) => entry.id));
+    if (target === "reference") {
+      const base = designer.buildAreas.find((entry) => removedBuildAreas.has(entry.id));
+      const item: DesignerBuildAreaForm = { ...shape, id: resultObjectId, geometryId, name: `${operationLabel} ${nextNumber}`, visible: true, locked: false, opacity: base?.opacity ?? 1 };
+      updateDesigner({ ...designer, buildAreas: [...designer.buildAreas.filter((entry) => !removedBuildAreas.has(entry.id)), item] });
+      setSelection({ type: "build_area", id: item.id });
+      setGeometrySelections([{ type: "build_area", id: item.id }]);
+    } else if (target === "zones") {
+      const base = designer.zones.find((entry) => removedZones.has(entry.id));
+      const item: DesignerZoneForm = { ...shape, id: resultObjectId, geometryId, name: `${operationLabel} ${nextNumber}`, visible: true, locked: false, opacity: base?.opacity ?? 1 };
+      const groups = designer.groups.map((group) => ({
+        ...group,
+        members: group.members.reduce<DesignerGroupForm["members"]>((members, member) => {
+          const nextMember = member.type === "zone" && removedZones.has(member.id) ? { type: "zone" as const, id: item.id } : member;
+          return members.some((candidate) => candidate.type === nextMember.type && candidate.id === nextMember.id) ? members : [...members, nextMember];
+        }, [])
+      }));
+      updateDesigner({
+        ...designer,
+        zones: [...designer.zones.filter((entry) => !removedZones.has(entry.id)), item],
+        groups,
+        lightSources: designer.lightSources.map((source) => source.targetType === "zone" && removedZones.has(source.targetId) ? { ...source, targetId: item.id } : source)
+      });
+      setSelection({ type: "zone", id: item.id });
+      setGeometrySelections([{ type: "zone", id: item.id }]);
+    } else {
+      const base = designer.faceGraphics.find((entry) => removedFaceGraphics.has(entry.id));
+      const item: DesignerFaceGraphicForm = { ...shape, id: resultObjectId, geometryId, name: `${operationLabel} ${nextNumber}`, passMode: base?.passMode ?? "translucent", filterColor: base?.filterColor ?? "#FFFFFF", visible: true, locked: false, opacity: base?.opacity ?? 1 };
+      updateDesigner({ ...designer, faceGraphics: [...designer.faceGraphics.filter((entry) => !removedFaceGraphics.has(entry.id)), item] });
+      setSelection({ type: "face_graphic", id: item.id });
+      setGeometrySelections([{ type: "face_graphic", id: item.id }]);
+    }
+    setFabricationNotice(`${operationLabel} created with ${result.geometry.contours?.length ?? 1} contour(s).`);
   }
 
   function patchRoute(routeId: string, patch: Partial<DesignerRouteForm>) {
@@ -887,6 +1383,14 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
     setSelection({ type: "zone", id: zoneId, pointIndex });
   }
 
+  function updateFaceGraphicPoint(elementId: string, pointIndex: number, patch: Partial<DesignerPoint>) {
+    const element = designer.faceGraphics.find((entry) => entry.id === elementId);
+    const point = element?.points?.[pointIndex];
+    if (!element || !point) return;
+    patchFaceGraphic(elementId, updatePolygonPoint(element, pointIndex, { ...point, ...patch }, designer.snapCm));
+    setSelection({ type: "face_graphic", id: elementId, pointIndex });
+  }
+
   function setBuildAreaNodeType(buildAreaId: string, pointIndex: number, nodeType: DesignerPointNodeType) {
     const buildArea = designer.buildAreas.find((entry) => entry.id === buildAreaId);
     if (!buildArea || designer.layers.artwork.locked) return;
@@ -899,6 +1403,13 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
     if (!zone || designer.layers.zones.locked) return;
     patchZone(zoneId, setPolygonNodeType(zone, pointIndex, nodeType));
     setSelection({ type: "zone", id: zoneId, pointIndex });
+  }
+
+  function setFaceGraphicNodeType(elementId: string, pointIndex: number, nodeType: DesignerPointNodeType) {
+    const element = designer.faceGraphics.find((entry) => entry.id === elementId);
+    if (!element || designer.layers.faceGraphic.locked || element.locked) return;
+    patchFaceGraphic(elementId, setPolygonNodeType(element, pointIndex, nodeType));
+    setSelection({ type: "face_graphic", id: elementId, pointIndex });
   }
 
   function insertBuildAreaPoint(buildAreaId: string, insertIndex: number, point: DesignerPoint) {
@@ -915,6 +1426,14 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
     patchZone(zoneId, insertPolygonPoint(zone, insertIndex, point, designer.snapCm));
     setSelection({ type: "zone", id: zoneId, pointIndex: insertIndex });
     setFabricationNotice("Zone polygon point inserted.");
+  }
+
+  function insertFaceGraphicPoint(elementId: string, insertIndex: number, point: DesignerPoint) {
+    const element = designer.faceGraphics.find((entry) => entry.id === elementId);
+    if (!element || designer.layers.faceGraphic.locked || element.locked) return;
+    patchFaceGraphic(elementId, insertPolygonPoint(element, insertIndex, point, designer.snapCm));
+    setSelection({ type: "face_graphic", id: elementId, pointIndex: insertIndex });
+    setFabricationNotice("Face Graphic point inserted.");
   }
 
   function deleteBuildAreaPoint(buildAreaId: string, pointIndex: number) {
@@ -943,6 +1462,18 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
     const nextIndex = Math.min(pointIndex, Math.max(0, (nextZone.points?.length ?? 1) - 1));
     setSelection({ type: "zone", id: zoneId, pointIndex: nextIndex });
     setFabricationNotice("Zone polygon point deleted.");
+  }
+
+  function deleteFaceGraphicPoint(elementId: string, pointIndex: number) {
+    const element = designer.faceGraphics.find((entry) => entry.id === elementId);
+    if (!element || designer.layers.faceGraphic.locked || element.locked) return;
+    if (!element.points || element.points.length <= 3) {
+      setFabricationNotice("Polygon needs at least 3 points.");
+      return;
+    }
+    const next = deletePolygonPoint(element, pointIndex);
+    patchFaceGraphic(elementId, next);
+    setSelection({ type: "face_graphic", id: elementId, pointIndex: Math.min(pointIndex, Math.max(0, (next.points?.length ?? 1) - 1)) });
   }
 
   function setChannelNodeType(channelId: string, pointIndex: number, nodeType: DesignerPointNodeType) {
@@ -1180,11 +1711,16 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
       return;
     }
     if (selection.type === "zone" && designer.layers.zones.locked) return;
+    if (selection.type === "face_graphic" && (designer.layers.faceGraphic.locked || designer.faceGraphics.find((entry) => entry.id === selection.id)?.locked)) return;
     if (selection.type === "channel" && designer.layers.zones.locked) return;
     if (selection.type === "light_source" && designer.layers.lightSources.locked) return;
     if (selection.type === "route" && designer.layers.strings.locked) return;
     if (selection.type === "zone" && typeof selection.pointIndex === "number") {
       deleteZonePoint(selection.id, selection.pointIndex);
+      return;
+    }
+    if (selection.type === "face_graphic" && typeof selection.pointIndex === "number") {
+      deleteFaceGraphicPoint(selection.id, selection.pointIndex);
       return;
     }
     if (selection.type === "channel" && typeof selection.pointIndex === "number") {
@@ -1205,6 +1741,38 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
         }))
       });
       setSelection(null);
+    }
+    if (selection.type === "face_graphic") {
+      updateDesigner({ ...designer, faceGraphics: designer.faceGraphics.filter((element) => element.id !== selection.id) });
+      setSelection(null);
+      return;
+    }
+    if (selection.type === "projection") {
+      const projection = designer.projections.find((entry) => entry.id === selection.id);
+      const layerKey = projection?.targetLayer === "reference" ? "artwork" : projection?.targetLayer;
+      if (layerKey && designer.layers[layerKey].locked) return;
+      updateDesigner({ ...designer, projections: designer.projections.filter((projection) => projection.id !== selection.id) });
+      setSelection(null);
+      setFabricationNotice("Projected reference deleted.");
+      return;
+    }
+    if (selection.type === "derived_geometry") {
+      const operation = designer.derivedGeometries.find((entry) => entry.id === selection.id);
+      const layerKey = operation?.targetLayer === "reference" ? "artwork" : operation?.targetLayer;
+      if (layerKey && designer.layers[layerKey].locked) return;
+      updateDesigner({ ...designer, derivedGeometries: designer.derivedGeometries.filter((entry) => entry.id !== selection.id) });
+      setSelection(null);
+      setGeometrySelections([]);
+      setFabricationNotice("Derived profile deleted. Downstream references remain recoverable as broken links.");
+      return;
+    }
+    if (selection.type === "text") {
+      const text = designer.texts.find((entry) => entry.id === selection.id);
+      if (!text || designer.layers[text.targetLayer === "reference" ? "artwork" : text.targetLayer].locked || text.locked) return;
+      updateDesigner({ ...designer, texts: designer.texts.filter((entry) => entry.id !== selection.id) });
+      setSelection(null);
+      setFabricationNotice("Editable text deleted.");
+      return;
     }
     if (selection.type === "channel") {
       removeChannel(selection.id);
@@ -1235,7 +1803,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
   }
 
   function copySelection() {
-    if (selection && (selection.type === "artwork" || selection.type === "zone" || selection.type === "route")) setClipboard(selection);
+    if (selection && (selection.type === "artwork" || selection.type === "zone" || selection.type === "face_graphic" || selection.type === "route")) setClipboard(selection);
   }
 
   function pasteSelection() {
@@ -1253,9 +1821,35 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
       const source = designer.zones.find((zone) => zone.id === clipboard.id);
       if (!source) return;
       const next = nextDesignerItemNumber(designer.zones, `${source.id}_copy_`);
-      const copy = { ...source, id: `${source.id}_copy_${next}`, name: `${source.name} Copy`, x: source.x + designer.snapCm, y: source.y + designer.snapCm };
+      const copy = {
+        ...source,
+        geometryId: undefined,
+        id: `${source.id}_copy_${next}`,
+        name: `${source.name} Copy`,
+        x: source.x + designer.snapCm,
+        y: source.y + designer.snapCm,
+        points: source.points?.map((point) => ({ ...point, x: point.x + designer.snapCm, y: point.y + designer.snapCm })),
+        contours: source.contours?.map((contour) => ({ ...contour, points: contour.points.map((point) => ({ ...point, x: point.x + designer.snapCm, y: point.y + designer.snapCm })) }))
+      };
       updateDesigner({ ...designer, zones: [...designer.zones, copy] });
       setSelection({ type: "zone", id: copy.id });
+    }
+    if (clipboard.type === "face_graphic") {
+      const source = designer.faceGraphics.find((element) => element.id === clipboard.id);
+      if (!source) return;
+      const next = nextDesignerItemNumber(designer.faceGraphics, `${source.id}_copy_`);
+      const copy = {
+        ...source,
+        geometryId: undefined,
+        id: `${source.id}_copy_${next}`,
+        name: `${source.name} Copy`,
+        x: source.x + designer.snapCm,
+        y: source.y + designer.snapCm,
+        points: source.points?.map((point) => ({ ...point, x: point.x + designer.snapCm, y: point.y + designer.snapCm })),
+        contours: source.contours?.map((contour) => ({ ...contour, points: contour.points.map((point) => ({ ...point, x: point.x + designer.snapCm, y: point.y + designer.snapCm })) }))
+      };
+      updateDesigner({ ...designer, faceGraphics: [...designer.faceGraphics, copy] });
+      setSelection({ type: "face_graphic", id: copy.id });
     }
     if (clipboard.type === "route") {
       const source = designer.routes.find((route) => route.id === clipboard.id);
@@ -1494,12 +2088,16 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
     }
   }
 
-  const canCopySelection = Boolean(selection && (selection.type === "artwork" || selection.type === "zone" || selection.type === "route"));
+  const canCopySelection = Boolean(selection && (selection.type === "artwork" || selection.type === "zone" || selection.type === "face_graphic" || selection.type === "route"));
   const canDeleteSelection = Boolean(selection)
     && selection?.type !== "controller"
     && !(selection?.type === "artwork" && designer.layers.artwork.locked)
     && !(selection?.type === "build_area" && designer.layers.artwork.locked)
     && !(selection?.type === "zone" && designer.layers.zones.locked)
+    && !(selection?.type === "face_graphic" && (designer.layers.faceGraphic.locked || selectedFaceGraphic?.locked))
+    && !(selection?.type === "projection" && selectedProjection && designer.layers[selectedProjection.targetLayer === "reference" ? "artwork" : selectedProjection.targetLayer].locked)
+    && !(selection?.type === "derived_geometry" && selectedDerivedGeometry && designer.layers[selectedDerivedGeometry.targetLayer === "reference" ? "artwork" : selectedDerivedGeometry.targetLayer].locked)
+    && !(selection?.type === "text" && selectedText && (designer.layers[selectedText.targetLayer === "reference" ? "artwork" : selectedText.targetLayer].locked || selectedText.locked))
     && !(selection?.type === "channel" && designer.layers.zones.locked)
     && !(selection?.type === "light_source" && designer.layers.lightSources.locked)
     && !(selection?.type === "route" && designer.layers.strings.locked);
@@ -1563,6 +2161,9 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
             <Button type="button" variant={layersPanelOpen ? "default" : "outline"} density="compact" className="px-2" title={layersPanelOpen ? "Close Layers panel" : "Open Layers panel"} aria-label="Layers" onClick={() => setLayersPanelOpen((open) => !open)}>
               <Layers className="h-4 w-4" /> <span className="hidden xl:inline">{activeLayer ? ACTIVE_LAYER_LABELS[activeLayer] : "Layers"}</span>
             </Button>
+            <Button type="button" variant="outline" density="compact" className="px-2" title="Validate and export fabrication geometry" onClick={() => { setFabricationExportResult(null); setFabricationExportOpen(true); }}>
+              <Download className="h-4 w-4" /> <span className="hidden xl:inline">Export</span>
+            </Button>
           </>
         ) : (
           <>
@@ -1617,7 +2218,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
         <div className="min-w-0 flex-1 overflow-x-auto">
           <div className="flex min-w-max items-center gap-2">
         <span className="shrink-0 text-body-sm font-semibold text-foreground">
-          {selectedArtwork?.name ?? selectedBuildArea?.name ?? selectedLightSource?.name ?? selectedZone?.name ?? selectedChannel?.name ?? selectedController?.name ?? selectedRoute?.name ?? (editorMode === "design" ? DESIGNER_TOOL_LABELS[tool] : "Animate")}
+          {selectedArtwork?.name ?? selectedBuildArea?.name ?? selectedLightSource?.name ?? selectedFaceGraphic?.name ?? selectedProjection?.name ?? selectedDerivedGeometry?.name ?? selectedText?.name ?? selectedZone?.name ?? selectedChannel?.name ?? selectedController?.name ?? selectedRoute?.name ?? (editorMode === "design" ? DESIGNER_TOOL_LABELS[tool] : "Animate")}
         </span>
         <div className="h-6 w-px shrink-0 bg-border" />
         {editorMode === "design" && !selection ? <span className="text-body-sm text-muted-foreground">{designerToolInstruction(tool)}{activeLayer ? ` · ${ACTIVE_LAYER_LABELS[activeLayer]} layer` : " · Choose a layer to begin"}</span> : null}
@@ -1629,6 +2230,29 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
             <ToolbarNumber label="Y" value={selectedArtwork.y} suffix="cm" onChange={(y) => patchArtwork(selectedArtwork.id, { y })} />
             <ToolbarNumber label="W" value={selectedArtwork.width} suffix="cm" onChange={(width) => patchArtwork(selectedArtwork.id, { width })} />
             <ToolbarNumber label="H" value={selectedArtwork.height} suffix="cm" onChange={(height) => patchArtwork(selectedArtwork.id, { height })} />
+          </>
+        ) : editorMode === "design" && selectedText ? (
+          <>
+            <ToolbarField label="Text">
+              <textarea key={`${selectedText.id}:${selectedText.text}`} className="h-8 w-56 resize-none rounded-md border border-input bg-card px-2 py-1 text-body-sm leading-5" defaultValue={selectedText.text} onBlur={(event) => patchText(selectedText.id, { text: event.target.value })} />
+            </ToolbarField>
+            <ToolbarField label="Font">
+              <select className="h-8 rounded-md border border-input bg-card px-2 text-body-sm" value={selectedText.fontId} onChange={(event) => patchText(selectedText.id, { fontId: event.target.value })}>
+                {DESIGNER_FONT_CATALOG.map((font) => <option key={font.id} value={font.id}>{font.label}</option>)}
+              </select>
+            </ToolbarField>
+            <ToolbarNumber label="Size" value={selectedText.fontSizeMm} suffix="mm" onChange={(fontSizeMm) => patchText(selectedText.id, { fontSizeMm: Math.max(1, fontSizeMm) })} />
+            <ToolbarNumber label="Track" value={selectedText.trackingMm} suffix="mm" onChange={(trackingMm) => patchText(selectedText.id, { trackingMm })} />
+            <ToolbarNumber label="Line" value={selectedText.lineHeight} onChange={(lineHeight) => patchText(selectedText.id, { lineHeight: Math.max(0.5, lineHeight) })} />
+            <ToolbarField label="Align">
+              <select className="h-8 rounded-md border border-input bg-card px-2 text-body-sm" value={selectedText.alignment} onChange={(event) => patchText(selectedText.id, { alignment: event.target.value as DesignerText["alignment"] })}>
+                <option value="left">Left</option><option value="center">Center</option><option value="right">Right</option>
+              </select>
+            </ToolbarField>
+            <ToolbarNumber label="X" value={selectedText.x} suffix="cm" onChange={(x) => patchText(selectedText.id, { x })} />
+            <ToolbarNumber label="Y" value={selectedText.y} suffix="cm" onChange={(y) => patchText(selectedText.id, { y })} />
+            <Badge>{designerFontResource(selectedText.fontId)?.hash.slice(0, 15) ?? "Unresolved font"}</Badge>
+            <Button type="button" variant="outline" density="compact" onClick={() => void convertTextToPaths(selectedText.id)}>Convert to paths</Button>
           </>
         ) : editorMode === "design" && selectedBuildArea ? (
           <>
@@ -1667,6 +2291,38 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
             <Button type="button" variant="outline" density="compact" onClick={() => setLightingEditorOpen(true)}>
               <Sparkles className="h-4 w-4" /> Configure source
             </Button>
+          </>
+        ) : editorMode === "design" && selectedFaceGraphic ? (
+          <>
+            <Badge>Face Graphic</Badge>
+            {!selectedFaceGraphic.locked ? <Button type="button" variant="outline" density="compact" onClick={() => patchFaceGraphic(selectedFaceGraphic.id, { locked: true })}><Lock className="h-4 w-4" /> Lock</Button> : null}
+            <ToolbarField label="Pass">
+              <select className="h-8 rounded-md border border-input bg-card px-2 text-body-sm" value={selectedFaceGraphic.passMode} onChange={(event) => patchFaceGraphic(selectedFaceGraphic.id, { passMode: event.target.value as DesignerFaceGraphicForm["passMode"] })}>
+                <option value="translucent">Translucent</option>
+                <option value="clear">Clear</option>
+                <option value="opaque">Opaque</option>
+              </select>
+            </ToolbarField>
+            {selectedFaceGraphic.passMode === "translucent" ? <ToolbarField label="Filter color"><input type="color" className="h-8 w-12 rounded border border-input bg-card p-1" value={selectedFaceGraphic.filterColor} onChange={(event) => patchFaceGraphic(selectedFaceGraphic.id, { filterColor: event.target.value.toUpperCase() })} /></ToolbarField> : null}
+            <ToolbarField label="Shape">
+              <select className="h-8 rounded-md border border-input bg-card px-2 text-body-sm" value={selectedFaceGraphic.shape} onChange={(event) => patchFaceGraphic(selectedFaceGraphic.id, { shape: event.target.value as DesignerFaceGraphicForm["shape"] })}>
+                <option value="rect">Rectangle</option><option value="ellipse">Ellipse</option><option value="polygon">Polygon</option>
+              </select>
+            </ToolbarField>
+            {typeof selectedFaceGraphicPointIndex === "number" && selectedFaceGraphic.points?.[selectedFaceGraphicPointIndex] ? (
+              <>
+                <Badge>Point {selectedFaceGraphicPointIndex + 1}</Badge>
+                <ToolbarField label="Node"><NodeTypePicker value={selectedFaceGraphic.points[selectedFaceGraphicPointIndex].nodeType ?? (selectedFaceGraphic.pathMode === "bezier" ? "smooth" : "corner")} onChange={(nodeType) => setFaceGraphicNodeType(selectedFaceGraphic.id, selectedFaceGraphicPointIndex, nodeType)} /></ToolbarField>
+                <ToolbarNumber label="PX" value={selectedFaceGraphic.points[selectedFaceGraphicPointIndex].x} suffix="cm" onChange={(x) => updateFaceGraphicPoint(selectedFaceGraphic.id, selectedFaceGraphicPointIndex, { x })} />
+                <ToolbarNumber label="PY" value={selectedFaceGraphic.points[selectedFaceGraphicPointIndex].y} suffix="cm" onChange={(y) => updateFaceGraphicPoint(selectedFaceGraphic.id, selectedFaceGraphicPointIndex, { y })} />
+                <Button type="button" variant="outline" density="compact" disabled={(selectedFaceGraphic.points?.length ?? 0) <= 3} onClick={() => deleteFaceGraphicPoint(selectedFaceGraphic.id, selectedFaceGraphicPointIndex)}><Trash2 className="h-4 w-4" /> Point</Button>
+              </>
+            ) : <>
+              <ToolbarNumber label="X" value={selectedFaceGraphic.x} suffix="cm" onChange={(x) => patchFaceGraphic(selectedFaceGraphic.id, { x })} />
+              <ToolbarNumber label="Y" value={selectedFaceGraphic.y} suffix="cm" onChange={(y) => patchFaceGraphic(selectedFaceGraphic.id, { y })} />
+              <ToolbarNumber label="W" value={selectedFaceGraphic.width} suffix="cm" onChange={(width) => patchFaceGraphic(selectedFaceGraphic.id, { width })} />
+              <ToolbarNumber label="H" value={selectedFaceGraphic.height} suffix="cm" onChange={(height) => patchFaceGraphic(selectedFaceGraphic.id, { height })} />
+            </>}
           </>
         ) : editorMode === "design" && selectedZone ? (
           <>
@@ -1749,6 +2405,93 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
           </>
         ) : null}
         </fieldset>
+        {editorMode === "design" && selectedCompoundContours?.length ? <Badge>Compound · {selectedCompoundContours.length} contours · even-odd</Badge> : null}
+        {editorMode === "design" && geometrySelections.length >= 2 ? (
+          <>
+            <div className="h-6 w-px shrink-0 bg-border" />
+            <Badge>{geometrySelections.length} profiles</Badge>
+            <Button type="button" variant="outline" density="compact" title="Merge all selected profiles" onClick={() => applyBooleanOperation("union")}>Union</Button>
+            <Button type="button" variant="outline" density="compact" title="Subtract later selections from the first selected profile" onClick={() => applyBooleanOperation("subtract")}>Subtract</Button>
+            <Button type="button" variant="outline" density="compact" title="Keep only overlapping material" onClick={() => applyBooleanOperation("intersect")}>Intersect</Button>
+            <Button type="button" variant="outline" density="compact" title="Keep material outside overlaps" onClick={() => applyBooleanOperation("exclude")}>Exclude</Button>
+          </>
+        ) : null}
+        {editorMode === "design" && selectedGeometryId ? (
+          <>
+            <div className="h-6 w-px shrink-0 bg-border" />
+            <Button type="button" variant="outline" density="compact" title="Create a live offset derived from this profile" onClick={() => createDerivedGeometry("offset")}>Offset Path</Button>
+            <Button type="button" variant="outline" density="compact" title="Create live corner fillets derived from this profile" onClick={() => createDerivedGeometry("fillet")}>Fillet</Button>
+          </>
+        ) : null}
+        {editorMode === "design" && selectedDerivedGeometry ? (
+          <>
+            <Badge className={selectedDerivedGeometryResolution?.issue ? "border border-amber-500/50 bg-amber-500/10 text-amber-700" : "border border-emerald-500/50 bg-emerald-500/10 text-emerald-700"}>
+              {selectedDerivedGeometryResolution?.issue === "cycle" ? "Cycle" : selectedDerivedGeometryResolution?.issue === "broken" ? "Broken source" : selectedDerivedGeometryResolution?.issue === "collapsed" ? "Collapsed" : selectedDerivedGeometryResolution?.issue === "invalid-topology" ? "Invalid topology" : "Live derived profile"}
+            </Badge>
+            <ToolbarField label="Source">
+              <select className="h-8 max-w-64 rounded-md border border-input bg-card px-2 text-body-sm" value={selectedDerivedGeometry.sourceGeometryId} onChange={(event) => patchDerivedGeometry(selectedDerivedGeometry.id, { sourceGeometryId: event.target.value })}>
+                {!projectionSourceOptions.some((entry) => entry.geometryId === selectedDerivedGeometry.sourceGeometryId) ? <option value={selectedDerivedGeometry.sourceGeometryId}>Missing · {selectedDerivedGeometry.sourceGeometryId}</option> : null}
+                {projectionSourceOptions.filter((entry) => entry.geometryId !== selectedDerivedGeometry.geometryId).map((entry) => <option key={entry.geometryId} value={entry.geometryId}>{entry.label}</option>)}
+              </select>
+            </ToolbarField>
+            {selectedDerivedGeometry.targetLayer === "faceGraphic" ? (
+              <>
+                <ToolbarField label="Pass">
+                  <select className="h-8 rounded-md border border-input bg-card px-2 text-body-sm" value={selectedDerivedGeometry.passMode ?? "translucent"} onChange={(event) => patchDerivedGeometry(selectedDerivedGeometry.id, { passMode: event.target.value as DesignerFaceGraphicForm["passMode"] })}>
+                    <option value="translucent">Translucent</option>
+                    <option value="clear">Clear</option>
+                    <option value="opaque">Opaque</option>
+                  </select>
+                </ToolbarField>
+                {(selectedDerivedGeometry.passMode ?? "translucent") === "translucent" ? <ToolbarField label="Filter color"><input type="color" className="h-8 w-12 rounded border border-input bg-card p-1" value={selectedDerivedGeometry.filterColor ?? "#FFFFFF"} onChange={(event) => patchDerivedGeometry(selectedDerivedGeometry.id, { filterColor: event.target.value.toUpperCase() })} /></ToolbarField> : null}
+              </>
+            ) : null}
+            {selectedDerivedGeometry.operation === "offset" ? (
+              <>
+                <ToolbarNumber label="Offset" value={selectedDerivedGeometry.distanceMm ?? 0} suffix="mm" onChange={(distanceMm) => patchDerivedGeometry(selectedDerivedGeometry.id, { distanceMm })} />
+                <ToolbarField label="Join">
+                  <select className="h-8 rounded-md border border-input bg-card px-2 text-body-sm" value={selectedDerivedGeometry.join ?? "round"} onChange={(event) => patchDerivedGeometry(selectedDerivedGeometry.id, { join: event.target.value as NonNullable<DesignerDerivedGeometry["join"]> })}>
+                    <option value="round">Round</option><option value="miter">Miter</option><option value="bevel">Bevel</option>
+                  </select>
+                </ToolbarField>
+                {selectedDerivedGeometry.join === "miter" ? <ToolbarNumber label="Miter limit" value={selectedDerivedGeometry.miterLimit ?? 4} onChange={(miterLimit) => patchDerivedGeometry(selectedDerivedGeometry.id, { miterLimit: Math.max(1, miterLimit) })} /> : null}
+              </>
+            ) : (
+              <>
+                <ToolbarNumber label="Radius" value={selectedDerivedGeometry.radiusMm ?? 0} suffix="mm" onChange={(radiusMm) => patchDerivedGeometry(selectedDerivedGeometry.id, { radiusMm: Math.max(0, radiusMm) })} />
+                <ToolbarField label="Corners">
+                  <input key={`${selectedDerivedGeometry.id}:${selectedDerivedGeometry.cornerIndices?.join(",") ?? "all"}`} className="h-8 w-28 rounded-md border border-input bg-card px-2 text-body-sm" defaultValue={selectedDerivedGeometry.cornerIndices?.map((index) => index + 1).join(",") ?? "all"} onBlur={(event) => {
+                    const value = event.target.value.trim().toLowerCase();
+                    patchDerivedGeometry(selectedDerivedGeometry.id, { cornerIndices: !value || value === "all" ? undefined : value.split(",").map((part) => Number(part.trim()) - 1).filter((index) => Number.isInteger(index) && index >= 0) });
+                  }} />
+                </ToolbarField>
+              </>
+            )}
+            {selectedDerivedGeometryResolution?.warnings.map((warning) => <span key={warning} title={warning}><Badge className="border border-amber-500/50 bg-amber-500/10 text-amber-700">{warning}</Badge></span>)}
+            <Button type="button" variant="outline" density="compact" disabled={!selectedDerivedGeometryResolution?.geometry} onClick={() => breakDerivedGeometryLink(selectedDerivedGeometry.id)}>Break Link</Button>
+          </>
+        ) : editorMode === "design" && selectedProjection ? (
+          <>
+            <Badge className={selectedProjectionResolution?.issue ? "border border-amber-500/50 bg-amber-500/10 text-amber-700" : "border border-cyan-500/50 bg-cyan-500/10 text-cyan-700"}>{selectedProjectionResolution?.issue === "cycle" ? "Cycle" : selectedProjectionResolution?.issue === "broken" ? "Broken reference" : selectedProjectionResolution?.issue === "collapsed" ? "Source collapsed" : selectedProjectionResolution?.issue === "invalid-topology" ? "Invalid source topology" : "Linked · read only"}</Badge>
+            <ToolbarField label="Source">
+              <select className="h-8 max-w-64 rounded-md border border-input bg-card px-2 text-body-sm" value={selectedProjection.sourceGeometryId} onChange={(event) => patchProjection(selectedProjection.id, { sourceGeometryId: event.target.value })}>
+                {!projectionSourceOptions.some((entry) => entry.geometryId === selectedProjection.sourceGeometryId) ? <option value={selectedProjection.sourceGeometryId}>Missing · {selectedProjection.sourceGeometryId}</option> : null}
+                {projectionSourceOptions.filter((entry) => entry.geometryId !== selectedProjection.geometryId).map((entry) => <option key={entry.geometryId} value={entry.geometryId}>{entry.label}</option>)}
+              </select>
+            </ToolbarField>
+            <Button type="button" variant="outline" density="compact" disabled={!selectedProjectionResolution?.geometry} onClick={() => breakProjectionLink(selectedProjection.id)}>Break Link</Button>
+          </>
+        ) : editorMode === "design" && selectedGeometryId ? (
+          <>
+            <div className="h-6 w-px shrink-0 bg-border" />
+            <ToolbarField label="Project to">
+              <select className="h-8 rounded-md border border-input bg-card px-2 text-body-sm" value={projectionTargetLayer} onChange={(event) => setProjectionTargetLayer(event.target.value as DesignerProjectionLayer)}>
+                <option value="faceGraphic">Face Graphic</option><option value="zones">Diffusors</option><option value="reference">Reference</option>
+              </select>
+            </ToolbarField>
+            <Button type="button" variant="outline" density="compact" onClick={projectSelectedGeometry}><Spline className="h-4 w-4" /> Project Geometry</Button>
+          </>
+        ) : null}
         {editorMode === "design" && (canCopySelection || clipboard || canDeleteSelection) ? (
           <>
             <div className="h-6 w-px shrink-0 bg-border" />
@@ -1801,6 +2544,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
               <ToolButton active={tool === "build_area_ellipse"} label="Ellipse Build Area (drag on canvas)" icon={Circle} disabled={designer.layers.artwork.locked} onClick={() => { ensureLayerVisible("artwork"); setTool("build_area_ellipse"); }} />
               <ToolButton active={tool === "build_area_polygon"} label="Polygon Build Area" icon={PenLine} disabled={designer.layers.artwork.locked} onClick={() => { ensureLayerVisible("artwork"); setTool("build_area_polygon"); }} />
               <ToolButton active={tool === "build_area_bezier"} label="Bezier Build Area" icon={Spline} disabled={designer.layers.artwork.locked} onClick={() => { ensureLayerVisible("artwork"); setTool("build_area_bezier"); }} />
+              <ToolButton active={tool === "reference_text"} label="Editable reference text" icon={Type} disabled={designer.layers.artwork.locked} onClick={() => { ensureLayerVisible("artwork"); setTool("reference_text"); }} />
             </>
           ) : null}
           {activeLayer === "zones" ? (
@@ -1810,6 +2554,16 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
               <ToolButton active={tool === "zone_polygon"} label="Polygon Zone" icon={PenLine} disabled={designer.layers.zones.locked || !designer.layers.zones.visible} onClick={() => setTool("zone_polygon")} />
               <ToolButton active={tool === "zone_bezier"} label="Bezier Zone" icon={Spline} disabled={designer.layers.zones.locked || !designer.layers.zones.visible} onClick={() => setTool("zone_bezier")} />
               <ToolButton active={tool === "channel_bezier"} label="Channel (neon flex trace)" icon={Waves} disabled={designer.layers.zones.locked || !designer.layers.zones.visible} onClick={() => setTool("channel_bezier")} />
+              <ToolButton active={tool === "zone_text"} label="Editable zone text" icon={Type} disabled={designer.layers.zones.locked || !designer.layers.zones.visible} onClick={() => setTool("zone_text")} />
+            </>
+          ) : null}
+          {activeLayer === "faceGraphic" ? (
+            <>
+              <ToolButton active={tool === "face_graphic_rect"} label="Rectangle Face Graphic (drag on canvas)" icon={Square} disabled={designer.layers.faceGraphic.locked || !designer.layers.faceGraphic.visible} onClick={() => setTool("face_graphic_rect")} />
+              <ToolButton active={tool === "face_graphic_ellipse"} label="Ellipse Face Graphic (drag on canvas)" icon={Circle} disabled={designer.layers.faceGraphic.locked || !designer.layers.faceGraphic.visible} onClick={() => setTool("face_graphic_ellipse")} />
+              <ToolButton active={tool === "face_graphic_polygon"} label="Polygon Face Graphic" icon={PenLine} disabled={designer.layers.faceGraphic.locked || !designer.layers.faceGraphic.visible} onClick={() => setTool("face_graphic_polygon")} />
+              <ToolButton active={tool === "face_graphic_bezier"} label="Bezier Face Graphic" icon={Spline} disabled={designer.layers.faceGraphic.locked || !designer.layers.faceGraphic.visible} onClick={() => setTool("face_graphic_bezier")} />
+              <ToolButton active={tool === "face_graphic_text"} label="Editable Face Graphic text" icon={Type} disabled={designer.layers.faceGraphic.locked || !designer.layers.faceGraphic.visible} onClick={() => setTool("face_graphic_text")} />
             </>
           ) : null}
           {activeLayer === "strings" ? (
@@ -1847,19 +2601,27 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
             selectedBuildAreaPointIndex={selectedBuildAreaPointIndex}
             selectedZoneId={selectedZone?.id}
             selectedZonePointIndex={selectedZonePointIndex}
+            selectedFaceGraphicId={selectedFaceGraphic?.id}
+            selectedFaceGraphicPointIndex={selectedFaceGraphicPointIndex}
+            selectedProjectionId={selectedProjection?.id}
+            selectedDerivedGeometryId={selectedDerivedGeometry?.id}
+            selectedTextId={selectedText?.id}
             selectedChannelId={selectedChannel?.id}
             selectedChannelPointIndex={selectedChannelPointIndex}
             selectedRouteId={selectedRoute?.id}
             selectedRoutePointIndex={selectedRoutePointIndex}
             selectedController={Boolean(selectedController)}
+            selectedGeometryKeys={selectedGeometryKeys}
             onViewportChange={setViewport}
             onChange={updateDesigner}
             onSelect={selectDesignerItem}
             onInsertBuildAreaPoint={insertBuildAreaPoint}
             onInsertZonePoint={insertZonePoint}
+            onInsertFaceGraphicPoint={insertFaceGraphicPoint}
             onInsertChannelPoint={insertChannelPoint}
             onInsertRoutePoint={insertRoutePoint}
             onPlaceImage={placeImageAt}
+            onCreateText={createTextAt}
             onCutRoutePoint={handleCutRoutePoint}
             onRoutePointDragEnd={autoSolderRoutePoint}
             onSolderedTerminalsDragEnd={moveSolderedTerminals}
@@ -1919,6 +2681,10 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
             onPatchArtwork={patchArtwork}
             onPatchBuildArea={patchBuildAreaVisual}
             onPatchZone={patchZoneVisual}
+            onPatchFaceGraphic={patchFaceGraphic}
+            onPatchProjection={patchProjection}
+            onPatchDerivedGeometry={patchDerivedGeometry}
+            onPatchText={patchText}
             onAddGroup={addGroup}
             onPatchGroup={patchGroup}
             onRemoveGroup={removeGroup}
@@ -1984,6 +2750,62 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
           onChange={patchOpticalTreatment}
           onRemove={removeOpticalTreatment}
         />
+      </Modal>
+      <Modal
+        open={fabricationExportOpen}
+        title="Fabrication export"
+        description="Validated vector interchange at physical 1:1 scale. Construction projections, artwork and electrical topology are excluded."
+        onClose={() => setFabricationExportOpen(false)}
+        className="max-w-4xl"
+      >
+        <div className="space-y-5">
+          <div className="grid gap-3 sm:grid-cols-3">
+            {([
+              ["includeReference", "Reference / substrate", "Build areas and resolved derived profiles"],
+              ["includeZones", "Diffusors", "Zones, channels, text and derived profiles"],
+              ["includeFaceGraphic", "Face Graphic", "Masks grouped by pass mode and filter color"]
+            ] as const).map(([key, label, detail]) => (
+              <label key={key} className="flex cursor-pointer gap-3 rounded-md border border-border-2 bg-card p-3">
+                <input
+                  type="checkbox"
+                  checked={fabricationExportOptions[key]}
+                  onChange={(event) => { setFabricationExportOptions((current) => ({ ...current, [key]: event.target.checked })); setFabricationExportResult(null); }}
+                  className="mt-0.5 h-4 w-4 accent-blue-600"
+                />
+                <span><span className="block text-body-sm font-semibold">{label}</span><span className="mt-1 block text-meta text-muted-foreground">{detail}</span></span>
+              </label>
+            ))}
+          </div>
+          <div className="grid gap-3 rounded-md border border-border-2 bg-surface-2 p-3 sm:grid-cols-2">
+            <ToolbarNumber label="DXF curve tolerance" value={fabricationExportOptions.flattenToleranceMm} suffix="mm" onChange={(flattenToleranceMm) => { setFabricationExportOptions((current) => ({ ...current, flattenToleranceMm })); setFabricationExportResult(null); }} />
+            <ToolbarNumber label="Small-feature guidance" value={fabricationExportOptions.minimumFeatureMm} suffix="mm" onChange={(minimumFeatureMm) => { setFabricationExportOptions((current) => ({ ...current, minimumFeatureMm })); setFabricationExportResult(null); }} />
+          </div>
+          {fabricationExportResult ? (
+            <div className="space-y-3">
+              <div className="flex flex-wrap gap-2">
+                <Badge>{fabricationExportResult.pathCount} paths</Badge>
+                <Badge>{fabricationExportResult.layerCount} output layers</Badge>
+                <Badge className="font-mono">sha256:{fabricationExportResult.sourceChecksum.slice(0, 12)}…</Badge>
+              </div>
+              {fabricationExportResult.issues.length ? (
+                <div className="max-h-56 space-y-2 overflow-y-auto rounded-md border border-border-2 p-3">
+                  {fabricationExportResult.issues.map((issue, index) => (
+                    <div key={`${issue.code}:${issue.objectId ?? index}`} className={`rounded-md border px-3 py-2 text-body-sm ${issue.severity === "error" ? "border-red-500/40 bg-red-500/10 text-red-800 dark:text-red-200" : "border-amber-500/40 bg-amber-500/10 text-amber-900 dark:text-amber-100"}`}>
+                      <span className="font-semibold uppercase">{issue.severity}</span> · {issue.message}
+                    </div>
+                  ))}
+                </div>
+              ) : <Alert title="Fabrication geometry valid" variant="success">No blocking errors or guidance warnings were found.</Alert>}
+            </div>
+          ) : (
+            <p className="text-body-sm text-muted-foreground">SVG preserves native Bezier paths and compound contours. DXF flattens curves deterministically to closed millimeter polylines using the selected tolerance.</p>
+          )}
+          <div className="flex flex-wrap justify-end gap-2 border-t border-border pt-4">
+            <Button type="button" variant="outline" onClick={() => setFabricationExportOpen(false)}>Cancel</Button>
+            <Button type="button" variant="outline" disabled={fabricationExporting} onClick={() => void exportFabrication("dxf")}><Download className="h-4 w-4" /> {fabricationExporting ? "Validating…" : "Export DXF"}</Button>
+            <Button type="button" disabled={fabricationExporting} onClick={() => void exportFabrication("svg")}><Download className="h-4 w-4" /> {fabricationExporting ? "Validating…" : "Export SVG"}</Button>
+          </div>
+        </div>
       </Modal>
       <Modal
         open={compileIssuesOpen}
@@ -2836,6 +3658,7 @@ function PlayerModal({
     async function tick(now: number) {
       const latestResult = resultRef.current;
       if (cancelled || !latestResult?.partitura) return;
+      requestAnimationFrame(tick);
       const elapsedMs = now - (playStartRef.current ?? now);
       const nextTimeMs = Math.floor((playOffsetRef.current + elapsedMs) % activeSceneDurationMs);
 
@@ -2843,19 +3666,20 @@ function PlayerModal({
         inFlightRef.current = true;
         lastRequestRef.current = now;
         try {
-          const response = await fetch("/api/lighting/partituras/simulate-frame", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ partitura: latestResult.partitura, sceneId: document.activeSceneId, timeMs: nextTimeMs })
+          const preview = await requestPlaybackPreview<Preview>(async () => {
+            const response = await fetch("/api/lighting/partituras/simulate-frame", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ partitura: latestResult.partitura, sceneId: document.activeSceneId, timeMs: nextTimeMs })
+            });
+            if (!response.ok) return { ok: false };
+            return response.json() as Promise<{ ok: boolean; preview?: Preview }>;
           });
-          const payload = (await response.json()) as { ok: boolean; preview?: Preview };
-          if (!cancelled && payload.ok && payload.preview) onResult({ ...latestResult, preview: payload.preview });
+          if (!cancelled && preview) onResult({ ...latestResult, preview });
         } finally {
           inFlightRef.current = false;
         }
       }
-
-      requestAnimationFrame(tick);
     }
 
     const frame = requestAnimationFrame(tick);

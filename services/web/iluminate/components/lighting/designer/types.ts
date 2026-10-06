@@ -3,20 +3,26 @@ import type {
   DesignerChannelForm,
   DesignerControllerForm,
   DesignerForm,
+  DesignerFaceGraphicForm,
   DesignerArtworkForm,
   DesignerLayersForm,
   DesignerPoint,
   DesignerRouteForm,
   DesignerRouteKind,
+  DesignerText,
   DesignerZoneForm
 } from "@/lib/lighting/partitura-model";
 
-export type DesignerTool = "select" | "measure" | "image_place" | "build_area_rect" | "build_area_ellipse" | "build_area_polygon" | "build_area_bezier" | "zone_rect" | "zone_ellipse" | "zone_polygon" | "zone_bezier" | "channel_bezier" | "led_string" | "data_cable" | "cut" | "pan";
+export type DesignerTool = "select" | "measure" | "image_place" | "build_area_rect" | "build_area_ellipse" | "build_area_polygon" | "build_area_bezier" | "reference_text" | "zone_rect" | "zone_ellipse" | "zone_polygon" | "zone_bezier" | "zone_text" | "channel_bezier" | "face_graphic_rect" | "face_graphic_ellipse" | "face_graphic_polygon" | "face_graphic_bezier" | "face_graphic_text" | "led_string" | "data_cable" | "cut" | "pan";
 export type DesignerRouteTerminal = { routeId: string; pointIndex: number };
 export type DesignerSelection =
   | { type: "artwork"; id: string }
   | { type: "build_area"; id: string; pointIndex?: number }
   | { type: "zone"; id: string; pointIndex?: number }
+  | { type: "face_graphic"; id: string; pointIndex?: number }
+  | { type: "projection"; id: string }
+  | { type: "derived_geometry"; id: string }
+  | { type: "text"; id: string }
   | { type: "channel"; id: string; pointIndex?: number }
   | { type: "light_source"; id: string }
   | { type: "route"; id: string; pointIndex?: number }
@@ -26,9 +32,9 @@ export type ResizeHandle = "nw" | "ne" | "sw" | "se";
 export type DesignerViewport = { x: number; y: number; width: number; height: number };
 export type DesignerActiveLayer = keyof DesignerLayersForm;
 export type DesignerRouteDraft = { kind: DesignerRouteKind; points: DesignerPoint[]; routeId?: string };
-export type DesignerShapeDraft = { target: "build_area" | "zone" | "channel"; mode: "straight" | "bezier"; points: DesignerPoint[] };
+export type DesignerShapeDraft = { target: "build_area" | "zone" | "channel" | "face_graphic"; mode: "straight" | "bezier"; points: DesignerPoint[] };
 export type DesignerPrimitiveDraft = {
-  target: "build_area" | "zone";
+  target: "build_area" | "zone" | "face_graphic";
   shape: "rect" | "ellipse";
   start: DesignerPoint;
   bounds: { x: number; y: number; width: number; height: number };
@@ -40,6 +46,7 @@ export function designerLayerForSelection(selection: DesignerSelection): Designe
   if (!selection) return null;
   if (selection.type === "artwork" || selection.type === "build_area") return "artwork";
   if (selection.type === "zone" || selection.type === "channel") return "zones";
+  if (selection.type === "face_graphic") return "faceGraphic";
   if (selection.type === "light_source") return "lightSources";
   if (selection.type === "controller") return "hardware";
   if (selection.type === "route") return "strings";
@@ -71,6 +78,11 @@ export type DesignerDrag =
   | { type: "zone-resize"; zoneId: string; handle: ResizeHandle; start: { x: number; y: number }; original: DesignerZoneForm }
   | { type: "zone-point"; zoneId: string; pointIndex: number }
   | { type: "zone-handle"; zoneId: string; pointIndex: number; handle: "in" | "out" }
+  | { type: "face-graphic-move"; elementId: string; start: { x: number; y: number }; original: DesignerFaceGraphicForm }
+  | { type: "face-graphic-resize"; elementId: string; handle: ResizeHandle; start: { x: number; y: number }; original: DesignerFaceGraphicForm }
+  | { type: "face-graphic-point"; elementId: string; pointIndex: number }
+  | { type: "face-graphic-handle"; elementId: string; pointIndex: number; handle: "in" | "out" }
+  | { type: "text-move"; textId: string; start: { x: number; y: number }; original: DesignerText }
   | { type: "channel-move"; channelId: string; start: { x: number; y: number }; original: DesignerChannelForm }
   | { type: "channel-point"; channelId: string; pointIndex: number }
   | { type: "channel-handle"; channelId: string; pointIndex: number; handle: "in" | "out" }
@@ -88,6 +100,12 @@ export type DesignerCanvasHit =
   | { type: "zone_point"; id: string; pointIndex: number }
   | { type: "zone_handle"; id: string; pointIndex: number; handle: "in" | "out" }
   | { type: "zone_resize"; id: string; handle: ResizeHandle }
+  | { type: "face_graphic"; id: string }
+  | { type: "face_graphic_point"; id: string; pointIndex: number }
+  | { type: "face_graphic_resize"; id: string; handle: ResizeHandle }
+  | { type: "projection"; id: string }
+  | { type: "derived_geometry"; id: string }
+  | { type: "text"; id: string }
   | { type: "channel"; id: string }
   | { type: "channel_point"; id: string; pointIndex: number }
   | { type: "route"; id: string }

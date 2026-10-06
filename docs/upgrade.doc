@@ -1,0 +1,882 @@
+# Iluminate Designer Upgrade Plan
+
+**Reading policy:** supporting regression and decision history. Do not read this
+entire document for routine Designer work. Current behavior is summarized in
+`.agent/DESIGNER_HANDOFF.md`, and current interaction rules live in
+`.agent/DESIGNER_UX_CONTRACT.md`.
+
+**Status:** canonical working plan; phases 0–10 implemented, operator-software round-trip pending field acceptance  
+**Created:** 2026-10-05  
+**Scope:** geometry authoring, Face Graphic, manufacturing preparation and vector export  
+**Rule:** keep this document aligned whenever the upgrade scope, sequencing or architecture changes.
+
+## Implementation checkpoint — 2026-10-05
+
+Phases 0–2 are implemented as a deliberately UI-neutral architectural upgrade:
+
+- schema `designerSchemaVersion: 2` and canonical `designer.geometries` records;
+- stable `geometryId` references from build areas, zones and channels;
+- backward-compatible normalization of legacy inline geometry;
+- canonical geometry wins when a saved v2 document loads, while all current
+  editing mutations commit through `canonicalizeDesignerGeometry`;
+- pure common geometry command boundary;
+- centralized layer/tool policy for every existing geometric drawing tool;
+- explicit geometry and electrical engine APIs over the shared Paper canvas;
+- regression coverage for migration, authority, commands and tool dispatch.
+
+During phase 2, inline bounds/points remain in semantic objects as a compatibility
+view so the existing renderer and interaction code can remain visually stable.
+They are synchronized at the mutation boundary and rebuilt from canonical
+geometry on load; they are not a second editorial authority. Removing that
+view is a later internal cleanup, after dependent modules consume geometry IDs
+directly.
+
+Phase 3 adds the first user-visible result of that foundation:
+
+- a native `Face Graphic` canvas category and persisted layer settings;
+- rectangle, ellipse, polygon and Bezier tools routed through the common
+  geometry policy;
+- native Face Graphic objects with canonical `geometryId` references;
+- `opaque`, `clear` and `translucent` pass modes;
+- translucent filter color, defaulting to `#FFFFFF`;
+- selection, ordering, visibility, layer lock, object lock, copy/paste, delete
+  and node editing;
+- explicit exclusion from the electrical compile signature and pixelMap.
+
+The Design canvas uses a magenta fabrication preview for these objects. The
+actual front-light buffer filter was added in phase 8; phase 3 did not
+introduce a naive overlay into Animate.
+
+Phase 4 adds associative `Project Geometry` between geometric layers:
+
+- the projection stores a stable reference to canonical source geometry rather
+  than duplicating it;
+- source edits are reflected immediately in the target layer;
+- projected geometry is cyan, dashed and read-only on the canvas;
+- `Break Link` materializes an independent object in Reference, Diffusors or
+  Face Graphic;
+- deleting a source preserves a selectable broken reference that can be
+  relinked;
+- direct and chained dependency cycles are rejected;
+- projections remain outside the electrical compile signature and pixelMap.
+
+The command is intentionally contextual: select a geometric object, choose the
+target layer, then use `Project Geometry`. Selecting a projection exposes its
+source, status and `Break Link`. This keeps projection as an object operation,
+not as a second drawing tool.
+
+Phase 5 adds compound paths and destructive boolean commands to the shared
+geometry engine:
+
+- canonical paths may persist multiple closed contours with `evenodd` fill;
+- holes affect rendering, canvas hit testing and zone pixel membership;
+- Shift/Ctrl/Command-click builds a same-layer geometric selection;
+- `Union`, `Subtract`, `Intersect` and `Exclude` resolve through Paper.js and
+  create one native result in the selected layer;
+- native input objects are consumed atomically while projected operands remain
+  linked construction references;
+- closed-profile, self-intersection and duplicate-contour validation blocks an
+  invalid boolean result;
+- zone topology participates in the Compile signature and invalid profiles are
+  reported as compile errors.
+
+`Subtract` is order-sensitive: the first selected profile is the base and later
+profiles are removed from it. Compound contour nodes are intentionally not
+edited individually in this phase; the complete result can be moved or resized.
+
+Phase 6 adds associative fabrication transforms over canonical or projected
+geometry:
+
+- `Offset Path` creates a persisted derived profile with a signed distance in
+  millimeters and `round`, `miter` or `bevel` joins;
+- miter offsets expose their limit and fall back deterministically when that
+  limit is exceeded;
+- `Fillet` creates a persisted derived profile with a radius in millimeters and
+  may affect all corners or an explicit one-based corner list;
+- excessive radii clamp to the available neighboring legs and surface a
+  warning instead of silently producing invalid geometry;
+- derived profiles remain live through shallow acyclic chains such as
+  source → projection → offset → fillet;
+- holes and compound contours are preserved, while collapse, invalid topology,
+  broken sources and cycles remain visible recoverable states;
+- `Break Link` materializes the current result as independent native geometry.
+
+Derived profiles render as amber construction geometry and remain electrically
+neutral until materialized into a native semantic object. Their implementation
+is shared by every geometric layer; layer components must not reproduce offset
+or fillet calculations.
+
+Phase 7 adds controlled editable text and deterministic outlines:
+
+- Reference, Diffusors and Face Graphic reuse one contextual Text tool;
+- `designer.texts` persists content, target layer, controlled font ID and hash,
+  size in millimeters, tracking, line height, alignment and position;
+- the initial controlled catalog contains versioned Iluminate Sans regular and
+  bold resources and never substitutes a browser/OS font;
+- single-line and basic multiline text render on canvas, remain selectable,
+  movable, lockable, visible and editable after save/reload;
+- `Convert to paths` verifies the font SHA-256 before generating normal compound
+  Bezier geometry with even-odd glyph holes;
+- conversion atomically replaces editable text with a native Reference, Zone or
+  Face Graphic profile, so immediate Undo restores the text;
+- the outline generator applies the font's glyph advances and kerning plus the
+  persisted tracking/alignment values and is covered by deterministic tests.
+
+Text itself remains electrically neutral. Converting text in Diffusors creates
+a normal Zone whose resulting geometry participates in Compile and pixel
+membership exactly like any other native zone.
+
+## 1. Objective
+
+Evolve the current Designer into the single source of truth for the illuminated
+sign and its fabrication geometry, without turning Iluminate into a general
+purpose vector illustration application.
+
+The intended workflow is:
+
+```text
+Iluminate Designer
+-> visual and fabrication geometry
+-> zones and lighting construction
+-> electrical strings and controller topology
+-> optical simulation with Face Graphic
+-> validated vector export
+-> cutter/router operator software
+```
+
+This should replace avoidable round trips such as:
+
+```text
+Fusion 360 -> Inkscape -> cutter software -> manual corrections
+```
+
+Iluminate will export open vector interchange files. It will not generate STL,
+machine-specific binary cutting files, toolpaths or CNC programs.
+
+## 2. Non-Negotiable Decisions
+
+- `iluminate.partituras.document_json` remains the only editable source of truth.
+- Paper.js remains the interactive canvas/view adapter; Paper.js project JSON is
+  never persisted as the domain model.
+- The canvas, coordinate system, viewport, zoom, pan, snapping, selection and
+  Undo/Redo infrastructure are shared.
+- Geometry authoring and electrical routing are separate domain engines over
+  that shared canvas.
+- Improvements to Pen/Bezier/node editing are implemented once in the geometry
+  engine and become available to every geometric layer whose policy permits them.
+- Electrical tools remain exclusive to Strings/Hardware where appropriate.
+- `Face Graphic` is a real canvas layer with native vector geometry. It is not
+  an imported image and is not an effect target.
+- A Face Graphic region controls only final frontal light passage:
+  `opaque`, `clear` or `translucent`.
+- Face Graphic does not own diffusion, LED gap, intensity, softness, throw,
+  beam angle, strings or effects. Those remain responsibilities of zones and
+  their Lighting Setups.
+- Face Graphic never changes electrical topology, `pixelMap`, zone membership,
+  clip targeting or the firmware artifact.
+- Manufacturing export contains geometry, physical scale, layers and material
+  separation. Cutter/router configuration and tool compensation remain the
+  operator's responsibility.
+
+## 3. Target Architecture
+
+```text
+Shared Designer Canvas
+├── viewport / coordinates / rulers
+├── zoom / pan / snapping
+├── selection / hit dispatch
+├── tool registry
+├── Undo / Redo command boundary
+└── Paper.js adapter
+
+Domain engines
+├── Geometry engine
+│   ├── paths and compound paths
+│   ├── rectangles / ellipses / polygons
+│   ├── Bezier nodes and handles
+│   ├── text and text-to-path
+│   ├── associative projections
+│   ├── offsets
+│   ├── fillets
+│   ├── boolean operations
+│   └── fabrication validation / vector export
+│
+└── Electrical engine
+    ├── controller ports
+    ├── data cables
+    ├── LED strings
+    ├── DIN / DOUT terminals
+    ├── solder joints
+    ├── route cutting
+    ├── joint detachment
+    ├── electrical topology
+    └── serial traversal / pixelMap input
+```
+
+The engines share coordinates and canvas services, but neither engine may
+interpret or mutate the other engine's domain objects.
+
+### 3.1 Tool dispatch
+
+```text
+Artwork      -> geometric/reference tools
+Diffusors    -> geometric tools and Channel
+Face Graphic -> geometric and fabrication tools
+Strings      -> electrical route tools
+Hardware     -> controller selection/configuration
+```
+
+Clipboard commands may be common at the UI level, but duplication semantics
+are owned by each engine. In particular, duplicating an electrical route must
+not copy solder joints or controller/output connectivity accidentally.
+
+### 3.2 Cut operations are not interchangeable
+
+```text
+Split geometric path
+-> divides vector geometry
+
+Cut electrical route
+-> creates or changes terminals
+-> breaks electrical continuity
+-> reconciles joints
+-> may change serial topology
+```
+
+The electrical scissors workflow remains in the electrical engine.
+
+## 4. Canonical Geometry Model
+
+Introduce a shared persisted geometry representation. Semantic objects should
+reference geometry rather than each keeping incompatible path implementations.
+
+Conceptual shape:
+
+```ts
+type DesignerGeometry = {
+  id: string;
+  kind: "rect" | "ellipse" | "path";
+  points: DesignerPoint[];
+  closed: boolean;
+  fillRule: "nonzero" | "evenodd";
+  transform: DesignerTransform;
+  derivedOperation?: DesignerDerivedOperation;
+};
+```
+
+Consumers:
+
+```text
+Zone                -> geometryId
+Build Area          -> geometryId
+Channel             -> geometryId + width/topology
+Face Graphic region -> geometryId + passMode/filterColor
+```
+
+Electrical routes remain separate because their nodes, terminals, direction
+and connectivity have different semantics.
+
+The persisted geometry in `document_json` is the editorial truth. The geometry
+engine is the sole deterministic interpreter and transformer of that data.
+Paper.js renders it and translates pointer events into commands.
+
+## 5. Face Graphic Contract
+
+Face Graphic is the top physical definition layer placed over the front face
+of a light box, light chamber or dimensional letter.
+
+Conceptual object:
+
+```ts
+type DesignerFaceGraphicElement = {
+  id: string;
+  name: string;
+  geometryId: string;
+  passMode: "opaque" | "clear" | "translucent";
+  filterColor: string;
+  visible: boolean;
+  locked: boolean;
+};
+```
+
+Defaults:
+
+```text
+passMode: translucent
+filterColor: #FFFFFF
+```
+
+Optical behavior:
+
+```text
+opaque      -> output = 0
+clear       -> output = computed frontal light
+translucent -> output = computed frontal light × filterColor
+```
+
+The operation is a color transmission/filter operation, not a repaint. White
+light through red translucent vinyl becomes red. Blue light through an ideal
+red filter becomes nearly black.
+
+Face Graphic must not expose:
+
+- LED or pixel density;
+- gap or source distance;
+- intensity;
+- softness or diffusion;
+- beam direction or beam angle;
+- falloff or throw;
+- strings;
+- effects or clips.
+
+Editor visibility/opacity controls are presentation aids and must not become
+physical transmission controls.
+
+Face Graphic changes:
+
+- mark `document_json` dirty;
+- invalidate the optical preview;
+- invalidate fabrication export;
+- do not invalidate electrical Compile;
+- do not modify `generated_json` for firmware.
+
+## 6. Associative Project Geometry
+
+Support a Fusion-like `Project Geometry` workflow between geometric layers.
+
+```text
+Select source geometry on another layer
+-> Project Geometry into active layer
+-> linked, read-only projected reference
+```
+
+Conceptual record:
+
+```ts
+type DesignerProjection = {
+  id: string;
+  sourceGeometryId: string;
+  targetLayer: DesignerLayerId;
+  linked: boolean;
+};
+```
+
+Rules:
+
+- Linked projection resolves from its source; it is not a second authoritative
+  copy of the path.
+- Changes to the source update the projection.
+- Projected geometry has a distinct canvas presentation.
+- `Break Link` materializes an independent editable geometry object.
+- Source deletion produces a recoverable broken-reference issue.
+- Relinking must be possible.
+- Dependency cycles are invalid.
+- Undo/Redo treats project, relink and break-link as complete commands.
+- A projected reference is excluded from fabrication output unless it is used
+  by a fabricable derived profile or is explicitly materialized.
+
+Derived operation example:
+
+```text
+Zone geometry
+-> linked projection into Face Graphic
+-> outward offset
+-> corner fillets
+-> fabricable Face Graphic profile
+```
+
+## 7. Geometry Operations
+
+### 7.1 Compound paths and boolean operations
+
+Required before reliable mask/cut export:
+
+- compound paths;
+- holes;
+- even-odd fill behavior;
+- union;
+- subtract;
+- intersect;
+- exclude;
+- closed-profile validation;
+- self-intersection detection;
+- duplicate contour detection.
+
+These operations allow letters with counters (`A`, `O`, `P`, `R`), opaque
+backgrounds with illuminated windows and composed logos.
+
+### 7.2 Offset Path
+
+Required controls:
+
+- inward/outward distance in millimeters;
+- `round`, `miter` and `bevel` joins;
+- miter limit;
+- live preview;
+- support for open and closed paths;
+- preservation of holes and compound paths;
+- deterministic handling of self-intersections;
+- clear failure/warning behavior when an inward offset collapses a profile.
+
+Offset is a design/fabrication operation. Machine tool compensation remains in
+the cutter/router CAM workflow.
+
+### 7.3 General fillets
+
+Generalize the existing Channel-node `radiusMm` concept:
+
+- apply to one or several eligible corners;
+- radius in millimeters;
+- live preview;
+- clamp when the requested radius does not fit;
+- warn when a fillet consumes a short neighboring leg;
+- persist parametrically;
+- recalculate when upstream projected geometry changes.
+
+Dogbone and T-bone relief may be added later for CNC-fit workflows. They are
+not required for the first fillet release.
+
+### 7.4 Derived-operation graph
+
+Operations should remain editable rather than immediately destroying their
+inputs:
+
+```text
+source -> projection -> offset -> fillet -> resolved profile
+```
+
+The first version needs only a shallow acyclic dependency graph, not a complete
+Fusion-style feature timeline.
+
+## 8. Text And Text-To-Path
+
+Editable text concept:
+
+```ts
+type DesignerText = {
+  id: string;
+  text: string;
+  fontId: string;
+  fontSizeMm: number;
+  tracking: number;
+  lineHeight: number;
+  alignment: "left" | "center" | "right";
+  transform: DesignerTransform;
+};
+```
+
+Requirements:
+
+- Do not depend on fonts installed in the operator's browser/OS.
+- Use a controlled font resource with a stable identifier and content hash.
+- Preserve deterministic glyph shaping and kerning.
+- `Convert to paths` produces normal compound Bezier geometry.
+- Conversion must preserve glyph holes.
+- Conversion is reversible through immediate Undo.
+- Manufacturing export converts all remaining text to outlines.
+- Saved/reloaded text must produce identical outlines.
+
+Initial scope:
+
+- controlled Iluminate font catalog;
+- single-line and basic multiline text;
+- size, tracking, line height and alignment;
+- conversion to paths.
+
+Deferred:
+
+- client font upload and licensing workflow;
+- text on path;
+- advanced typographic layout;
+- automatic script-font welding.
+
+## 9. Rendering Pipeline
+
+Refactor Animate optical rendering into explicit buffers:
+
+```text
+Rear/external buffer
+├── Halo
+└── Wall Wash
+
+Front-light buffer
+├── front material/acrylic presentation
+└── all Front light sources
+
+Face Graphic pass
+└── applies opaque/clear/translucent only to front-light buffer
+
+Final composition
+├── workspace/background
+├── rear/external buffer
+├── filtered front-light buffer
+└── editor selection/outlines
+```
+
+A naive top-level multiply sprite is invalid because it would also filter the
+background, Halo and Wall Wash.
+
+Required deterministic visual cases:
+
+- white light under red translucent graphic -> red;
+- red light under red translucent graphic -> red;
+- blue light under red translucent graphic -> nearly off;
+- clear region -> unchanged light;
+- opaque region -> fully blocked light;
+- Halo and Wall Wash -> unaffected by Face Graphic;
+- multiple zones -> continuous spatial mask alignment;
+- zoom/pan -> no mask drift.
+
+`As built` includes Face Graphic. `LED map` continues to expose the raw mapped
+pixel output for diagnostics.
+
+## 10. Manufacturing Export
+
+### 10.1 SVG first
+
+SVG is the first canonical interchange export because it matches the web/vector
+model and is accepted by modern sign/cutting workflows.
+
+Requirements:
+
+- physical scale 1:1;
+- explicit millimeter dimensions;
+- stable `viewBox`;
+- paths/compound paths only for manufacturing geometry;
+- text converted to paths;
+- grouped output by Designer layer and Face Graphic pass/color;
+- exclude guides, projected construction references, selection visuals,
+  electrical routes and controller graphics unless explicitly requested in a
+  separate fabrication drawing;
+- project/partitura identity, generation time and source checksum metadata.
+
+### 10.2 DXF second
+
+DXF supports path-oriented router/CAM interchange.
+
+Requirements:
+
+- explicit units;
+- named layers by operation/material;
+- deterministic Bezier/spline flattening tolerance when the destination
+  workflow requires polylines;
+- no raster content;
+- no machine toolpaths.
+
+### 10.3 Later compatibility
+
+- vector PDF;
+- EPS for older sign/cutter software;
+- no proprietary AI/CDR generation;
+- no STL;
+- no machine-specific binary cutting format.
+
+### 10.4 Export validation
+
+Block or warn on:
+
+- open contours where a closed profile is required;
+- self-intersections;
+- duplicate contours;
+- invalid holes;
+- geometry outside the fabrication area;
+- features smaller than configured fabrication guidance;
+- broken projection/derived-operation references;
+- unresolved text/font resources;
+- invalid or missing units;
+- empty output.
+
+## 11. Work Phases
+
+### Phase 0 — Contract and regression baseline — COMPLETE
+
+- Finalize architecture and schema decisions.
+- Add `designerSchemaVersion` or equivalent migration discriminator.
+- Capture legacy/current document fixtures.
+- Add regression coverage for current geometric and electrical workflows.
+- Record current Designer smoke scenarios.
+
+Exit criteria:
+
+- Existing Designer behavior is reproducibly covered before refactoring.
+
+### Phase 1 — Internal separation with no UX change — COMPLETE
+
+- Extract shared canvas services.
+- Extract geometry-domain operations.
+- Extract electrical-domain operations.
+- Introduce layer-aware tool dispatch.
+- Preserve current Paper.js presentation and behavior.
+
+Exit criteria:
+
+- Current tests/build/smoke pass with no intended UI behavior change.
+
+### Phase 2 — Canonical geometry and commands — COMPLETE
+
+- Introduce canonical geometry records and geometry identifiers.
+- Make zones/build areas/channels consume the shared model.
+- Add common geometry commands.
+- Add layer policies/factories.
+- Migrate legacy inline geometry on normalization/save.
+
+Exit criteria:
+
+- One Pen/Bezier implementation edits every geometric layer.
+- Existing documents reopen without loss.
+
+### Phase 3 — Face Graphic authoring layer — COMPLETE
+
+- Add the Face Graphic category and layer settings.
+- Add native geometric Face Graphic objects.
+- Reuse shared geometric tools.
+- Add pass mode and filter color.
+- Add layer/object selection, ordering, lock and visibility.
+
+Exit criteria:
+
+- Face Graphic persists and edits without affecting Compile or wiring.
+
+### Phase 4 — Associative Project Geometry — COMPLETE
+
+- Add linked projections between geometric layers.
+- Add visual distinction and read-only behavior.
+- Add Break Link, relink and broken-reference handling.
+- Add cycle detection.
+
+Exit criteria:
+
+- Editing source geometry updates the target-layer projection.
+
+### Phase 5 — Compound paths and booleans — COMPLETE
+
+- Add holes and fill rules.
+- Add union/subtract/intersect/exclude.
+- Add topology validation.
+
+Exit criteria:
+
+- Letter counters and opaque masks with transparent windows resolve correctly.
+
+### Phase 6 — Offset and fillets — COMPLETE
+
+- Add robust offset operation and join styles.
+- Generalize parametric fillets.
+- Add derived-operation recalculation and failure reporting.
+
+Exit criteria:
+
+- A projected zone can become an offset, filleted, fabricable profile.
+
+### Phase 7 — Text and outlines — COMPLETE
+
+- Add controlled font resources.
+- Add editable text tool/object.
+- Add deterministic text-to-path conversion.
+- Add text/path persistence and Undo/Redo coverage.
+
+Exit criteria:
+
+- Text produces identical manufacturing geometry across save/reload/export.
+
+### Phase 8 — Face Graphic optical renderer — COMPLETE
+
+- Split rear/external and front-light buffers.
+- Render Face Graphic vector masks.
+- Apply pass/filter semantics only to frontal illumination.
+- Preserve raw LED-map diagnostics.
+
+Exit criteria:
+
+- All canonical optical cases pass without changing Halo/Wall Wash behavior.
+
+Implementation checkpoint (2026-10-06): Animate now builds explicit
+rear/external and front-light Pixi containers. A full-canvas vector
+transmission texture applies `opaque`, `clear` and RGB `translucent` semantics
+only to the front container; compound paths retain their holes, overlaps obey
+the persisted front-to-back order, and the uncovered face is opaque whenever
+a Face Graphic exists. Layer/object visibility and opacity remain editor aids
+and do not alter physical transmission. Direct-mounted Front LEDs are included
+in the filtered buffer. LED Map bypasses the optical pass and remains raw.
+
+### Phase 9 — Fabrication export — COMPLETE
+
+- Implement SVG generation and validation.
+- Add downloadable export UX.
+- Implement DXF after SVG is stable.
+- Add PDF/EPS only from validated real operator requirements.
+
+Exit criteria:
+
+- Export opens at 1:1 scale in selected cutter/router software and contains
+  only intended manufacturing geometry.
+
+Implementation checkpoint (2026-10-06): the Designer exports selected
+Reference/substrate, Diffusors and Face Graphic fabrication categories through
+one validated canonical pipeline. SVG uses explicit millimeter dimensions,
+stable `viewBox`, path-only geometry, compound fill rules, native Beziers,
+material/pass groups and identity/time/source-checksum metadata. Editable text
+is deterministically outlined during export without mutating the document.
+DXF declares millimeter units and named operation/material layers, and flattens
+ellipses/Beziers to closed `LWPOLYLINE` entities with an operator-controlled,
+deterministic tolerance. Artwork, linked construction projections, controller,
+routes and pixels are excluded. Blocking diagnostics cover invalid/open/self-
+intersecting/duplicate geometry, invalid compound contours, unresolved text,
+broken derived operations, invalid units/tolerance and empty output; out-of-
+bounds and small-feature guidance remain warnings. PDF/EPS remain deferred.
+
+### Phase 10 — Integration and documentation — COMPLETE
+
+- Complete old/new document migration coverage.
+- Complete end-to-end electrical and geometry regression.
+- Update all affected `.agent` and `docs` contracts.
+- Regenerate generated context after the structural change is complete.
+
+Exit criteria:
+
+- Production build and full Designer smoke pass.
+- Documentation and executable behavior agree.
+
+Implementation checkpoint (2026-10-06): legacy and current Designer documents
+now normalize without restoring deleted sample zones or routes; explicitly
+empty authored collections remain empty, while fields absent from genuinely
+older documents still receive compatible defaults. Current schema documents
+are normalization-idempotent across save/reload, including canonical compound
+geometry, projections, derived operations, Face Graphic, text and electrical
+routes. Live offset/fillet operations targeting Face Graphic now persist their
+own mask pass/color, participate in the As built frontal-light filter, retain
+those semantics when materialized and export into the matching SVG/DXF material
+group. They remain electrically neutral and never filter Halo or Wall Wash.
+
+The deterministic Designer regression now contains 68 tests across 19 suites,
+including an integrated geometry -> linked projection -> offset -> fillet ->
+red translucent Face Graphic -> electrical compile -> save/reload -> SVG/DXF
+scenario, plus controller/cable movement and detach behavior. The production
+build, TypeScript validation, container deployment and HTTP/API smoke passed on
+2026-10-06. Opening the interchange in each operator's chosen proprietary
+cutter or router software remains an operational acceptance check rather than
+an automated repository test.
+
+## 12. Required Regression Coverage
+
+### Geometry
+
+- Create/edit rectangle, ellipse, polygon and Bezier.
+- Insert/delete nodes.
+- Edit handles and node types.
+- Move/resize/duplicate/delete.
+- Compound paths and holes.
+- Boolean operations.
+- Offset corner cases.
+- Fillet limits.
+- Text conversion.
+- Projection update/break/relink/cycle rejection.
+- Save/reload and Undo/Redo.
+
+### Electrical
+
+- Controller-port to data-cable solder.
+- Cable/string and same-kind joints.
+- Controller dragging with connected cables.
+- Route/joint dragging.
+- Cut route.
+- Detach joint.
+- Delete-route cleanup.
+- Electrical traversal and serial order.
+- Compile errors/warnings and generated pixelMap.
+
+### Renderer
+
+- Front/halo/wall-wash baseline behavior.
+- Face Graphic opaque/clear/translucent behavior.
+- Multiple zones and overlapping front sources.
+- Pan/zoom/resize alignment.
+- Preview regeneration while timeline playback is active.
+
+### Export
+
+- Unit and scale checks.
+- Path/compound-path fidelity.
+- Text outlines.
+- Layer/material grouping.
+- Open/self-intersecting/duplicate path diagnostics.
+- SVG round-trip through representative cutter software.
+- DXF round-trip through representative router/CAM software.
+
+## 13. End-To-End Acceptance Scenario
+
+1. Create editable text.
+2. Convert the text to compound paths.
+3. Use the geometry as a visual zone.
+4. Project it associatively into Face Graphic.
+5. Apply an outward offset.
+6. Apply fabrication fillets.
+7. Mark the resulting Face Graphic region as red translucent vinyl.
+8. Draw controller, data cable and LED string topology.
+9. Compile the physical layout.
+10. Apply a white effect to the corresponding lighting target.
+11. Confirm that only the Face Graphic opening is illuminated and appears red.
+12. Confirm that Halo/Wall Wash, if present, are not filtered.
+13. Edit the source geometry and confirm that the linked projection and derived
+    operations update.
+14. Break the projection link and edit the resulting independent geometry.
+15. Export SVG and DXF at physical 1:1 scale.
+16. Open the export in representative cutter/router operator software.
+17. Reopen a pre-upgrade partitura and confirm no geometry or wiring loss.
+18. Cut/detach an electrical route and confirm that vector-engine changes did
+    not alter electrical semantics.
+
+## 14. Validation Commands
+
+At minimum for each implementation slice:
+
+```bash
+git diff --check
+docker compose up -d --build iluminate-web
+```
+
+Run the web Designer test suite and add focused deterministic tests for every
+new geometry operation. Continue using the Designer API/manual smoke described
+in `.agent/EXECUTION_MAP.md`.
+
+If the lighting-core package receives shared fabrication/geometry contracts,
+also run:
+
+```bash
+docker run --rm -v "$PWD/services/lighting-core:/work" -w /work node:22-alpine sh -c "npm ci && npm test"
+```
+
+## 15. Documentation Updates Required During Implementation
+
+Keep these files aligned as phases land:
+
+- `.agent/RULES.md` when precedence or mandatory context changes;
+- `.agent/DESIGNER_UX_CONTRACT.md` for the new Face Graphic layer/tools;
+- `.agent/DESIGNER_HANDOFF.md` for actual Designer behavior and modules;
+- `.agent/ILUMINATE_UI_STANDARDS.md` for fabrication UI conventions;
+- `.agent/PIXELMAP_COMPOSER_DIRECTION.md` for geometry/Face Graphic boundaries;
+- `.agent/IMPLEMENTATION_PLAN.md` for completed phases;
+- `.agent/AI_CONTEXT_LED_ORCHESTRATION_PLATFORM.md` for product architecture;
+- `docs/partitura-lifecycle.md` for authoring, preview and invalidation rules.
+
+After a major structural or context-inventory change, regenerate the compact
+manifests (they are not routine startup context):
+
+- `.agent/BRAIN_MAP.md`;
+- `.agent/AI_CONTEXT_PACK.md`.
+
+## 16. Scope Rejection Checklist
+
+Reject or explicitly defer work that would turn this upgrade into:
+
+- a general illustration/painting application;
+- a desktop publishing system;
+- a photomanipulation suite;
+- a complete CAD constraint solver;
+- a CAM/toolpath generator;
+- a nesting/production-optimization suite in the first release;
+- an STL/3D manufacturing pipeline;
+- a machine-driver or proprietary cutter-file generator.
+
+The accepted scope is precise 2D sign-fabrication geometry integrated with
+Iluminate lighting design, electrical topology and optical simulation.

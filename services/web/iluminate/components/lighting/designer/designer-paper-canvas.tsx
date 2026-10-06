@@ -1,47 +1,53 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { DesignerArtworkForm, DesignerBuildAreaForm, DesignerChannelForm, DesignerForm, DesignerPoint, DesignerRouteForm, DesignerRouteKind, DesignerZoneForm } from "@/lib/lighting/partitura-model";
+import type { DesignerArtworkForm, DesignerBuildAreaForm, DesignerChannelForm, DesignerFaceGraphicForm, DesignerForm, DesignerPoint, DesignerRouteForm, DesignerRouteKind, DesignerZoneForm } from "@/lib/lighting/partitura-model";
 import { drawPaperAnimationMap, drawPaperDesigner, setPaperScope } from "./designer-paper-renderer";
 import type { CompiledDesignerLayout } from "./designer-compiler";
 import { HorizontalRuler, VerticalRuler } from "./designer-ui";
 import {
   clamp,
   clampViewport,
-  createRouteFromDraft,
-  findNearbyControllerPort,
-  findNearbySolderTerminal,
-  findJointGroup,
+  nextDesignerItemNumber,
+  pickDesignerHit,
+  pickRouteSegmentHit,
+  snapValue,
+  worldHitTolerance,
+  normalizeViewportAspect
+} from "./designer-geometry";
+import {
   movedChannel,
   movedShape,
   nearestChannelInsertIndex,
-  nextDesignerItemNumber,
   nearestShapeInsertIndex,
   pickBezierHandle,
-  pickDesignerHit,
-  pickRouteSegmentHit,
   pointInsideDesignerShape,
   pointNearShapeStroke,
   pointsBounds,
   primitiveShapeBounds,
   resizedBuildArea,
   resizedZone,
-  sameSnapPoint,
-  snapValue,
   smoothBezierPoints,
   smoothOpenBezierPoints,
+  updateBezierHandle,
   updateChannelBezierHandle,
   updateChannelPoint,
-  updatePolygonPoint,
-  updateBezierHandle,
-  worldHitTolerance,
+  updatePolygonPoint
+} from "./geometry/designer-geometry-engine";
+import {
+  createRouteFromDraft,
+  findJointGroup,
+  findNearbyControllerPort,
+  findNearbySolderTerminal,
   moveControllerWithSolderedCables,
   moveRoutePoint,
   moveRouteTerminals,
   moveRouteWithSolderedTerminals,
-  normalizeViewportAspect
-} from "./designer-geometry";
+  sameSnapPoint
+} from "./electrical/designer-electrical-engine";
+import { ELECTRICAL_TOOLS, geometryToolAllowedOnLayer, geometryToolPolicy } from "./canvas/designer-tool-policy";
 import type { DesignerActiveLayer, DesignerDrag, DesignerMeasurement, DesignerPrimitiveDraft, DesignerRouteDraft, DesignerRouteTerminal, DesignerSelection, DesignerShapeDraft, DesignerTool, DesignerViewport, PaperApi, ResizeHandle } from "./types";
+import { DESIGNER_FONT_CATALOG, designerFontUrl } from "@/lib/lighting/designer-font-catalog";
 
 export type DesignerAnimationPixel = {
   output: number;
@@ -63,18 +69,26 @@ export function DesignerStudioCanvas({
   selectedBuildAreaPointIndex,
   selectedZoneId,
   selectedZonePointIndex,
+  selectedFaceGraphicId,
+  selectedFaceGraphicPointIndex,
+  selectedProjectionId,
+  selectedDerivedGeometryId,
+  selectedTextId,
   selectedChannelId,
   selectedChannelPointIndex,
   selectedRouteId,
   selectedRoutePointIndex,
   selectedController,
+  selectedGeometryKeys,
   onViewportChange,
   onChange,
   onSelect,
   onInsertBuildAreaPoint,
   onInsertZonePoint,
+  onInsertFaceGraphicPoint,
   onInsertChannelPoint,
   onPlaceImage,
+  onCreateText,
   onInsertRoutePoint,
   onCutRoutePoint,
   onRoutePointDragEnd,
@@ -96,18 +110,26 @@ export function DesignerStudioCanvas({
   selectedBuildAreaPointIndex?: number;
   selectedZoneId?: string;
   selectedZonePointIndex?: number;
+  selectedFaceGraphicId?: string;
+  selectedFaceGraphicPointIndex?: number;
+  selectedProjectionId?: string;
+  selectedDerivedGeometryId?: string;
+  selectedTextId?: string;
   selectedChannelId?: string;
   selectedChannelPointIndex?: number;
   selectedRouteId?: string;
   selectedRoutePointIndex?: number;
   selectedController?: boolean;
+  selectedGeometryKeys?: string[];
   onViewportChange: (viewport: DesignerViewport) => void;
   onChange: (designer: DesignerForm) => void;
-  onSelect: (selection: DesignerSelection) => void;
+  onSelect: (selection: DesignerSelection, additive?: boolean) => void;
   onInsertBuildAreaPoint: (buildAreaId: string, insertIndex: number, point: DesignerPoint) => void;
   onInsertZonePoint: (zoneId: string, insertIndex: number, point: DesignerPoint) => void;
+  onInsertFaceGraphicPoint: (elementId: string, insertIndex: number, point: DesignerPoint) => void;
   onInsertChannelPoint: (channelId: string, insertIndex: number, point: DesignerPoint) => void;
   onPlaceImage: (point: DesignerPoint) => void;
+  onCreateText: (point: DesignerPoint) => void;
   onInsertRoutePoint: (routeId: string, point: DesignerPoint) => void;
   onCutRoutePoint: (routeId: string, pointIndex: number) => void;
   onRoutePointDragEnd: (routeId: string, pointIndex: number, finalPoint: DesignerPoint) => void;
@@ -137,6 +159,18 @@ export function DesignerStudioCanvas({
     const observer = new MutationObserver(syncColorMode);
     observer.observe(window.document.documentElement, { attributes: true, attributeFilter: ["class"] });
     return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    void Promise.all(DESIGNER_FONT_CATALOG.map(async (resource) => {
+      const face = new FontFace(resource.family, `url(${designerFontUrl(resource.id)})`, { weight: String(resource.weight) });
+      await face.load();
+      if (!cancelled) window.document.fonts.add(face);
+    })).then(() => {
+      if (!cancelled) setCanvasSize((size) => ({ ...size }));
+    }).catch(() => undefined);
+    return () => { cancelled = true; };
   }, []);
 
   useEffect(() => {
@@ -213,11 +247,17 @@ export function DesignerStudioCanvas({
       selectedBuildAreaPointIndex,
       selectedZoneId,
       selectedZonePointIndex,
+      selectedFaceGraphicId,
+      selectedFaceGraphicPointIndex,
+      selectedProjectionId,
+      selectedDerivedGeometryId,
+      selectedTextId,
       selectedChannelId,
       selectedChannelPointIndex,
       selectedRouteId,
       selectedRoutePointIndex,
       selectedController: Boolean(selectedController),
+      selectedGeometryKeys,
       routeDraft,
       shapeDraft,
       primitiveDraft,
@@ -226,10 +266,10 @@ export function DesignerStudioCanvas({
       colorMode
     });
     loadedPaper.view.update();
-  }, [activeLayer, animationDiffusers, animationPixels, canvasSize, colorMode, compiledLayout, designer, measurement, paperReady, presentation, primitiveDraft, routeDraft, selectedBuildAreaId, selectedBuildAreaPointIndex, selectedChannelId, selectedChannelPointIndex, selectedController, selectedRouteId, selectedRoutePointIndex, selectedZoneId, selectedZonePointIndex, shapeDraft, viewport]);
+  }, [activeLayer, animationDiffusers, animationPixels, canvasSize, colorMode, compiledLayout, designer, measurement, paperReady, presentation, primitiveDraft, routeDraft, selectedBuildAreaId, selectedBuildAreaPointIndex, selectedChannelId, selectedChannelPointIndex, selectedController, selectedDerivedGeometryId, selectedFaceGraphicId, selectedFaceGraphicPointIndex, selectedGeometryKeys, selectedProjectionId, selectedRouteId, selectedRoutePointIndex, selectedTextId, selectedZoneId, selectedZonePointIndex, shapeDraft, viewport]);
 
   useEffect(() => {
-    if (activeLayer !== "strings" || (tool !== "led_string" && tool !== "data_cable")) setRouteDraft(null);
+    if (activeLayer !== "strings" || !ELECTRICAL_TOOLS.has(tool) || tool === "cut") setRouteDraft(null);
   }, [activeLayer, tool]);
 
   useEffect(() => {
@@ -237,7 +277,7 @@ export function DesignerStudioCanvas({
   }, [tool]);
 
   useEffect(() => {
-    const isPrimitiveTool = tool === "build_area_rect" || tool === "build_area_ellipse" || tool === "zone_rect" || tool === "zone_ellipse";
+    const isPrimitiveTool = geometryToolPolicy(tool)?.construction === "primitive";
     if (!isPrimitiveTool) setPrimitiveDraft(null);
   }, [tool]);
 
@@ -292,6 +332,10 @@ export function DesignerStudioCanvas({
 
   function patchZone(zoneId: string, patch: Partial<DesignerZoneForm>) {
     onChange({ ...designer, zones: designer.zones.map((zone) => (zone.id === zoneId ? { ...zone, ...patch } : zone)) });
+  }
+
+  function patchFaceGraphic(elementId: string, patch: Partial<DesignerFaceGraphicForm>) {
+    onChange({ ...designer, faceGraphics: designer.faceGraphics.map((element) => (element.id === elementId ? { ...element, ...patch } : element)) });
   }
 
   function patchChannel(channelId: string, patch: Partial<DesignerChannelForm>) {
@@ -387,17 +431,12 @@ export function DesignerStudioCanvas({
   }
 
   function handleShapeDrawClick(event: React.PointerEvent<HTMLCanvasElement>) {
-    const target = tool === "build_area_polygon" || tool === "build_area_bezier"
-      ? "build_area"
-      : tool === "zone_polygon" || tool === "zone_bezier"
-        ? "zone"
-        : tool === "channel_bezier"
-          ? "channel"
-          : null;
-    const mode = tool === "build_area_bezier" || tool === "zone_bezier" || tool === "channel_bezier" ? "bezier" : "straight";
-    if (!target) return;
-    if (target === "build_area" && (activeLayer !== "reference" && activeLayer !== "artwork" || !designer.layers.artwork.visible || designer.layers.artwork.locked)) return;
-    if ((target === "zone" || target === "channel") && (activeLayer !== "zones" || designer.layers.zones.locked || !designer.layers.zones.visible)) return;
+    const policy = geometryToolPolicy(tool);
+    if (!policy || policy.construction !== "path" || !geometryToolAllowedOnLayer(tool, activeLayer)) return;
+    const { target, mode } = policy;
+    if (target === "build_area" && (!designer.layers.artwork.visible || designer.layers.artwork.locked)) return;
+    if ((target === "zone" || target === "channel") && (designer.layers.zones.locked || !designer.layers.zones.visible)) return;
+    if (target === "face_graphic" && (designer.layers.faceGraphic.locked || !designer.layers.faceGraphic.visible)) return;
 
     const rawPoint = eventPoint(event);
     const point = { x: snapValue(rawPoint.x, designer.snapCm), y: snapValue(rawPoint.y, designer.snapCm) };
@@ -436,7 +475,7 @@ export function DesignerStudioCanvas({
         };
         onChange({ ...designer, buildAreas: [...designer.buildAreas, buildArea] });
         onSelect({ type: "build_area", id: buildArea.id });
-      } else {
+      } else if (target === "zone") {
         const next = nextDesignerItemNumber(designer.zones, "zone_");
         const zone: DesignerZoneForm = {
           id: `zone_${next}`,
@@ -454,6 +493,26 @@ export function DesignerStudioCanvas({
         };
         onChange({ ...designer, zones: [...designer.zones, zone] });
         onSelect({ type: "zone", id: zone.id });
+      } else {
+        const next = nextDesignerItemNumber(designer.faceGraphics, "face_graphic_");
+        const element: DesignerFaceGraphicForm = {
+          id: `face_graphic_${next}`,
+          name: `Face Graphic ${next}`,
+          shape: "polygon",
+          x: bounds.x,
+          y: bounds.y,
+          width: bounds.width,
+          height: bounds.height,
+          points: polygonPoints,
+          pathMode: draftMode,
+          passMode: "translucent",
+          filterColor: "#FFFFFF",
+          visible: true,
+          locked: false,
+          opacity: 1
+        };
+        onChange({ ...designer, faceGraphics: [...designer.faceGraphics, element] });
+        onSelect({ type: "face_graphic", id: element.id });
       }
       setShapeDraft(null);
       onToolChange("select");
@@ -554,6 +613,35 @@ export function DesignerStudioCanvas({
       if (zone) patchZone(drag.zoneId, updateBezierHandle(zone, drag.pointIndex, drag.handle, point, designer.snapCm));
       return;
     }
+    if (drag.type === "face-graphic-move") {
+      patchFaceGraphic(drag.elementId, movedShape(drag.original, point.x - drag.start.x, point.y - drag.start.y, designer.snapCm));
+      return;
+    }
+    if (drag.type === "face-graphic-resize") {
+      patchFaceGraphic(drag.elementId, resizedZone(drag.original, drag.handle, point.x - drag.start.x, point.y - drag.start.y, designer.snapCm, { preserveAspect: event.ctrlKey || event.metaKey, fromCenter: event.shiftKey }));
+      return;
+    }
+    if (drag.type === "face-graphic-point") {
+      const element = designer.faceGraphics.find((entry) => entry.id === drag.elementId);
+      if (element) patchFaceGraphic(drag.elementId, updatePolygonPoint(element, drag.pointIndex, point, designer.snapCm));
+      return;
+    }
+    if (drag.type === "face-graphic-handle") {
+      const element = designer.faceGraphics.find((entry) => entry.id === drag.elementId);
+      if (element) patchFaceGraphic(drag.elementId, updateBezierHandle(element, drag.pointIndex, drag.handle, point, designer.snapCm));
+      return;
+    }
+    if (drag.type === "text-move") {
+      onChange({
+        ...designer,
+        texts: designer.texts.map((text) => text.id === drag.textId ? {
+          ...text,
+          x: snapValue(drag.original.x + point.x - drag.start.x, designer.snapCm),
+          y: snapValue(drag.original.y + point.y - drag.start.y, designer.snapCm)
+        } : text)
+      });
+      return;
+    }
     if (drag.type === "channel-move") {
       patchChannel(drag.channelId, movedChannel(drag.original, point.x - drag.start.x, point.y - drag.start.y, designer.snapCm));
       return;
@@ -611,11 +699,24 @@ export function DesignerStudioCanvas({
       startPanDrag(event);
       return;
     }
-    if (tool === "build_area_rect" || tool === "build_area_ellipse" || tool === "zone_rect" || tool === "zone_ellipse") {
-      const target = tool.startsWith("build_area") ? "build_area" : "zone";
-      const shape = tool.endsWith("ellipse") ? "ellipse" : "rect";
-      if (target === "build_area" && ((activeLayer !== "reference" && activeLayer !== "artwork") || designer.layers.artwork.locked || !designer.layers.artwork.visible)) return;
-      if (target === "zone" && (activeLayer !== "zones" || designer.layers.zones.locked || !designer.layers.zones.visible)) return;
+    if (tool === "reference_text" || tool === "zone_text" || tool === "face_graphic_text") {
+      const targetLayer = tool === "reference_text" ? "reference" : tool === "zone_text" ? "zones" : "faceGraphic";
+      const settings = designer.layers[targetLayer];
+      if (settings.locked || !settings.visible) return;
+      const rawPoint = eventPoint(event);
+      onCreateText({ x: snapValue(rawPoint.x, designer.snapCm), y: snapValue(rawPoint.y, designer.snapCm) });
+      onToolChange("select");
+      return;
+    }
+    const geometryPolicy = geometryToolPolicy(tool);
+    if (geometryPolicy?.construction === "primitive") {
+      const { target } = geometryPolicy;
+      if (target === "channel") return;
+      const shape = geometryPolicy.shape === "ellipse" ? "ellipse" : "rect";
+      if (!geometryToolAllowedOnLayer(tool, activeLayer)) return;
+      if (target === "build_area" && (designer.layers.artwork.locked || !designer.layers.artwork.visible)) return;
+      if (target === "zone" && (designer.layers.zones.locked || !designer.layers.zones.visible)) return;
+      if (target === "face_graphic" && (designer.layers.faceGraphic.locked || !designer.layers.faceGraphic.visible)) return;
       const rawPoint = eventPoint(event);
       const start = { x: snapValue(rawPoint.x, designer.snapCm), y: snapValue(rawPoint.y, designer.snapCm) };
       event.stopPropagation();
@@ -644,7 +745,7 @@ export function DesignerStudioCanvas({
       onSelect(null);
       return;
     }
-    if (tool === "build_area_polygon" || tool === "build_area_bezier" || tool === "zone_polygon" || tool === "zone_bezier" || tool === "channel_bezier") {
+    if (geometryPolicy?.construction === "path") {
       handleShapeDrawClick(event);
       return;
     }
@@ -691,6 +792,18 @@ export function DesignerStudioCanvas({
         return;
       }
     }
+    if (activeLayer === "faceGraphic" && selectedFaceGraphicId && typeof selectedFaceGraphicPointIndex === "number") {
+      const element = designer.faceGraphics.find((entry) => entry.id === selectedFaceGraphicId);
+      const node = element?.pathMode === "bezier" ? element.points?.[selectedFaceGraphicPointIndex] : null;
+      const handle = node ? pickBezierHandle(node, point, tolerance) : null;
+      if (handle) {
+        onSelect({ type: "face_graphic", id: selectedFaceGraphicId, pointIndex: selectedFaceGraphicPointIndex });
+        if (designer.layers.faceGraphic.locked) return;
+        event.currentTarget.setPointerCapture(event.pointerId);
+        setDrag({ type: "face-graphic-handle", elementId: selectedFaceGraphicId, pointIndex: selectedFaceGraphicPointIndex, handle });
+        return;
+      }
+    }
     const hit = pickDesignerHit(designer, activeLayer, point, viewport, canvasSize);
     if (tool === "pan" || (tool === "select" && !hit)) {
       onSelect(null);
@@ -700,6 +813,20 @@ export function DesignerStudioCanvas({
     if (!hit) {
       onSelect(null);
       return;
+    }
+
+    if (tool === "select" && (event.shiftKey || event.ctrlKey || event.metaKey)) {
+      const additiveSelection: DesignerSelection = hit.type === "build_area" ? { type: "build_area", id: hit.id }
+        : hit.type === "zone" ? { type: "zone", id: hit.id }
+          : hit.type === "face_graphic" ? { type: "face_graphic", id: hit.id }
+            : hit.type === "projection" ? { type: "projection", id: hit.id }
+              : hit.type === "derived_geometry" ? { type: "derived_geometry", id: hit.id }
+                : hit.type === "text" ? { type: "text", id: hit.id }
+              : null;
+      if (additiveSelection) {
+        onSelect(additiveSelection, true);
+        return;
+      }
     }
 
     event.stopPropagation();
@@ -755,6 +882,42 @@ export function DesignerStudioCanvas({
       onSelect({ type: "zone", id: hit.id, pointIndex: hit.pointIndex });
       if (designer.layers.zones.locked) return;
       setDrag({ type: "zone-point", zoneId: hit.id, pointIndex: hit.pointIndex });
+    }
+    if (hit.type === "face_graphic") {
+      const element = designer.faceGraphics.find((entry) => entry.id === hit.id);
+      if (!element) return;
+      onSelect({ type: "face_graphic", id: element.id });
+      if (designer.layers.faceGraphic.locked || element.locked) return;
+      setDrag({ type: "face-graphic-move", elementId: element.id, start: point, original: element });
+    }
+    if (hit.type === "face_graphic_resize") {
+      const element = designer.faceGraphics.find((entry) => entry.id === hit.id);
+      if (!element) return;
+      onSelect({ type: "face_graphic", id: element.id });
+      if (designer.layers.faceGraphic.locked || element.locked) return;
+      setDrag({ type: "face-graphic-resize", elementId: element.id, handle: hit.handle, start: point, original: element });
+    }
+    if (hit.type === "face_graphic_point") {
+      onSelect({ type: "face_graphic", id: hit.id, pointIndex: hit.pointIndex });
+      const element = designer.faceGraphics.find((entry) => entry.id === hit.id);
+      if (designer.layers.faceGraphic.locked || element?.locked) return;
+      setDrag({ type: "face-graphic-point", elementId: hit.id, pointIndex: hit.pointIndex });
+    }
+    if (hit.type === "projection") {
+      onSelect({ type: "projection", id: hit.id });
+      return;
+    }
+    if (hit.type === "derived_geometry") {
+      onSelect({ type: "derived_geometry", id: hit.id });
+      return;
+    }
+    if (hit.type === "text") {
+      const text = designer.texts.find((entry) => entry.id === hit.id);
+      if (!text) return;
+      onSelect({ type: "text", id: text.id });
+      if (designer.layers[text.targetLayer].locked || text.locked) return;
+      setDrag({ type: "text-move", textId: text.id, start: point, original: text });
+      return;
     }
     if (hit.type === "channel") {
       const channel = designer.channels.find((entry) => entry.id === hit.id);
@@ -820,6 +983,12 @@ export function DesignerStudioCanvas({
       if (channel && insertIndex !== null) onInsertChannelPoint(channel.id, insertIndex, point);
       return;
     }
+    if (activeLayer === "faceGraphic" && selectedFaceGraphicId) {
+      const element = designer.faceGraphics.find((entry) => entry.id === selectedFaceGraphicId);
+      const insertIndex = element ? nearestShapeInsertIndex(element, point) : null;
+      if (element && insertIndex !== null) onInsertFaceGraphicPoint(element.id, insertIndex, point);
+      return;
+    }
     if (activeLayer === "strings") {
       const routeHit = pickRouteSegmentHit(designer.routes, point, viewport, canvasSize);
       if (routeHit) onInsertRoutePoint(routeHit.routeId, point);
@@ -872,7 +1041,7 @@ export function DesignerStudioCanvas({
                   };
                   onChange({ ...designer, buildAreas: [...designer.buildAreas, buildArea] });
                   onSelect({ type: "build_area", id: buildArea.id });
-                } else {
+                } else if (endedPrimitiveDraft.target === "zone") {
                   const next = nextDesignerItemNumber(designer.zones, "zone_");
                   const zone: DesignerZoneForm = {
                     id: `zone_${next}`,
@@ -885,6 +1054,21 @@ export function DesignerStudioCanvas({
                   };
                   onChange({ ...designer, zones: [...designer.zones, zone] });
                   onSelect({ type: "zone", id: zone.id });
+                } else {
+                  const next = nextDesignerItemNumber(designer.faceGraphics, "face_graphic_");
+                  const element: DesignerFaceGraphicForm = {
+                    id: `face_graphic_${next}`,
+                    name: `Face Graphic ${next}`,
+                    shape: endedPrimitiveDraft.shape,
+                    ...bounds,
+                    passMode: "translucent",
+                    filterColor: "#FFFFFF",
+                    visible: true,
+                    locked: false,
+                    opacity: 1
+                  };
+                  onChange({ ...designer, faceGraphics: [...designer.faceGraphics, element] });
+                  onSelect({ type: "face_graphic", id: element.id });
                 }
                 onToolChange("select");
               }

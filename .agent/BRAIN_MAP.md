@@ -1,38 +1,38 @@
-# BRAIN_MAP
+# Iluminate Brain Map
 
-- Generated UTC: `2026-10-01T00:15:13Z`
-- Repo root: `/srv/iluminate`
-- Git branch: `main`
-- Git commit: `86f6802`
+> Generated structural snapshot. It is not an instruction file or a source of
+> product truth. Start with `.agent/RULES.md`.
 
-## 1. MAPA DE INTENCIONES (ILUMINATE)
+## Snapshot
 
-| Carpeta | Responsabilidad tecnica | Importancia (1-5) |
-|---|---|---:|
-| `compose.yml` | Compose local actual; validar antes de tocar infraestructura. | 4 |
-| `services/web/iluminate` | Next.js UI, portal, editor/simulador inicial y adaptadores temporales. | 5 |
-| `services/lighting-core` | Dominio LED: rutas fisicas, pixelMap, zones, groups, partitura, scenes, validation y deployments. | 5 |
-| `services/auth` | Identidad, organizaciones, roles, permisos, sesiones y auth API. | 4 |
-| `services/simulator` | Simulacion reusable cuando salga del prototipo web. | 4 |
-| `services/device-protocol` | Contratos cloud/controlador y estado deseado/reportado. | 4 |
-| `services/firmware` | Notas de contrato y spikes temporales; firmware PlatformIO organizado en repo externo. | 4 |
-| `docs` | Documentacion de arquitectura y ciclo de vida de partitura. | 5 |
-| `.agent` | Reglas operativas y contexto maestro para agentes. | 5 |
+- Generated UTC: `2026-10-06T17:28:42Z`
+- Repository root: `/srv/iluminate`
+- Git branch: `HETZNER-DEV-2026-Setiembre-30`
+- Git commit: `91f2ae7`
+- Worktree: `dirty` (45 changed paths, excluding generated context files)
+- Status fingerprint: `dca6248ba2ccfdeb17b2ca8b8a1342c603203c74c738d2f703f36e52e81dddc5`
+- Tracked diff fingerprint: `3a6190d6c5b6fda41c9a6187408b132b72b308309ebd080ea40e3b72958dcffb`
 
-## 2. LIMITES DE ARQUITECTURA
+The commit identifies the base revision. When the worktree is dirty, the two
+fingerprints distinguish the local state without copying diffs or secrets into
+this file. Untracked file contents are never read for fingerprinting.
 
-- Este repo produce y valida partituras; el firmware ESP32 organizado vive en repo externo PlatformIO.
-- El modelo de dominio vive en `lighting-core`, no en el web.
-- Auth vive en `auth`, no en `lighting-core`.
-- El web no se conecta directo a Postgres.
-- El ESP32 externo ejecuta partitura validada, no codigo arbitrario.
-- El hardware se modela aqui solo como tres salidas logicas: `chain.output` 1, 2 y 3.
-- El sistema es multitenant por diseno; toda tabla persistente de negocio debe contemplar `client_id`.
-- PostgreSQL es la base de datos objetivo.
-- Mantener separados el cableado fisico (controller, data cables, LED strings y nodos) y los objetivos visuales (zones y groups). Los segmentos/rangos logicos no son flujo normal de autoria; el pixelMap los deriva cuando haga falta.
-- Leer `.agent/EFFECT_TARGETING_MODEL.md` antes de cambiar compilacion, pixelMap, zonas, grupos, efectos o simulador.
+## Service Ownership
 
-## 3. SERVICIOS DOCKER ACTUALES
+| Path | Owner |
+|---|---|
+| `services/web/iluminate` | Authenticated Next.js UI, Designer and UI adapters. |
+| `services/web/iluminate-public` | Public site and read-only public experiences. |
+| `services/web/iluminate-prompt-builder` | Internal generator for scoped AI change contracts. |
+| `services/lighting-core` | Canonical LED, effect, partitura and validation domain. |
+| `services/auth` | Identity, sessions, organizations, roles and permissions. |
+| `services/simulator` | Reusable simulation domain as it leaves the web prototype. |
+| `services/device-protocol` | Cloud/controller protocol contracts. |
+| `services/firmware` | Compatibility notes and temporary spikes; organized firmware is external. |
+| `docs` | Lifecycle and operational runbooks selected by task. |
+| `.agent` | AI router, durable contracts and generated context metadata. |
+
+## Compose Services
 
 ```text
 iluminate-public-web
@@ -40,10 +40,32 @@ iluminate-web
 postgres
 ```
 
-## 4. TOPOLOGIA DE TRABAJO
+## Context Inventory
+
+| Document | Role |
+|---|---|
+| `AGENTS.md` | Repository-level pointer to the mandatory AI rules. |
+| `.agent/RULES.md` | Mandatory AI procedure and context router. |
+| `.agent/ILUMINATE_BOOTSTRAP.md` | Human guide for assigning work to AI. |
+| `.agent/AI_CONTEXT_LED_ORCHESTRATION_PLATFORM.md` | Product/domain direction. |
+| `.agent/FILESYSTEM_GUARDRAILS.md` | Service ownership and dependency boundaries. |
+| `.agent/DESIGNER_UX_CONTRACT.md` | Authoritative Designer interaction contract. |
+| `.agent/DESIGNER_HANDOFF.md` | Current Designer implementation handoff. |
+| `.agent/PIXELMAP_COMPOSER_DIRECTION.md` | Composer and physical mapping direction. |
+| `.agent/EFFECT_TARGETING_MODEL.md` | Effect targets and coordinate semantics. |
+| `.agent/ILUMINATE_UI_STANDARDS.md` | Authenticated web UI standards. |
+| `.agent/PUBLIC_SITE_DIRECTION.md` | Public-site product and visual direction. |
+| `.agent/DATABASE_MODEL.md` | Persistence and tenant model. |
+| `.agent/IMPLEMENTATION_PLAN.md` | Roadmap and phase status. |
+| `.agent/EXECUTION_MAP.md` | Validation routes and commands. |
+| `services/web/iluminate-prompt-builder/README.md` | Internal prompt-builder usage and ownership. |
+| `docs/partitura-lifecycle.md` | Partitura source/compile/generate/device lifecycle. |
+| `docs/production-deployment.md` | Production operations runbook. |
+| `docs/upgrade.doc` | Completed Designer upgrade specification and regression history. |
+
+## Current Service Topology
 
 ```text
-services
 services/auth
 services/auth/api
 services/auth/contracts
@@ -54,21 +76,10 @@ services/auth/tests
 services/device-protocol
 services/firmware
 services/firmware/esp32-fastled-spike
-services/firmware/esp32-fastled-spike/fixtures
 services/lighting-core
 services/lighting-core/api
 services/lighting-core/contracts
 services/lighting-core/domain
-services/lighting-core/domain/chains
-services/lighting-core/domain/clips
-services/lighting-core/domain/controllers
-services/lighting-core/domain/deployments
-services/lighting-core/domain/effects
-services/lighting-core/domain/partituras
-services/lighting-core/domain/scenes
-services/lighting-core/domain/segments
-services/lighting-core/domain/tracks
-services/lighting-core/domain/zones
 services/lighting-core/fixtures
 services/lighting-core/generators
 services/lighting-core/migrations
@@ -81,192 +92,10 @@ services/lighting-core/validators
 services/simulator
 services/web
 services/web/iluminate
+services/web/iluminate-prompt-builder
 services/web/iluminate-public
-services/web/iluminate-public/app
-services/web/iluminate-public/app/about
-services/web/iluminate-public/app/for-sign-makers
-services/web/iluminate-public/app/handoff
-services/web/iluminate-public/app/learn
-services/web/iluminate-public/app/projects
-services/web/iluminate-public/app/technology
-services/web/iluminate-public/app/templates
-services/web/iluminate-public/assets
-services/web/iluminate-public/components
-services/web/iluminate-public/content
-services/web/iluminate-public/public
-services/web/iluminate-public/public/brand
-services/web/iluminate-public/types
-services/web/iluminate/app
-services/web/iluminate/app/[group]
-services/web/iluminate/app/api
-services/web/iluminate/app/console
-services/web/iluminate/app/forgot-password
-services/web/iluminate/app/login
-services/web/iluminate/app/partituras
-services/web/iluminate/app/projects
-services/web/iluminate/app/reset-password
-services/web/iluminate/app/settings
-services/web/iluminate/app/start
-services/web/iluminate/components
-services/web/iluminate/components/crud
-services/web/iluminate/components/lighting
-services/web/iluminate/components/portal
-services/web/iluminate/components/ui
-services/web/iluminate/components/workspace
-services/web/iluminate/docs
-services/web/iluminate/lib
-services/web/iluminate/lib/lighting
-services/web/iluminate/lib/server
-services/web/iluminate/public
-services/web/iluminate/public/vendor
-services/web/iluminate/services
-services/web/iluminate/services/web
 ```
 
-## 5. ARCHIVOS RELEVANTES
-
-```text
-services/README.md
-services/auth/README.md
-services/auth/api/README.md
-services/auth/contracts/README.md
-services/auth/domain/README.md
-services/auth/migrations/.gitkeep
-services/auth/migrations/2026-08-19_create_auth_password_reset_tokens.sql
-services/auth/migrations/2026-08-19_create_auth_security_baseline.sql
-services/auth/storage/README.md
-services/auth/tests/.gitkeep
-services/device-protocol/README.md
-services/firmware/README.md
-services/firmware/esp32-fastled-spike/README.md
-services/firmware/esp32-fastled-spike/esp32-fastled-spike.ino
-services/firmware/esp32-fastled-spike/fixtures/one-strip-100.partitura.json
-services/lighting-core/README.md
-services/lighting-core/api/README.md
-services/lighting-core/contracts/README.md
-services/lighting-core/domain/README.md
-services/lighting-core/domain/chains/.gitkeep
-services/lighting-core/domain/clips/.gitkeep
-services/lighting-core/domain/controllers/.gitkeep
-services/lighting-core/domain/deployments/.gitkeep
-services/lighting-core/domain/effects/.gitkeep
-services/lighting-core/domain/effects/aurora.ts
-services/lighting-core/domain/effects/catalog.ts
-services/lighting-core/domain/effects/chase.ts
-services/lighting-core/domain/effects/color.ts
-services/lighting-core/domain/effects/comet.ts
-services/lighting-core/domain/effects/fade.ts
-services/lighting-core/domain/effects/flame.ts
-services/lighting-core/domain/effects/math.ts
-services/lighting-core/domain/effects/module.ts
-services/lighting-core/domain/effects/off.ts
-services/lighting-core/domain/effects/pulse.ts
-services/lighting-core/domain/effects/solid.ts
-services/lighting-core/domain/effects/spatial-fill.ts
-services/lighting-core/domain/effects/spatial-wave.ts
-services/lighting-core/domain/effects/toggle.ts
-services/lighting-core/domain/effects/wipe.ts
-services/lighting-core/domain/partituras/types.ts
-services/lighting-core/domain/scenes/.gitkeep
-services/lighting-core/domain/segments/.gitkeep
-services/lighting-core/domain/tracks/.gitkeep
-services/lighting-core/domain/zones/.gitkeep
-services/lighting-core/fixtures/README.md
-services/lighting-core/fixtures/partitura-v1-invalid-output.json
-services/lighting-core/fixtures/partitura-v1-invalid-references.json
-services/lighting-core/fixtures/partitura-v1-minimal.json
-services/lighting-core/generators/partitura-generator.ts
-services/lighting-core/index.ts
-services/lighting-core/migrations/.gitkeep
-services/lighting-core/migrations/2026-08-19_create_iluminate_operational_tables.sql
-services/lighting-core/migrations/2026-08-22_create_iluminate_partituras.sql
-services/lighting-core/migrations/2026-08-22_remove_partitura_revisions.sql
-services/lighting-core/migrations/2026-09-09_projects_many_partituras.sql
-services/lighting-core/migrations/2026-09-11_remove_legacy_partitura_layout.sql
-services/lighting-core/package-lock.json
-services/lighting-core/package.json
-services/lighting-core/pixel-map/builders.ts
-services/lighting-core/pixel-map/create-pixel-map.ts
-services/lighting-core/player/scene-player.ts
-services/lighting-core/player/ws2812b-simulator.ts
-services/lighting-core/schemas/README.md
-services/lighting-core/schemas/partitura.v1.schema.json
-services/lighting-core/storage/README.md
-services/lighting-core/tests/.gitkeep
-services/lighting-core/tests/validate-fixtures.test.ts
-services/lighting-core/tsconfig.json
-services/lighting-core/validators/README.md
-services/lighting-core/validators/partitura-validator.ts
-services/simulator/README.md
-services/web/iluminate-public/Dockerfile
-services/web/iluminate-public/README.md
-services/web/iluminate-public/app/globals.css
-services/web/iluminate-public/app/icon.svg
-services/web/iluminate-public/app/layout.tsx
-services/web/iluminate-public/app/not-found.tsx
-services/web/iluminate-public/app/page.tsx
-services/web/iluminate-public/app/robots.ts
-services/web/iluminate-public/app/sitemap.ts
-services/web/iluminate-public/assets/apple-touch-icon.png
-services/web/iluminate-public/assets/iluminate-brand-master-editable_Emblema Oscuro.svg
-services/web/iluminate-public/assets/iluminate-brand-master-editable_Favicon.svg
-services/web/iluminate-public/assets/iluminate-brand-master-editable_Mark Light.svg
-services/web/iluminate-public/assets/iluminate-brand-master-editable_Wordmark Light.svg
-services/web/iluminate-public/assets/iluminate-brand-master-editable_Wordmark oscuro.svg
-services/web/iluminate-public/components/brand.tsx
-services/web/iluminate-public/components/hero-stage.tsx
-services/web/iluminate-public/components/lesson-list.tsx
-services/web/iluminate-public/components/project-card.tsx
-services/web/iluminate-public/components/project-player.tsx
-services/web/iluminate-public/components/project-visual.tsx
-services/web/iluminate-public/components/reveal.tsx
-services/web/iluminate-public/components/site-footer.tsx
-services/web/iluminate-public/components/site-header.tsx
-services/web/iluminate-public/content/site.ts
-services/web/iluminate-public/eslint.config.mjs
-services/web/iluminate-public/next-env.d.ts
-services/web/iluminate-public/next.config.mjs
-services/web/iluminate-public/package-lock.json
-services/web/iluminate-public/package.json
-services/web/iluminate-public/tsconfig.json
-services/web/iluminate/Dockerfile
-services/web/iluminate/README.md
-services/web/iluminate/app/globals.css
-services/web/iluminate/app/icon.svg
-services/web/iluminate/app/layout.tsx
-services/web/iluminate/app/not-found.tsx
-services/web/iluminate/app/page.tsx
-services/web/iluminate/docs/theme-standard.md
-services/web/iluminate/lib/api.ts
-services/web/iluminate/lib/client-debug.ts
-services/web/iluminate/lib/feedback.ts
-services/web/iluminate/lib/modules.ts
-services/web/iluminate/lib/request-url.ts
-services/web/iluminate/lib/start-intent.ts
-services/web/iluminate/lib/types.ts
-services/web/iluminate/lib/utils.ts
-services/web/iluminate/next-env.d.ts
-services/web/iluminate/next.config.mjs
-services/web/iluminate/package-lock.json
-services/web/iluminate/package.json
-services/web/iluminate/postcss.config.mjs
-services/web/iluminate/tailwind.config.ts
-services/web/iluminate/tsconfig.json
-services/web/iluminate/tsconfig.tsbuildinfo
-.agent/AI_CONTEXT_LED_ORCHESTRATION_PLATFORM.md
-.agent/AI_CONTEXT_PACK.md
-.agent/BRAIN_MAP.md
-.agent/DATABASE_MODEL.md
-.agent/DESIGNER_HANDOFF.md
-.agent/DESIGNER_UX_CONTRACT.md
-.agent/EFFECT_TARGETING_MODEL.md
-.agent/EXECUTION_MAP.md
-.agent/FILESYSTEM_GUARDRAILS.md
-.agent/ILUMINATE_BOOTSTRAP.md
-.agent/ILUMINATE_UI_STANDARDS.md
-.agent/IMPLEMENTATION_PLAN.md
-.agent/PIXELMAP_COMPOSER_DIRECTION.md
-.agent/PUBLIC_SITE_DIRECTION.md
-.agent/RULES.md
-.agent/regenerar_contexto.sh
-```
+Use `rg --files <affected-path>` for file-level discovery. A complete file
+inventory is intentionally omitted because it is expensive, noisy and quickly
+stale.

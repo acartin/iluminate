@@ -1,9 +1,18 @@
 # Iluminate Designer Handoff
 
-**Last updated:** 2026-09-10
-**Purpose:** concise handoff for another AI/developer to continue the visual Designer without re-litigating current decisions.
+**Last updated:** 2026-10-06
+**Purpose:** detailed current implementation handoff. Use the context router in
+`.agent/RULES.md` and read only the headings relevant to the task instead of
+loading this complete file by default.
 
 ## Current State
+
+The fabrication upgrade in `docs/upgrade.doc` has completed phases 0–10. Face
+Graphic is now a native authoring layer, and geometric layers support
+associative projections, compound paths, live offsets, live fillets and
+deterministic text outlines. Animate now applies Face Graphic as a physical
+filter over an isolated front-light buffer, and Design exports validated SVG
+and DXF fabrication interchange at physical scale.
 
 Iluminate now has a first-pass full-screen graphical Designer for routing a real sign:
 
@@ -29,18 +38,186 @@ The Designer is intentionally fabrication-oriented. It is not a raw matrix edito
   - `types.ts`: shared Designer UI/canvas types.
   - `designer-paper-canvas.tsx`: canvas host, Paper.js loading, pointer interactions, pan/zoom drag plumbing.
   - `designer-paper-renderer.ts`: Paper.js drawing for grid, build areas, zones, routes, controller, terminals and labels.
-  - `designer-geometry.ts`: snap, bounds, hit testing, route sampling, solder/wiring helpers and ruler math.
+  - `designer-geometry.ts`: compatibility barrel while callers migrate from the former mixed helper module.
+  - `geometry/designer-geometry-engine.ts`: public API for layer-agnostic vector operations.
+  - `geometry/designer-geometry-commands.ts`: pure canonical geometry command boundary.
+  - `electrical/designer-electrical-engine.ts`: electrical route, port, joint and topology API.
+  - `canvas/designer-tool-policy.ts`: common geometric tool mapping and layer permissions.
   - `designer-compiler.ts`: compiles visual routes into the physical pixelMap and resolves visual targets from zones/groups.
   - `designer-ui.tsx`: toolbox buttons, contextual fields, layers panel and rulers.
   - `designer-webgl-player.tsx`: Animate player surface; owns viewport, Pixi mounting and zone selection.
-  - `rendering/designer-player-renderers.ts`: isolated Animate renderers for direct LED pixels and acrylic diffuser preview.
+  - `rendering/designer-player-renderers.ts`: isolated Animate buffers, direct LED rendering and Face Graphic optical filtering.
+  - `fabrication/designer-fabrication-export.ts`: canonical validation plus 1:1 SVG and metric DXF serialization.
 - Grid wrapper: `services/web/iluminate/components/lighting/partitura-designer-workbench.tsx`
 - Model/defaults/normalization: `services/web/iluminate/lib/lighting/partitura-model.ts`
+- Derived offset/fillet engine: `services/web/iluminate/lib/lighting/designer-derived-geometry.ts`
+- Controlled font catalog: `services/web/iluminate/lib/lighting/designer-font-catalog.ts`
+- Text outline engine: `services/web/iluminate/lib/lighting/designer-text-geometry.ts`
+- Controlled font endpoint: `services/web/iluminate/app/api/lighting/fonts/[fontId]/route.ts`
 - Server persistence: `services/web/iluminate/lib/server/partituras.ts`
 - Menu config: `services/web/iluminate/lib/api.ts`
 - Sidebar icon/style: `services/web/iluminate/components/portal/sidebar.tsx`
 
 ## Graphics Engine Decision
+
+### Canonical geometry checkpoint
+
+Normalized documents now write `designerSchemaVersion: 2`, a canonical
+`designer.geometries` collection and stable `geometryId` references from build
+areas, zones and channels. Legacy documents with only inline shape fields are
+migrated during normalization. For compatibility with the current Paper
+renderer, semantic records still carry synchronized inline bounds/points; on
+load canonical geometry is authoritative, and every workspace mutation commits
+the compatibility view back through `canonicalizeDesignerGeometry`.
+
+Do not bypass that mutation boundary or introduce a second geometry model.
+Face Graphic references this same canonical geometry collection.
+
+### Face Graphic authoring
+
+`designer.faceGraphics` contains native front-face mask/vinyl objects. Each
+object references canonical geometry and owns only `passMode` (`opaque`,
+`clear`, `translucent`) plus `filterColor`; it has no LED, diffusion or effect
+properties. The Layers panel exposes `Face Graphic` as its own category and the
+left rail reuses rectangle, ellipse, polygon and Bezier authoring. Magenta
+shapes in Design are a fabrication preview, not the final optical calculation.
+
+Face Graphic is deliberately omitted from `designerCompileSignature`, compiled
+zones, pixelMap, groups and wiring. Editing it must not make a valid electrical
+Compile stale. In `As built`, the renderer separates rear/external light from
+front light, generates a viewport-aligned RGB transmission texture from the
+vector Face Graphic, and filters only the front buffer. Outside the defined
+graphic is opaque; the topmost persisted object wins overlaps. Compound holes
+remain openings according to their enclosing region. Object/layer visibility
+and opacity are editor aids and never become optical transmission controls.
+Direct-mounted Front pixels participate in this pass. `LED map` bypasses it and
+continues to show raw mapped output. Never replace this with a top-level
+multiply overlay: it would incorrectly affect Halo, Wall Wash and the workspace
+background.
+
+### Associative Project Geometry
+
+`designer.projections` stores linked, read-only references to canonical source
+geometry. A projection has its own stable ID and presentation geometry ID, a
+`sourceGeometryId`, and a `targetLayer` (`reference`, `zones` or
+`faceGraphic`). Resolve it through `resolveDesignerProjectionGeometry`; never
+copy source coordinates into a second authoritative record.
+
+The contextual `Project Geometry` command is available when a geometric object
+is selected. Projected objects render cyan/dashed in their target layer and are
+selectable but not directly editable. Source edits update them immediately.
+`Break Link` materializes the resolved profile as a native build area, zone or
+Face Graphic object. Missing sources remain persisted as recoverable broken
+references and can be relinked from the contextual source selector. Direct and
+chained cycles are invalid and must be rejected with
+`wouldCreateDesignerProjectionCycle`.
+
+### Fabrication export
+
+The Design global bar exposes `Export`. Its modal selects Reference/substrate,
+Diffusors and Face Graphic output categories, DXF curve tolerance and minimum-
+feature guidance. Both download actions run the same validation pass; errors
+block the file while warnings remain downloadable.
+
+SVG is millimeter-based, path-only, preserves native Beziers and compound
+contours, and groups output by Designer category plus Face Graphic pass/color.
+DXF uses `$INSUNITS=4`, named operation/material layers and deterministic closed
+`LWPOLYLINE` flattening. Controlled editable text is outlined in memory and is
+not changed in the document. Live derived profiles are exported; linked
+projections, images, controller, routes, LEDs, selection visuals and other
+editor guides are excluded. Broken projections warn because they are
+construction-only; broken derived operations and unresolved fonts block.
+
+Every file carries partitura/project identity, generation time and a SHA-256
+source checksum. Export does not require or change electrical Compile and does
+not create firmware/toolpaths. PDF, EPS, STL and proprietary cutter formats
+remain outside the implemented contract.
+
+Projections are construction references: keep them out of electrical Compile,
+pixelMap and fabrication export unless the operator explicitly materializes or
+derives geometry from them.
+
+### Compound paths and booleans
+
+Canonical `DesignerGeometry` paths may contain `contours`; the collection
+includes the outer profile and every hole/island, while `fillRule: "evenodd"`
+determines filled material. Semantic build-area, zone and Face Graphic records
+carry a synchronized compatibility view. Rendering, canvas containment and zone
+pixel mapping all honor these contours.
+
+The shared implementation lives in
+`geometry/designer-geometry-boolean.ts`. It owns `Union`, `Subtract`,
+`Intersect`, `Exclude`, Paper.js conversion/serialization and topology
+validation. Do not reproduce boolean logic in a layer component. The UI creates
+a same-layer operand list with Shift/Ctrl/Command-click. Subtract uses selection
+order: first profile minus subsequent profiles. Native operands are consumed;
+linked projections used as operands remain intact. One Undo reverses the whole
+operation.
+
+Boolean results can be moved and resized as complete profiles. Phase 5 does not
+expose direct per-contour node editing. Self-intersections, duplicate contours,
+open profiles and empty results are rejected. Zone contour changes invalidate
+Compile because they change pixel membership; Reference and Face Graphic
+booleans remain electrically neutral.
+
+### Derived offset and fillet geometry
+
+`designer.derivedGeometries` persists non-destructive `offset` and `fillet`
+operations. Each record points to canonical geometry, a projection or an
+earlier derived result through `sourceGeometryId`, keeps its target layer, and
+stores only operation parameters. Resolve it through
+`resolveDesignerGeometryReference` / `resolveDesignerDerivedGeometry`; do not
+snapshot source coordinates into the operation record.
+
+The shared calculation is in
+`lib/lighting/designer-derived-geometry.ts`. Offsets use signed millimeter
+distances and `round`, `miter` or `bevel` joins; miter joins also persist a
+limit. Fillets persist a millimeter radius and an optional flattened
+corner-index selection. Both operations preserve compound contours and
+open/closed topology. Fillet radii clamp to short legs with an explicit
+warning. Collapsed inward offsets, invalid topology, broken sources and cycles
+stay persisted and selectable so the operator can repair the parameters or
+source.
+
+Derived chains are live and acyclic. A source edit must immediately recalculate
+projection → offset → fillet descendants. Use
+`wouldCreateDesignerDerivedGeometryCycle` before relinking. Derived profiles
+are amber and read-only on canvas; `Break Link` materializes the current result
+as a native object. They remain outside the electrical Compile signature and
+pixelMap until materialized.
+
+When a derived profile targets Face Graphic it also owns only `passMode` and
+`filterColor`, with translucent white defaults. Those values follow chained
+operations, survive normalization, drive the As built frontal-light filter and
+select the SVG/DXF material group. Editor visibility remains non-physical.
+Breaking the link transfers the same mask values to the resulting native Face
+Graphic object. Linked projections themselves remain construction-only.
+
+Normalization distinguishes an absent legacy collection from an explicitly
+empty authored collection. In particular, saved `zones: []` and `routes: []`
+must never restore the example sign or example wiring. Current schema
+normalization is idempotent and must preserve canonical geometry and electrical
+topology across repeated save/reload cycles.
+
+### Controlled text and outlines
+
+`designer.texts` persists editable text separately from canonical path geometry.
+Each record carries content, target layer, font ID plus SHA-256, size and
+tracking in millimeters, line height, alignment, position, visibility and lock.
+Text can live in Reference, Diffusors or Face Graphic and uses the same Text
+tool behavior in every geometric layer.
+
+The only valid fonts are declared in `designer-font-catalog.ts` and served from
+the pinned `@fontsource/roboto` package. Never fall back to an OS font for
+manufacturing geometry or reuse a font ID for different bytes. The API endpoint
+is immutable and the client verifies SHA-256 before conversion.
+
+`designer-text-geometry.ts` owns glyph shaping, kerning, tracking, multiline
+layout, alignment and OpenType-command conversion. `Convert to paths` produces
+ordinary compound Bezier geometry with `evenodd` holes, removes the editable
+text in the same Undo transaction and creates a native build area, zone or Face
+Graphic object. Do not create a separate outline format. Editable text remains
+electrically neutral; a converted Zone has the normal Compile behavior.
 
 The Designer canvas now uses an HTML `<canvas>` rendered by Paper.js. The surrounding React UI, domain model, snap/solder logic and persistence still use Iluminate `DesignerForm`.
 
@@ -108,11 +285,14 @@ The Designer separates five persisted visual layers:
 - `Channels`: neon-flex bands belonging to the Zones plane. A channel reuses the
   Bezier trajectory as an editable center line and derives two parallel borders
   from a width. It behaves as a zone for pixel mapping and effects.
-- `Hardware`: physical controller. Its `Hardware` category holds the controller
-  row directly (no folders yet) and owns the layer show/lock/opacity. The
-  controller is drawn as a small PCB (board, two cosmetic chips and a status
-  dot); the chips are visual only and do not change behavior.
-- `Strings`: physical fabrication plane containing LED strings, data cables, terminals and joints (no controller).
+- `Hardware`: the Layers category groups the physical construction rows into
+  `Strings`, `Data cables` and `Controller` folders. The controller is drawn as
+  a small PCB (board, two cosmetic chips and a status dot); the chips are
+  visual only and do not change behavior.
+- `Strings`: persisted physical fabrication plane containing LED strings, data
+  cables, terminals and joints (no controller). It remains distinct from the
+  persisted controller layer even though both appear under the `Hardware`
+  category in Layers.
 
 `Light Sources` is deliberately absent from Layers. The persisted
 `designer.lightSources` collection currently stores what the product calls

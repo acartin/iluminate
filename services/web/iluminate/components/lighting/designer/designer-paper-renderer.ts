@@ -1,4 +1,7 @@
-import type { DesignerBuildAreaForm, DesignerChannelForm, DesignerControllerForm, DesignerForm, DesignerPoint, DesignerRouteForm, DesignerRouteKind, DesignerZoneForm } from "@/lib/lighting/partitura-model";
+import type { DesignerBuildAreaForm, DesignerChannelForm, DesignerContour, DesignerControllerForm, DesignerFaceGraphicForm, DesignerForm, DesignerPoint, DesignerRouteForm, DesignerRouteKind, DesignerZoneForm } from "@/lib/lighting/partitura-model";
+import { designerGeometryAsShape, resolveDesignerDerivedGeometry, resolveDesignerProjectionGeometry } from "@/lib/lighting/partitura-model";
+import { designerFontResource } from "@/lib/lighting/designer-font-catalog";
+import { estimateDesignerTextBounds } from "@/lib/lighting/designer-text-geometry";
 import type { DesignerActiveLayer, DesignerMeasurement, DesignerPrimitiveDraft, DesignerRouteDraft, DesignerShapeDraft, DesignerViewport, PaperApi, PaperPoint, PaperRectangle } from "./types";
 import { channelBorderPolylines, channelCenterPolyline, channelContainsPoint, channelIsClosed, channelWidthCm, controllerConnectedPorts, controllerPortPoint, formatDecimal, formatMeasure, openChannelOutline, pointInsideDesignerShape, routeColor, routeDirectionMarkers, routePointFill, routeSelectedColor, sampleRouteLedDots } from "./designer-geometry";
 import type { CompiledDesignerLayout } from "./designer-compiler";
@@ -17,11 +20,17 @@ export function drawPaperDesigner({
   selectedBuildAreaPointIndex,
   selectedZoneId,
   selectedZonePointIndex,
+  selectedFaceGraphicId,
+  selectedFaceGraphicPointIndex,
+  selectedProjectionId,
+  selectedDerivedGeometryId,
+  selectedTextId,
   selectedChannelId,
   selectedChannelPointIndex,
   selectedRouteId,
   selectedRoutePointIndex,
   selectedController,
+  selectedGeometryKeys = [],
   routeDraft,
   shapeDraft,
   primitiveDraft,
@@ -36,11 +45,17 @@ export function drawPaperDesigner({
   selectedBuildAreaPointIndex?: number;
   selectedZoneId?: string;
   selectedZonePointIndex?: number;
+  selectedFaceGraphicId?: string;
+  selectedFaceGraphicPointIndex?: number;
+  selectedProjectionId?: string;
+  selectedDerivedGeometryId?: string;
+  selectedTextId?: string;
   selectedChannelId?: string;
   selectedChannelPointIndex?: number;
   selectedRouteId?: string;
   selectedRoutePointIndex?: number;
   selectedController: boolean;
+  selectedGeometryKeys?: string[];
   routeDraft: DesignerRouteDraft | null;
   shapeDraft: DesignerShapeDraft | null;
   primitiveDraft: DesignerPrimitiveDraft | null;
@@ -72,13 +87,46 @@ export function drawPaperDesigner({
   drawPaperShapeDraft(shapeDraft, toScreen);
   drawPaperPrimitiveDraft(primitiveDraft, rectToScreen);
 
+  designer.derivedGeometries.filter((operation) => operation.visible && (operation.targetLayer === "reference" ? activeLayer === "artwork" || activeLayer === "reference" : operation.targetLayer === activeLayer)).forEach((operation) => {
+    const resolved = resolveDesignerDerivedGeometry(designer, operation.id);
+    if (!resolved.geometry) return;
+    const derived = designerGeometryAsShape(resolved.geometry);
+    const selected = selectedDerivedGeometryId === operation.id || selectedGeometryKeys.includes(`derived_geometry:${operation.id}`);
+    const shape = drawPaperClosedShape(derived, {
+      fillColor: operation.targetLayer === "faceGraphic" ? "rgba(236,72,153,0.10)" : operation.targetLayer === "zones" ? "rgba(37,99,235,0.10)" : "rgba(168,85,247,0.07)",
+      strokeColor: selected ? "#fbbf24" : "#f59e0b",
+      strokeWidth: selected ? 2.2 : 1.4,
+      toScreen,
+      rectToScreen
+    });
+    shape.opacity = selected ? 1 : 0.85;
+    new paperScope.PointText({ point: toScreen({ x: derived.x + 0.8, y: derived.y - 0.8 }), content: `${operation.operation.toUpperCase()} · ${operation.name}`, fillColor: selected ? "#fcd34d" : "#d97706", fontFamily: "monospace", fontSize: 10 });
+  });
+
+  designer.projections.filter((projection) => projection.visible && (projection.targetLayer === "reference" ? activeLayer === "artwork" || activeLayer === "reference" : projection.targetLayer === activeLayer)).forEach((projection) => {
+    const resolved = resolveDesignerProjectionGeometry(designer, projection.id);
+    if (!resolved.geometry) return;
+    const projected = designerGeometryAsShape(resolved.geometry);
+    const selected = selectedProjectionId === projection.id || selectedGeometryKeys.includes(`projection:${projection.id}`);
+    const shape = drawPaperClosedShape(projected, {
+      fillColor: "rgba(34,211,238,0.04)",
+      strokeColor: selected ? "#67e8f9" : "#06b6d4",
+      strokeWidth: selected ? 2 : 1.2,
+      dashArray: [4, 4],
+      toScreen,
+      rectToScreen
+    });
+    shape.opacity = selected ? 1 : 0.72;
+    new paperScope.PointText({ point: toScreen({ x: projected.x + 0.8, y: projected.y - 0.8 }), content: `PROJECTED · ${projection.name}`, fillColor: selected ? "#67e8f9" : "#0891b2", fontFamily: "monospace", fontSize: 10 });
+  });
+
   // Reference geometry belongs to the Artwork plane: the Artwork category eye is
   // the master switch, and each build area's own eye refines it.
   if (designer.layers.artwork.visible) {
     const layerOpacity = designer.layers.reference.opacity;
     [...designer.buildAreas].filter((buildArea) => buildArea.visible !== false).reverse().forEach((buildArea) => {
       drawPaperBuildArea(buildArea, {
-        selected: selectedBuildAreaId === buildArea.id,
+        selected: selectedBuildAreaId === buildArea.id || selectedGeometryKeys.includes(`build_area:${buildArea.id}`),
         selectedPointIndex: selectedBuildAreaId === buildArea.id ? selectedBuildAreaPointIndex : undefined,
         opacity: layerOpacity,
         toScreen,
@@ -91,7 +139,7 @@ export function drawPaperDesigner({
     const layerOpacity = designer.layers.zones.opacity;
     [...designer.zones].filter((zone) => zone.visible !== false).reverse().forEach((zone) => {
       drawPaperZone(zone, {
-        selected: selectedZoneId === zone.id,
+        selected: selectedZoneId === zone.id || selectedGeometryKeys.includes(`zone:${zone.id}`),
         selectedPointIndex: selectedZoneId === zone.id ? selectedZonePointIndex : undefined,
         opacity: layerOpacity,
         toScreen,
@@ -135,6 +183,44 @@ export function drawPaperDesigner({
     });
   }
 
+  if (designer.layers.faceGraphic.visible) {
+    [...designer.faceGraphics].filter((element) => element.visible !== false).reverse().forEach((element) => {
+      drawPaperFaceGraphic(element, {
+        selected: selectedFaceGraphicId === element.id || selectedGeometryKeys.includes(`face_graphic:${element.id}`),
+        selectedPointIndex: selectedFaceGraphicId === element.id ? selectedFaceGraphicPointIndex : undefined,
+        opacity: designer.layers.faceGraphic.opacity * element.opacity,
+        toScreen,
+        rectToScreen
+      });
+    });
+  }
+
+  designer.texts.filter((text) => {
+    if (!text.visible) return false;
+    if (text.targetLayer === "reference") return designer.layers.artwork.visible && designer.layers.reference.visible && (activeLayer === "artwork" || activeLayer === "reference");
+    return designer.layers[text.targetLayer].visible && activeLayer === text.targetLayer;
+  }).forEach((text) => {
+    const resource = designerFontResource(text.fontId);
+    const selected = selectedTextId === text.id;
+    const size = Math.max(4, lengthToScreen(text.fontSizeMm / 10));
+    const rendered = new paperScope.PointText({
+      point: toScreen({ x: text.x, y: text.y + text.fontSizeMm / 12 }),
+      content: text.text || " ",
+      fillColor: text.targetLayer === "faceGraphic" ? "#db2777" : text.targetLayer === "zones" ? "#2563eb" : "#7c3aed",
+      fontFamily: resource?.family ?? "sans-serif",
+      fontWeight: resource?.weight === 700 ? "bold" : "normal",
+      fontSize: size,
+      leading: size * text.lineHeight,
+      justification: text.alignment,
+      opacity: text.opacity
+    });
+    if (selected) {
+      const bounds = estimateDesignerTextBounds(text);
+      new paperScope.Path.Rectangle({ rectangle: rectToScreen(bounds), strokeColor: "#22d3ee", strokeWidth: 1.4, dashArray: [4, 3] });
+      rendered.fillColor = new paperScope.Color("#0891b2");
+    }
+  });
+
   if (designer.layers.strings.visible) {
     designer.routes.forEach((route) => {
       if (route.visible === false) return;
@@ -168,10 +254,10 @@ export function drawPaperDesigner({
 
 function drawPaperPrimitiveDraft(draft: DesignerPrimitiveDraft | null, rectToScreen: (shape: { x: number; y: number; width: number; height: number }) => PaperRectangle) {
   if (!draft || draft.bounds.width <= 0 || draft.bounds.height <= 0) return;
-  const color = draft.target === "build_area" ? "#a78bfa" : "#38bdf8";
+  const color = draft.target === "build_area" ? "#a78bfa" : draft.target === "face_graphic" ? "#f472b6" : "#38bdf8";
   const options = {
     rectangle: rectToScreen(draft.bounds),
-    fillColor: draft.target === "build_area" ? "rgba(167,139,250,0.10)" : "rgba(56,189,248,0.10)",
+    fillColor: draft.target === "build_area" ? "rgba(167,139,250,0.10)" : draft.target === "face_graphic" ? "rgba(244,114,182,0.12)" : "rgba(56,189,248,0.10)",
     strokeColor: color,
     strokeWidth: 1.5,
     dashArray: [8, 5]
@@ -291,7 +377,7 @@ function drawPaperGrid(designer: DesignerForm, viewport: DesignerViewport, canva
 
 function drawPaperShapeDraft(draft: DesignerShapeDraft | null, toScreen: (point: DesignerPoint) => PaperPoint) {
   if (!draft) return;
-  const draftColor = draft.target === "build_area" ? "#a78bfa" : draft.target === "channel" ? "#f59e0b" : "#38bdf8";
+  const draftColor = draft.target === "build_area" ? "#a78bfa" : draft.target === "channel" ? "#f59e0b" : draft.target === "face_graphic" ? "#f472b6" : "#38bdf8";
   const path = new paperScope.Path({
     strokeColor: draftColor,
     strokeWidth: 1.5,
@@ -344,7 +430,7 @@ function drawPaperBuildArea(buildArea: DesignerBuildAreaForm, options: {
     fontSize: 12
   });
   if (options.selected) drawPaperResizeHandles(buildArea, options);
-  if (options.selected && buildArea.shape === "polygon" && buildArea.points) {
+  if (options.selected && buildArea.shape === "polygon" && buildArea.points && !buildArea.contours) {
     drawPaperPolygonNodes(buildArea.id, buildArea.points, options.selectedPointIndex, "#7c3aed", options.toScreen);
     if (buildArea.pathMode === "bezier") drawPaperBezierHandles(buildArea.id, buildArea.points, options.selectedPointIndex, "#a78bfa", options.toScreen);
   }
@@ -375,7 +461,7 @@ function drawPaperZone(zone: DesignerZoneForm, options: {
     opacity: Math.max(0.45, options.opacity)
   });
   if (options.selected) drawPaperResizeHandles(zone, options);
-  if (options.selected && zone.shape === "polygon" && zone.points) {
+  if (options.selected && zone.shape === "polygon" && zone.points && !zone.contours) {
     drawPaperPolygonNodes(zone.id, zone.points, options.selectedPointIndex, "#2563eb", options.toScreen);
     if (zone.pathMode === "bezier") drawPaperBezierHandles(zone.id, zone.points, options.selectedPointIndex, "#38bdf8", options.toScreen);
   }
@@ -446,7 +532,43 @@ function drawPaperChannel(channel: DesignerChannelForm, options: {
   }
 }
 
-function drawPaperClosedShape(shape: DesignerBuildAreaForm | DesignerZoneForm, options: {
+function drawPaperFaceGraphic(element: DesignerFaceGraphicForm, options: {
+  selected: boolean;
+  selectedPointIndex?: number;
+  opacity: number;
+  toScreen: (point: DesignerPoint) => PaperPoint;
+  rectToScreen: (shape: { x: number; y: number; width: number; height: number }) => PaperRectangle;
+}) {
+  const fillColor = element.passMode === "opaque"
+    ? "rgba(15,23,42,0.78)"
+    : element.passMode === "clear"
+      ? "rgba(255,255,255,0.04)"
+      : `${element.filterColor}66`;
+  const shape = drawPaperClosedShape(element, {
+    fillColor,
+    strokeColor: options.selected ? "#f472b6" : "#db2777",
+    strokeWidth: options.selected ? 2 : 1.2,
+    dashArray: element.passMode === "clear" ? [5, 4] : undefined,
+    toScreen: options.toScreen,
+    rectToScreen: options.rectToScreen
+  });
+  shape.opacity = options.opacity;
+  new paperScope.PointText({
+    point: options.toScreen({ x: element.x + 1.2, y: element.y + 2.5 }),
+    content: `FACE · ${element.name} · ${element.passMode}`,
+    fillColor: options.selected ? "#f9a8d4" : "#f472b6",
+    fontFamily: "monospace",
+    fontSize: 11,
+    opacity: Math.max(0.55, options.opacity)
+  });
+  if (options.selected) drawPaperResizeHandles(element, options);
+  if (options.selected && element.shape === "polygon" && element.points && !element.contours) {
+    drawPaperPolygonNodes(element.id, element.points, options.selectedPointIndex, "#be185d", options.toScreen);
+    if (element.pathMode === "bezier") drawPaperBezierHandles(element.id, element.points, options.selectedPointIndex, "#f472b6", options.toScreen);
+  }
+}
+
+function drawPaperClosedShape(shape: Pick<DesignerBuildAreaForm, "shape" | "x" | "y" | "width" | "height" | "points" | "contours" | "pathMode" | "fillRule">, options: {
   fillColor: string;
   strokeColor: string;
   strokeWidth: number;
@@ -454,22 +576,25 @@ function drawPaperClosedShape(shape: DesignerBuildAreaForm | DesignerZoneForm, o
   toScreen: (point: DesignerPoint) => PaperPoint;
   rectToScreen: (shape: { x: number; y: number; width: number; height: number }) => PaperRectangle;
 }) {
+  if (shape.shape === "polygon" && shape.contours && shape.contours.length > 1) {
+    const compound = new paperScope.CompoundPath({
+      fillColor: options.fillColor,
+      strokeColor: options.strokeColor,
+      strokeWidth: options.strokeWidth,
+      dashArray: options.dashArray,
+      fillRule: shape.fillRule ?? "evenodd"
+    });
+    shape.contours.forEach((contour) => compound.addChild(drawPaperContour(contour, options.toScreen)));
+    return compound;
+  }
   if (shape.shape === "polygon" && shape.points) {
-    const path = new paperScope.Path({
+    const path = drawPaperContour({ points: shape.points, pathMode: shape.pathMode ?? "straight", closed: true }, options.toScreen);
+    path.set({
       fillColor: options.fillColor,
       strokeColor: options.strokeColor,
       strokeWidth: options.strokeWidth,
       dashArray: options.dashArray
     });
-    shape.points.forEach((point) => path.add(options.toScreen(point)));
-    if (shape.pathMode === "bezier") {
-      shape.points.forEach((point, index) => {
-        const anchor = options.toScreen(point);
-        if (point.handleIn) path.segments[index].handleIn = options.toScreen({ x: point.x + point.handleIn.x, y: point.y + point.handleIn.y }).subtract(anchor);
-        if (point.handleOut) path.segments[index].handleOut = options.toScreen({ x: point.x + point.handleOut.x, y: point.y + point.handleOut.y }).subtract(anchor);
-      });
-    }
-    path.closed = true;
     return path;
   }
   if (shape.shape === "ellipse") {
@@ -489,6 +614,20 @@ function drawPaperClosedShape(shape: DesignerBuildAreaForm | DesignerZoneForm, o
     strokeWidth: options.strokeWidth,
     dashArray: options.dashArray
   });
+}
+
+function drawPaperContour(contour: DesignerContour, toScreen: (point: DesignerPoint) => PaperPoint) {
+  const path = new paperScope.Path();
+  contour.points.forEach((point) => path.add(toScreen(point)));
+  if (contour.pathMode === "bezier") {
+    contour.points.forEach((point, index) => {
+      const anchor = toScreen(point);
+      if (point.handleIn) path.segments[index].handleIn = toScreen({ x: point.x + point.handleIn.x, y: point.y + point.handleIn.y }).subtract(anchor);
+      if (point.handleOut) path.segments[index].handleOut = toScreen({ x: point.x + point.handleOut.x, y: point.y + point.handleOut.y }).subtract(anchor);
+    });
+  }
+  path.closed = true;
+  return path;
 }
 
 function drawPaperResizeHandles(shape: { x: number; y: number; width: number; height: number }, options: { toScreen: (point: DesignerPoint) => PaperPoint }) {

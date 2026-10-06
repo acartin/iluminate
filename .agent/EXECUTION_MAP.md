@@ -2,7 +2,10 @@
 
 ## Objetivo
 
-Este archivo define donde validar cambios segun la ruta afectada. En Iluminate, `services` representa unidades funcionales del monorepo; no todos son runtimes.
+Este archivo define donde validar cambios segun la ruta afectada. No es contexto
+obligatorio al iniciar toda sesion: se consulta cerca de la etapa de validacion,
+o desde el inicio cuando la tarea es de infraestructura/operacion. En Iluminate,
+`services` representa unidades funcionales del monorepo; no todos son runtimes.
 
 ## Reglas base
 
@@ -22,6 +25,7 @@ Este archivo define donde validar cambios segun la ruta afectada. En Iluminate, 
 | `.agent/*.sh` | Sintaxis shell | `bash -n .agent/<script>.sh` |
 | `services/web/iluminate/` | Build/smoke de Next via Docker | `docker compose build iluminate-web` y `curl -I http://localhost:${ILUMINATE_WEB_PORT:-8420}` si esta levantado |
 | `services/web/iluminate-public/` | Typecheck, lint, build y smoke del sitio publico via Docker | `docker compose build iluminate-public-web` y `curl -I http://localhost:${ILUMINATE_PUBLIC_WEB_PORT:-8430}` si esta levantado |
+| `services/web/iluminate-prompt-builder/` | Tests del motor, build de imagen y smoke HTTP | `docker run --rm -v "$PWD/services/web/iluminate-prompt-builder:/work" -w /work node:22-alpine npm test` y `docker build -f services/web/iluminate-prompt-builder/Dockerfile -t iluminate-prompt-builder:test .` |
 | `services/lighting-core/` | Build y fixtures del dominio | `docker run --rm -v "$PWD/services/lighting-core:/work" -w /work node:22-alpine sh -c "npm ci && npm test"` |
 | `services/lighting-core/pixel-map/` | Build core y validar generation/simulation por API si afecta web | `docker compose up -d --build iluminate-web` |
 | `services/lighting-core/domain/effects/` | Build core/web y smoke de `/api/lighting/effects`; si cambia renderer, generar frame de Lab por API | `docker compose up -d --build iluminate-web` |

@@ -81,6 +81,15 @@ Examples:
 - Route: route type and editing actions.
 - Controller: position and port count.
 - Light source: source type and Configure source.
+- Face Graphic: pass mode, translucent filter color, shape, geometry/node
+  fields and object lock.
+- Projected geometry: linked/broken status, source selector, `Break Link` and
+  Delete. It has no editable shape or node fields while linked.
+- Derived offset/fillet geometry: operation status, source selector, signed
+  offset distance plus join/miter controls or fillet radius plus corner list,
+  warnings, `Break Link` and Delete. It remains read-only on canvas while live.
+- Editable text: content, controlled font, size/tracking in millimeters, line
+  height, alignment, X/Y and `Convert to paths`.
 
 The contextual bar may scroll horizontally when an object genuinely has many
 properties. It must not absorb document-wide configuration merely because
@@ -109,11 +118,78 @@ Always-available tools:
 
 The remaining tools depend on the active layer, for example image placement,
 reference/zone/channel drawing, LED string, data cable and route cutting.
+Face Graphic uses the same rectangle, ellipse, polygon and Bezier interaction
+as the other geometric layers; only its semantic properties differ.
+
+In Animate `As built`, the first Face Graphic object in layer order is the
+frontmost physical filter. Defined `clear`, `opaque` and `translucent` regions
+control only frontal light; uncovered face area is opaque once any Face Graphic
+exists. The layer/object eye and opacity remain Design presentation controls
+and must not change the physical preview. `LED map` is the explicit raw,
+unfiltered diagnostic view. Halo and Wall Wash are always outside this pass.
+
+Reference, Diffusors and Face Graphic each expose the same Text tool. Clicking
+places an editable text object in the active category. Text remains selectable
+and movable, and its contextual fields support single-line/basic multiline
+content, controlled Iluminate Sans regular/bold, size, tracking, line height and
+alignment. Never expose an arbitrary browser/OS font picker.
+
+`Convert to paths` is a contextual command. It verifies the controlled font
+resource and replaces the text with a native compound Bezier profile in one
+Undo transaction. The resulting object uses the normal category semantics and
+may immediately participate in Project Geometry, booleans, offsets and fillets.
+
+`Project Geometry` is a contextual object command, not a rail tool. With a
+geometric source selected, the contextual bar exposes a target selector
+(`Face Graphic`, `Diffusors` or `Reference`) and the command. A linked
+projection is cyan/dashed, selectable and read-only. Its contextual controls
+allow changing the source to repair a broken reference or using `Break Link`
+to create an independent native object in its target layer. Cyclic references
+must never be accepted.
+
+Boolean geometry is also contextual, not a rail mode. Select the first/base
+profile normally, then use Shift/Ctrl/Command-click to add profiles from the
+same layer. With two or more profiles selected, the contextual bar exposes
+`Union`, `Subtract`, `Intersect` and `Exclude`. Subtract removes every later
+selection from the first selection. The command produces one selected native
+object and is one Undo/Redo transaction. A linked projection may participate as
+a construction operand without being consumed.
+
+Compound results display `Compound · N contours · even-odd`. Their holes must
+remain visibly empty and must not receive canvas hits or zone pixels. The whole
+profile may be moved/resized; direct node editing across individual contours is
+not part of phase 5.
+
+`Offset Path` and `Fillet` are contextual object commands, not rail modes. They
+are available for native, projected or derived geometric profiles and create a
+new amber live result in the same target layer. Offset distance is signed and
+uses millimeters; joins are Round, Miter or Bevel, with a Miter Limit only when
+applicable. Fillet uses a millimeter radius and either `all` or a one-based,
+comma-separated corner list. Parameter edits recalculate immediately.
+
+The Layers panel shows derived profiles in their persisted target category.
+Broken, cyclic, collapsed and invalid-topology results remain selectable and
+must show a repairable status. Radius clamps and join fallbacks show warnings.
+`Break Link` converts the resolved result to independent native geometry; it is
+disabled while no valid result exists.
+
+A live derived profile whose target is Face Graphic exposes the same `Pass` and
+translucent `Filter color` controls as a native Face Graphic object. These are
+mask properties, not lighting properties: do not add diffusion, LED pitch,
+source distance or effect controls to the derived profile. The values remain
+active in As built and fabrication export even when the editor eye is hidden.
 
 The rail must not contain command actions. Do not add Delete, Copy, Paste,
 Undo, Redo, Fit, Zoom buttons, Save, Compile, Layers or object parameters to
 the rail. Mouse wheel/trackpad handles zoom; Fit belongs to the global bar;
 Delete belongs to the contextual bar and keyboard shortcut.
+
+Fabrication `Export` belongs to the Design global bar. It opens a modal rather
+than becoming a rail mode. The modal exposes output-category checkboxes,
+millimeter DXF curve tolerance, minimum-feature guidance, validation results
+and separate SVG/DXF downloads. Blocking errors must prevent download and stay
+visible; warnings must remain visible but allow export. Never imply that this
+dialog generates CAM toolpaths, STL or a machine-specific cut file.
 
 Ruler visibility and distance measurement are different functions and must not
 share the same icon. The global Ruler control uses the ruler icon. The Measure
@@ -143,8 +219,15 @@ Canvas selection and Layers navigation are one synchronized state:
   view.
 - Mapping is fixed: artwork -> `Artwork / Images`; build area -> `Artwork /
   Reference`; zone -> `Diffusors / Zones`; channel -> `Diffusors / Channels`;
-  data cable -> `Strings / Data cables`; LED string -> `Strings / LED strings`;
-  controller -> `Hardware`.
+  Face Graphic object -> `Face Graphic`;
+  projected geometry -> its persisted target category (`Artwork / Reference`,
+  `Diffusors / Zones` or `Face Graphic`);
+  derived geometry -> its persisted target category (`Artwork / Reference`,
+  `Diffusors / Zones` or `Face Graphic`);
+  editable text -> its persisted target category (`Artwork / Reference`,
+  `Diffusors / Zones` or `Face Graphic`);
+  data cable -> `Hardware / Data cables`; LED string -> `Hardware / Strings`;
+  controller -> `Hardware / Controller`.
 - The same mapping must be used by canvas selection and panel selection; do not
   maintain competing ad-hoc mappings in separate components.
 

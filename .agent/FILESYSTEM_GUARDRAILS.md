@@ -30,6 +30,7 @@ Do not assume that every directory under `services/` is a daemon.
 services/
   web/iluminate      # Next.js UI and authoring surface
   web/iluminate-public # public site runtime, interactive gallery, templates and learning
+  web/iluminate-prompt-builder # internal static generator for scoped AI change contracts
   lighting-core      # LED choreography domain and partitura model
   auth               # identity and authorization domain
   simulator          # reusable simulation domain, when it outgrows web
@@ -73,6 +74,22 @@ Does not own:
 - Direct PostgreSQL access.
 - Template cloning authority.
 - Controller, deployment or device credentials.
+
+### `services/web/iluminate-prompt-builder`
+
+Owns:
+
+- The internal catalog of repo domains and sensitive change surfaces.
+- Deterministic generation of scoped prompts for new AI sessions.
+- Local-only form state and copy/download UX.
+
+Does not own:
+
+- Product, Designer, partitura or deployment contracts.
+- Execution of AI tasks or repository mutations.
+- Authentication, persistence, telemetry or public hosting.
+- A second source of truth for `.agent/RULES.md`; its catalog must remain
+  subordinate to the router and current code ownership.
 
 ### `services/lighting-core`
 
