@@ -1,882 +1,1624 @@
-# Iluminate Designer Upgrade Plan
+# Iluminate Player And Runtime Total Reengineering Plan
 
-**Reading policy:** supporting regression and decision history. Do not read this
-entire document for routine Designer work. Current behavior is summarized in
-`.agent/DESIGNER_HANDOFF.md`, and current interaction rules live in
-`.agent/DESIGNER_UX_CONTRACT.md`.
+**Status:** monorepo implementation complete; production release gates remain
+**Created:** 2026-10-07
+**Scope:** lighting core, firmware partitura, browser runtime, GPU renderer,
+Animate UX, expanded viewer, share viewer, video rendering, storage, privacy,
+observability and cutover
+**Replacement rule:** this document replaces the former Designer upgrade plan
+in full. The completed geometry and fabrication work remains described by the
+current source code and its authoritative handoff documents.
+**Implementation rule:** there will be one new runtime and one coordinated
+cutover. Do not add a production fallback, compatibility adapter, feature flag,
+dual player, v1 reader or legacy rendering path.
 
-**Status:** canonical working plan; phases 0–10 implemented, operator-software round-trip pending field acceptance  
-**Created:** 2026-10-05  
-**Scope:** geometry authoring, Face Graphic, manufacturing preparation and vector export  
-**Rule:** keep this document aligned whenever the upgrade scope, sequencing or architecture changes.
+**Implementation checkpoint — 2026-10-07:** the partitura.v2 core, prepared
+runtime, Worker/controller, persistent WebGL2 player, single embedded/expanded
+surface, immutable bundles, render-job schema, Chromium/FFmpeg worker,
+private/review/unlisted/public policy flow and video-first public page are
+implemented. Pixi and `/simulate-frame` were deleted. Core tests, 91 Designer
+tests, dashboard production build, public-site typecheck/lint/build, worker
+image build, Compose validation and local database migration pass.
 
-## Implementation checkpoint — 2026-10-05
+The release is not complete: the external PlatformIO repository is not present
+in this workspace, the production R2 bucket names/public media origin/internal
+token are not configured, and therefore hardware parity plus an end-to-end
+R2/video observation run remain open. A long-duration browser/GPU soak and the
+concurrency load budgets also remain production release gates. YouTube
+automation remains deliberately unimplemented; public publication still
+requires explicit rights confirmation.
 
-Phases 0–2 are implemented as a deliberately UI-neutral architectural upgrade:
+## 0. Executive Decision
 
-- schema `designerSchemaVersion: 2` and canonical `designer.geometries` records;
-- stable `geometryId` references from build areas, zones and channels;
-- backward-compatible normalization of legacy inline geometry;
-- canonical geometry wins when a saved v2 document loads, while all current
-  editing mutations commit through `canonicalizeDesignerGeometry`;
-- pure common geometry command boundary;
-- centralized layer/tool policy for every existing geometric drawing tool;
-- explicit geometry and electrical engine APIs over the shared Paper canvas;
-- regression coverage for migration, authority, commands and tool dispatch.
+Iluminate will replace the current request-driven preview with a compiled,
+local and deterministic playback architecture.
 
-During phase 2, inline bounds/points remain in semantic objects as a compatibility
-view so the existing renderer and interaction code can remain visually stable.
-They are synchronized at the mutation boundary and rebuilt from canonical
-geometry on load; they are not a second editorial authority. Removing that
-view is a later internal cleanup, after dependent modules consume geometry IDs
-directly.
+The ESP32 partitura remains the principal executable product. The browser
+player and the video renderer must execute the same behavioral contract; they
+must not implement independent effect semantics.
 
-Phase 3 adds the first user-visible result of that foundation:
-
-- a native `Face Graphic` canvas category and persisted layer settings;
-- rectangle, ellipse, polygon and Bezier tools routed through the common
-  geometry policy;
-- native Face Graphic objects with canonical `geometryId` references;
-- `opaque`, `clear` and `translucent` pass modes;
-- translucent filter color, defaulting to `#FFFFFF`;
-- selection, ordering, visibility, layer lock, object lock, copy/paste, delete
-  and node editing;
-- explicit exclusion from the electrical compile signature and pixelMap.
-
-The Design canvas uses a magenta fabrication preview for these objects. The
-actual front-light buffer filter was added in phase 8; phase 3 did not
-introduce a naive overlay into Animate.
-
-Phase 4 adds associative `Project Geometry` between geometric layers:
-
-- the projection stores a stable reference to canonical source geometry rather
-  than duplicating it;
-- source edits are reflected immediately in the target layer;
-- projected geometry is cyan, dashed and read-only on the canvas;
-- `Break Link` materializes an independent object in Reference, Diffusors or
-  Face Graphic;
-- deleting a source preserves a selectable broken reference that can be
-  relinked;
-- direct and chained dependency cycles are rejected;
-- projections remain outside the electrical compile signature and pixelMap.
-
-The command is intentionally contextual: select a geometric object, choose the
-target layer, then use `Project Geometry`. Selecting a projection exposes its
-source, status and `Break Link`. This keeps projection as an object operation,
-not as a second drawing tool.
-
-Phase 5 adds compound paths and destructive boolean commands to the shared
-geometry engine:
-
-- canonical paths may persist multiple closed contours with `evenodd` fill;
-- holes affect rendering, canvas hit testing and zone pixel membership;
-- Shift/Ctrl/Command-click builds a same-layer geometric selection;
-- `Union`, `Subtract`, `Intersect` and `Exclude` resolve through Paper.js and
-  create one native result in the selected layer;
-- native input objects are consumed atomically while projected operands remain
-  linked construction references;
-- closed-profile, self-intersection and duplicate-contour validation blocks an
-  invalid boolean result;
-- zone topology participates in the Compile signature and invalid profiles are
-  reported as compile errors.
-
-`Subtract` is order-sensitive: the first selected profile is the base and later
-profiles are removed from it. Compound contour nodes are intentionally not
-edited individually in this phase; the complete result can be moved or resized.
-
-Phase 6 adds associative fabrication transforms over canonical or projected
-geometry:
-
-- `Offset Path` creates a persisted derived profile with a signed distance in
-  millimeters and `round`, `miter` or `bevel` joins;
-- miter offsets expose their limit and fall back deterministically when that
-  limit is exceeded;
-- `Fillet` creates a persisted derived profile with a radius in millimeters and
-  may affect all corners or an explicit one-based corner list;
-- excessive radii clamp to the available neighboring legs and surface a
-  warning instead of silently producing invalid geometry;
-- derived profiles remain live through shallow acyclic chains such as
-  source → projection → offset → fillet;
-- holes and compound contours are preserved, while collapse, invalid topology,
-  broken sources and cycles remain visible recoverable states;
-- `Break Link` materializes the current result as independent native geometry.
-
-Derived profiles render as amber construction geometry and remain electrically
-neutral until materialized into a native semantic object. Their implementation
-is shared by every geometric layer; layer components must not reproduce offset
-or fillet calculations.
-
-Phase 7 adds controlled editable text and deterministic outlines:
-
-- Reference, Diffusors and Face Graphic reuse one contextual Text tool;
-- `designer.texts` persists content, target layer, controlled font ID and hash,
-  size in millimeters, tracking, line height, alignment and position;
-- the initial controlled catalog contains versioned Iluminate Sans regular and
-  bold resources and never substitutes a browser/OS font;
-- single-line and basic multiline text render on canvas, remain selectable,
-  movable, lockable, visible and editable after save/reload;
-- `Convert to paths` verifies the font SHA-256 before generating normal compound
-  Bezier geometry with even-odd glyph holes;
-- conversion atomically replaces editable text with a native Reference, Zone or
-  Face Graphic profile, so immediate Undo restores the text;
-- the outline generator applies the font's glyph advances and kerning plus the
-  persisted tracking/alignment values and is covered by deterministic tests.
-
-Text itself remains electrically neutral. Converting text in Diffusors creates
-a normal Zone whose resulting geometry participates in Compile and pixel
-membership exactly like any other native zone.
-
-## 1. Objective
-
-Evolve the current Designer into the single source of truth for the illuminated
-sign and its fabrication geometry, without turning Iluminate into a general
-purpose vector illustration application.
-
-The intended workflow is:
+The new system has four canonical outputs:
 
 ```text
-Iluminate Designer
--> visual and fabrication geometry
--> zones and lighting construction
--> electrical strings and controller topology
--> optical simulation with Face Graphic
--> validated vector export
--> cutter/router operator software
+AuthoringDocumentVNext
+        |
+        v
+Iluminate compiler
+        |
+        +--> FirmwarePartituraV2   behavior shared by ESP32/web/video
+        |
+        +--> VisualSceneV1         geometry/material/camera only
+                    |
+                    v
+              PlayerBundleV1
+                 /       \
+                v         v
+       browser runtime   deterministic render worker
+                              |
+                              v
+                       MP4 + poster image
 ```
 
-This should replace avoidable round trips such as:
+Playback must never require one server request per frame. A viewer downloads an
+immutable bundle once, prepares it once, and evaluates it locally. Public share
+pages use a pre-rendered video by default and load the interactive runtime only
+on explicit request.
+
+The current player is replaced, not incrementally repaired. Pixi is removed
+from the player runtime. React remains the application and control shell but is
+not part of the frame loop. WebGL2 is the baseline renderer; its API boundary
+must permit a future WebGPU backend without changing the core or UX.
+
+## 1. Why A Total Replacement Is Required
+
+The current architecture couples playback to application-server and React
+work:
 
 ```text
-Fusion 360 -> Inkscape -> cutter software -> manual corrections
+requestAnimationFrame
+-> POST /api/lighting/partituras/simulate-frame
+-> validate and evaluate the complete partitura
+-> serialize a full preview response
+-> React setState
+-> clear the Pixi stage
+-> recreate scene objects, filters and render textures
+-> render
 ```
 
-Iluminate will export open vector interchange files. It will not generate STL,
-machine-specific binary cutting files, toolpaths or CNC programs.
+The expanded viewer mounts another Pixi application while the embedded player
+remains active. Pixi also runs its automatic ticker while the application calls
+`render()` manually. Optical filters are recreated per preview frame and the
+Face Graphic path does not currently destroy the backing source of its
+per-frame render texture.
 
-## 2. Non-Negotiable Decisions
+The present implementation therefore has four independent scaling problems:
 
-- `iluminate.partituras.document_json` remains the only editable source of truth.
-- Paper.js remains the interactive canvas/view adapter; Paper.js project JSON is
-  never persisted as the domain model.
-- The canvas, coordinate system, viewport, zoom, pan, snapping, selection and
-  Undo/Redo infrastructure are shared.
-- Geometry authoring and electrical routing are separate domain engines over
-  that shared canvas.
-- Improvements to Pen/Bezier/node editing are implemented once in the geometry
-  engine and become available to every geometric layer whose policy permits them.
-- Electrical tools remain exclusive to Strings/Hardware where appropriate.
-- `Face Graphic` is a real canvas layer with native vector geometry. It is not
-  an imported image and is not an effect target.
-- A Face Graphic region controls only final frontal light passage:
-  `opaque`, `clear` or `translucent`.
-- Face Graphic does not own diffusion, LED gap, intensity, softness, throw,
-  beam angle, strings or effects. Those remain responsibilities of zones and
-  their Lighting Setups.
-- Face Graphic never changes electrical topology, `pixelMap`, zone membership,
-  clip targeting or the firmware artifact.
-- Manufacturing export contains geometry, physical scale, layers and material
-  separation. Cutter/router configuration and tool compensation remain the
-  operator's responsibility.
+1. Server work and network traffic grow with viewers multiplied by FPS.
+2. React reconciles application state for data that belongs inside a player.
+3. CPU and GPU resources are reconstructed instead of updated.
+4. Expanded presentation duplicates the renderer and WebGL context.
 
-## 3. Target Architecture
+At 30 FPS, one hundred viewers can produce up to 3,000 simulation requests per
+second. One thousand viewers can produce up to 30,000. No optimization of the
+existing endpoint makes that the correct public playback architecture.
+
+## 2. Product Outcomes
+
+The reengineering is successful only when all of the following are true:
+
+- The ESP32 downloads a generated partitura and executes it without cloud
+  access after download.
+- The browser evaluates the same effect contract locally.
+- The video renderer evaluates the same effect contract at deterministic time
+  samples.
+- `Play` generates no frame requests to the Iluminate server.
+- React performs no render or state update for individual pixel frames.
+- A player owns exactly one canvas and one GPU context.
+- Opening the expanded viewer changes presentation, not renderer ownership.
+- GPU buffers, shaders, masks and render targets are persistent.
+- Memory and GPU-resource counts stabilize after scene load.
+- Paused, hidden and offscreen players stop scheduling frames.
+- Public playback defaults to an immutable video served by CDN.
+- Interactive public playback downloads immutable artifacts from CDN and does
+  not execute application-server simulation.
+- Private client work is private by default and cannot become public without
+  an explicit, authorized publication action.
+- The visible Animate workflow remains familiar to current operators.
+
+## 3. Non-Negotiable Decisions
+
+### 3.1 One behavioral authority
+
+`FirmwarePartituraV2` is the single declarative behavioral contract. Effects,
+targets, scene clocks, clip activation, repetition, layer order, blend modes,
+coordinate spaces and RGB quantization are defined once by lighting-core.
+
+The browser and render worker may prepare optimized in-memory structures, but
+those structures are derived from the partitura and cannot introduce new
+semantics.
+
+### 3.2 Firmware remains first-class
+
+The partitura contains logical outputs and lighting behavior, never ESP32 pin
+numbers, FastLED array names, WiFi credentials or device secrets. The firmware
+owns physical pin mapping, power constraints, device state and hardware
+drivers.
+
+The controller continues to execute locally. Loss of Internet access after a
+successful partitura download must not stop scene playback.
+
+### 3.3 No legacy compatibility layer
+
+- Do not normalize old authoring documents into the new document.
+- Do not read both `partitura.v1` and `partitura.v2` in the new runtime.
+- Do not retain the existing player as a fallback.
+- Do not ship old and new playback loops behind a feature flag.
+- Do not keep `/simulate-frame` as an alternative playback transport.
+- Do not maintain duplicate effect implementations for comparison in
+  production.
+
+The one existing authoring document will be recreated or rewritten explicitly
+for the new model during the coordinated cutover. No generic migration
+framework is required for it.
+
+### 3.4 No server in the frame loop
+
+The server may validate, compile, publish, authorize, schedule video jobs and
+serve metadata. It may not calculate ordinary interactive playback frames.
+
+### 3.5 No React in the frame loop
+
+React owns controls, panels, timeline editing and status. A controller object
+owns clock, scheduling, worker communication, GPU updates and rendering.
+
+### 3.6 One renderer
+
+Embedded, expanded and interactive share presentations are layouts around one
+player surface. They are not separate player instances for the same scene.
+
+### 3.7 Video is derived, never authoritative
+
+MP4, WebM, thumbnails and posters are immutable presentations of a published
+bundle. They cannot be edited back into a partitura and cannot define device
+behavior.
+
+### 3.8 Privacy is explicit
+
+Drafts and review renders are private. Public CDN objects and YouTube uploads
+require a separate authorized publish action. Knowing how to generate a render
+does not confer permission to publish it.
+
+## 4. Scope And Non-Goals
+
+### In scope
+
+- New authoring-to-runtime compile boundary.
+- `partitura.v2` contract and validator.
+- Allocation-bounded compiled runtime.
+- Shared deterministic effect library.
+- Browser Worker playback.
+- New WebGL2 optical renderer.
+- React integration and preservation of the current Animate UX concepts.
+- Expanded viewer using the same player instance.
+- Firmware conformance contract and coordinated external-firmware update.
+- Immutable player bundles.
+- Private review, unlisted and public shares.
+- Video rendering, R2 storage and Cloudflare CDN delivery.
+- Optional user-authorized YouTube publishing.
+- Performance, stress, parity and visual validation.
+- Deletion of the replaced implementation.
+
+### Not in scope
+
+- Supporting old saved authoring documents.
+- Supporting `partitura.v1` after cutover.
+- Server-rendering every interactive frame.
+- Streaming pixel frames over WebSocket.
+- Making the player a collaborative editor.
+- Real-time multi-user authoring.
+- Bit-level electrical waveform simulation.
+- Voltage-drop, power-injection or thermal simulation.
+- A general-purpose 2D/3D rendering framework.
+- WebGPU as a launch requirement.
+- Automatic publication to the Iluminate or a customer YouTube channel.
+
+## 5. Target System Architecture
 
 ```text
-Shared Designer Canvas
-├── viewport / coordinates / rulers
-├── zoom / pan / snapping
-├── selection / hit dispatch
-├── tool registry
-├── Undo / Redo command boundary
-└── Paper.js adapter
+                         AUTHORING
 
-Domain engines
-├── Geometry engine
-│   ├── paths and compound paths
-│   ├── rectangles / ellipses / polygons
-│   ├── Bezier nodes and handles
-│   ├── text and text-to-path
-│   ├── associative projections
-│   ├── offsets
-│   ├── fillets
-│   ├── boolean operations
-│   └── fabrication validation / vector export
-│
-└── Electrical engine
-    ├── controller ports
-    ├── data cables
-    ├── LED strings
-    ├── DIN / DOUT terminals
-    ├── solder joints
-    ├── route cutting
-    ├── joint detachment
-    ├── electrical topology
-    └── serial traversal / pixelMap input
+React Designer/Animate UX
+          |
+          v
+AuthoringDocumentVNext in browser memory
+          |
+          +------ Save ------> PostgreSQL document_json
+          |
+          +------ Compile ---> lighting-core compiler
+                                  |
+                                  +--> FirmwarePartituraV2
+                                  +--> VisualSceneV1
+                                  +--> diagnostics/checksums
+
+                         LOCAL PREVIEW
+
+FirmwarePartituraV2 + VisualSceneV1
+          |
+          v
+PlayerBundleV1 loader
+          |
+          +--> Runtime Worker --> reusable RGB typed buffers
+          |
+          +--> WebGL2 renderer --> one canvas / persistent GPU resources
+
+                         DEVICE
+
+FirmwarePartituraV2
+          |
+          v
+device download endpoint
+          |
+          v
+ESP32 compiler/runtime --> FastLED/hardware outputs
+
+                         PUBLISH
+
+PlayerBundleV1 --content hash--> private or public R2
+          |
+          +--> interactive viewer through CDN
+          |
+          +--> render queue --> render worker --> MP4/poster --> R2/CDN
 ```
 
-The engines share coordinates and canvas services, but neither engine may
-interpret or mutate the other engine's domain objects.
+The core, browser and render worker are separated by data contracts. UI
+components do not import effect implementations directly, and effect modules
+do not import React, DOM, WebGL, database or HTTP code.
 
-### 3.1 Tool dispatch
+## 6. Canonical Models And Artifacts
+
+### 6.1 AuthoringDocumentVNext
+
+`document_json` remains the single editable database value, but its internal
+schema may be replaced without compatibility fields or legacy normalizers.
+
+It owns:
+
+- Designer geometry and layer configuration.
+- Controller and logical electrical topology.
+- Pixel-density and compile settings.
+- Zones, groups and targetable semantic objects.
+- Scenes, tracks, clips and editable effect parameters.
+- Optical treatments and Face Graphic configuration.
+- Authoring camera and UX preferences that are intentionally persistent.
+
+It does not own:
+
+- Prepared runtime tables.
+- GPU buffers or shader state.
+- Current playback time.
+- Per-frame RGB colors.
+- Render jobs or video files.
+- Device pins, credentials or active runtime state.
+
+There will be one new schema version and one strict parser. Missing or unknown
+required fields fail visibly; they do not receive historical defaults.
+
+### 6.2 FirmwarePartituraV2
+
+`partitura.v2` is generated, immutable and declarative. Its exact JSON schema
+must be finalized before runtime implementation begins.
+
+It includes:
+
+- Contract and required core version.
+- Project/partitura identity and content checksum.
+- Logical outputs and output pixel counts.
+- Stable pixel indices plus output/serial addressing.
+- Spatial and normalized pixel coordinates required by effects.
+- Resolved zone/group target membership tables.
+- Scenes, tracks, clips, timing and loop rules.
+- Effect identifiers and validated effect parameters.
+- Blend and coordinate-space rules.
+- Default scene.
+
+It excludes:
+
+- Authoring-only geometry.
+- Paper/Pixi/WebGL objects.
+- Optical materials and screen-space treatments.
+- Camera or viewport state.
+- Public-share settings.
+- Device-specific hardware configuration.
+
+Target membership should be generated as numeric pixel-index tables so the
+firmware and browser do not repeatedly traverse string IDs while playing.
+Human-readable IDs remain where they are operationally useful, but the hot path
+uses compact numeric indices.
+
+### 6.3 VisualSceneV1
+
+The visual scene is derived from the same compiled authoring state and shares
+the exact pixel indices used by `partitura.v2`.
+
+It includes:
+
+- Canvas and scene bounds.
+- Pixel positions and display attributes.
+- Static document/background geometry.
+- Zone, channel and Face Graphic meshes or triangulation inputs.
+- Optical treatment descriptors.
+- Material and transmission parameters.
+- Artwork references and checksums.
+- Default camera, output aspect ratio and presentation presets.
+
+It does not define scene clocks, clips, effects or RGB results.
+
+### 6.4 PlayerBundleV1
+
+A player bundle is an immutable manifest that binds compatible behavioral and
+visual artifacts:
 
 ```text
-Artwork      -> geometric/reference tools
-Diffusors    -> geometric tools and Channel
-Face Graphic -> geometric and fabrication tools
-Strings      -> electrical route tools
-Hardware     -> controller selection/configuration
+PlayerBundleV1
+├── manifest.json
+├── partitura.v2.json
+├── visual-scene.v1.bin
+├── textures/*
+└── checksums.json
 ```
 
-Clipboard commands may be common at the UI level, but duplication semantics
-are owned by each engine. In particular, duplicating an electrical route must
-not copy solder joints or controller/output connectivity accidentally.
+The manifest records:
 
-### 3.2 Cut operations are not interchangeable
+- Bundle version.
+- Content hash.
+- Partitura and visual-scene hashes.
+- Required runtime version.
+- Duration and available scenes.
+- Default scene and camera.
+- Asset URLs and byte sizes.
+- Privacy/publication classification.
+
+The bundle is content-addressed. Identical source content produces the same
+hash and reuses the same compiled artifacts and video render.
+
+### 6.5 RenderedMedia
+
+Rendered media contains only derived delivery assets:
+
+- MP4/H.264 baseline output.
+- Optional WebM output when measured value justifies it.
+- Poster image.
+- Social/Open Graph image.
+- Duration, dimensions, codec, bitrate and checksum metadata.
+
+These objects are regenerated when the bundle hash or render profile changes.
+
+## 7. Lighting-Core Reengineering
+
+### 7.1 Required package boundaries
+
+The new lighting-core remains pure TypeScript with no DOM, React, Pixi, WebGL,
+Next.js, database or network imports.
+
+Proposed structure:
 
 ```text
-Split geometric path
--> divides vector geometry
-
-Cut electrical route
--> creates or changes terminals
--> breaks electrical continuity
--> reconciles joints
--> may change serial topology
+services/lighting-core/
+├── contracts/
+│   ├── authoring-vnext.ts
+│   ├── partitura-v2.ts
+│   ├── visual-scene-v1.ts
+│   └── player-bundle-v1.ts
+├── compiler/
+│   ├── compile-authoring-document.ts
+│   ├── compile-partitura-v2.ts
+│   ├── compile-visual-scene.ts
+│   └── diagnostics.ts
+├── runtime/
+│   ├── prepare-runtime.ts
+│   ├── render-frame-into.ts
+│   ├── runtime-clock.ts
+│   └── typed-buffers.ts
+├── effects/
+│   ├── catalog.ts
+│   ├── math.ts
+│   └── implementations/*
+├── transport/
+│   └── ws2812b.ts
+├── validation/
+├── fixtures/
+└── tests/
 ```
 
-The electrical scissors workflow remains in the electrical engine.
+Names may change during implementation, but ownership may not collapse back
+into the web application.
 
-## 4. Canonical Geometry Model
+### 7.2 Compile once
 
-Introduce a shared persisted geometry representation. Semantic objects should
-reference geometry rather than each keeping incompatible path implementations.
-
-Conceptual shape:
+The hot-path API is:
 
 ```ts
-type DesignerGeometry = {
-  id: string;
-  kind: "rect" | "ellipse" | "path";
-  points: DesignerPoint[];
-  closed: boolean;
-  fillRule: "nonzero" | "evenodd";
-  transform: DesignerTransform;
-  derivedOperation?: DesignerDerivedOperation;
+const prepared = preparePartituraRuntime(partituraV2);
+const frame = createFrameBuffer(prepared.pixelCount);
+
+renderFrameInto(prepared, sceneIndex, timeMs, frame);
+```
+
+`preparePartituraRuntime` performs once:
+
+- Schema and semantic validation.
+- Effect and parameter validation.
+- Output and pixel-index validation.
+- Target membership preparation.
+- Scene/track/clip indexing.
+- Clip sorting and schedule preparation.
+- Coordinate normalization.
+- Seed preparation for deterministic procedural effects.
+- Allocation of reusable scratch and output buffers.
+
+`renderFrameInto` may only:
+
+- Resolve the scene clock.
+- Determine active prepared clips.
+- Evaluate effect math.
+- Compose into an existing buffer.
+- Quantize into the documented RGB representation.
+
+It may not validate the partitura, sort arrays, create maps keyed by strings,
+resolve groups recursively or allocate an output object for every pixel.
+
+### 7.3 Typed runtime representation
+
+Prepared runtime data uses typed arrays where practical:
+
+- Pixel output and serial indices.
+- Pixel X/Y and normalized coordinates.
+- Target membership offsets and flat membership indices.
+- Clip timing, layers, targets and effect indices.
+- RGB frame buffers.
+- Reusable blend/scratch buffers.
+
+Strings and rich objects may remain in cold metadata, diagnostics and authoring
+paths. They do not belong in the per-frame evaluation loop.
+
+### 7.4 Deterministic effect contract
+
+Each effect module declares:
+
+- Stable effect ID.
+- Parameter schema, defaults and bounds.
+- Coordinate-space support.
+- Deterministic seed rules.
+- Numeric and RGB quantization rules.
+- Firmware support/version requirement.
+- Golden sample vectors.
+
+No effect may read wall time, browser randomness, locale, DOM state or GPU
+feedback. Time is always supplied explicitly.
+
+Floating-point behavior that can differ between JavaScript and ESP32 must be
+constrained by documented rounding points and tolerance. Effects that require
+strict integer parity should use fixed-point or integer math in their canonical
+definition.
+
+### 7.5 Transport simulation is outside visual rendering
+
+WS2812B-like byte order, transmit duration and maximum refresh estimates remain
+in a transport module. The browser UI may display them, but the optical
+renderer does not depend on them.
+
+### 7.6 Core acceptance gates
+
+- Every valid fixture compiles once and plays without further validation.
+- Invalid contracts fail before a runtime is created.
+- Repeated frame evaluation reuses all large buffers.
+- A fixed input produces identical output across executions.
+- Browser Worker and Node render worker pass the same golden vectors.
+- Firmware passes the same vectors at required sample times.
+- Runtime cost grows approximately linearly with active pixels and clips, not
+  with total inactive authoring objects.
+
+## 8. Firmware Contract And ESP32 Work
+
+The external firmware project must be updated as a coordinated part of this
+reengineering. It will consume only `partitura.v2` after cutover.
+
+Required firmware responsibilities:
+
+1. Download and authenticate the generated partitura payload.
+2. Verify schema version, core version, byte length and checksum.
+3. Reject unsupported effects or invalid output limits before activation.
+4. Prepare output, target and clip tables once.
+5. Allocate bounded runtime buffers before playback.
+6. Execute the shared scene clock locally.
+7. Render directly into the FastLED/output buffers.
+8. Preserve logical-output-to-pin mapping in firmware configuration.
+9. Store the last known good partitura atomically.
+10. Recover after restart or network loss without cloud playback dependency.
+
+Activation must be atomic: download to staging storage, validate and prepare,
+then swap the active artifact. A failed download or compile leaves the previous
+active artifact running.
+
+Firmware parity fixtures must cover:
+
+- Scene loop boundaries.
+- Clip start/end boundaries.
+- Every blend mode.
+- Local, global and serial coordinate behavior.
+- Empty outputs and unmapped pixels.
+- Every effect at representative timestamps.
+- RGB quantization and GRB transport order.
+- Maximum supported pixel/clip counts.
+- Invalid contract and unsupported-version rejection.
+
+The monorepo remains the authority for the data contract and golden vectors;
+the external firmware repository remains the authority for pins, drivers,
+storage and hardware execution.
+
+## 9. Browser Runtime
+
+### 9.1 PlayerController
+
+The React layer owns one long-lived `PlayerController` with an imperative API:
+
+```ts
+interface PlayerController {
+  load(bundle: LoadedPlayerBundle): Promise<void>;
+  play(): void;
+  pause(): void;
+  stop(): void;
+  seek(timeMs: number): void;
+  setScene(sceneId: string): void;
+  setViewport(viewport: PlayerViewport): void;
+  setPresentation(mode: "as_built" | "led_map"): void;
+  setOpticalSettings(settings: OpticalPreviewSettings): void;
+  resize(width: number, height: number, pixelRatio: number): void;
+  destroy(): void;
+}
+```
+
+State transitions are explicit:
+
+```text
+empty -> loading -> ready -> playing
+                    |        |
+                    v        v
+                  paused <- seeking
+
+any live state -> context-lost -> restoring -> previous live state
+any live state -> destroyed
+```
+
+Calling methods in an invalid state produces a controlled diagnostic, not an
+implicit second initialization.
+
+### 9.2 Runtime Worker
+
+The prepared partitura and effect evaluation live in a dedicated Web Worker.
+
+Messages are coarse:
+
+- `load`: send the partitura once.
+- `ready`: prepared runtime metadata.
+- `sample`: request the latest desired time when a buffer is available.
+- `frame`: return a transferable RGB buffer and evaluated time.
+- `dispose`: release runtime state.
+
+The controller uses two or three transferable frame buffers. Only one sample
+request may be in flight. If rendering falls behind, stale display times are
+skipped rather than queued.
+
+`SharedArrayBuffer` and cross-origin isolation are optional later
+optimizations, not baseline requirements.
+
+### 9.3 Clock and scheduling
+
+- Use `performance.now()` as the monotonic browser clock.
+- Scene time derives from a play start, offset and rate; it is not accumulated
+  by adding nominal frame durations.
+- `requestAnimationFrame` schedules visible presentation.
+- The target frame rate is a policy, not a requirement to render duplicates.
+- A hidden document, offscreen share embed or paused player schedules no
+  ordinary frames.
+- Seeking requests one sample and one render.
+- Resizing rerenders the last available frame without reevaluating effects.
+- React playhead display receives a throttled status signal, never RGB data.
+
+### 9.4 Local bundle loading
+
+The authenticated editor may build a bundle in browser memory after Compile.
+A published/review viewer downloads an immutable bundle from object storage.
+
+Loading has explicit stages and errors:
+
+```text
+manifest -> checksums -> partitura -> visual scene -> textures -> prepare -> GPU upload
+```
+
+The player must reject partial, incompatible or checksum-invalid bundles before
+playback begins.
+
+## 10. WebGL2 Renderer
+
+### 10.1 Renderer boundary
+
+The GPU renderer consumes only:
+
+- A prepared visual scene.
+- A reusable RGB frame buffer indexed exactly like the partitura.
+- Viewport, presentation and optical settings.
+
+It knows nothing about tracks, clips, effects, HTTP, React or database records.
+
+```ts
+interface PlayerRenderer {
+  initialize(canvas: HTMLCanvasElement): Promise<void>;
+  loadScene(scene: PreparedVisualScene): Promise<void>;
+  updateColors(rgb: Uint8Array): void;
+  updateViewport(viewport: PlayerViewport): void;
+  updateOpticalSettings(settings: OpticalPreviewSettings): void;
+  render(): void;
+  resize(width: number, height: number, pixelRatio: number): void;
+  destroy(): void;
+}
+```
+
+### 10.2 One canvas and one context
+
+The player creates exactly one WebGL2 context. Expanded mode changes the
+surface container to a fixed full-screen layout or moves the existing host; it
+does not instantiate another renderer.
+
+Leaving Animate, unloading the bundle or destroying the component releases all
+buffers, programs, textures, framebuffers, observers and event listeners.
+
+### 10.3 Persistent GPU resources
+
+Scene load creates and retains:
+
+- Shader programs.
+- Static vertex/index buffers.
+- Instanced pixel geometry.
+- Target and Face Graphic masks.
+- Artwork textures.
+- Optical ping-pong framebuffers.
+- Color data texture or color buffer.
+- Uniform blocks and treatment tables.
+
+Frame render updates only:
+
+- Current color data.
+- Time-independent view uniforms when the camera changed.
+- Treatment uniforms when calibration changed.
+- Necessary framebuffer contents.
+
+No shader, filter, framebuffer, mask texture, geometry object or text object is
+created per animation frame.
+
+### 10.4 Draw strategy
+
+Direct LEDs use instanced geometry or a single batched mesh. Pixel colors are
+looked up by stable pixel index from a GPU data texture or buffer.
+
+Optical treatments are grouped into bounded passes:
+
+1. Accumulate emitters into a reusable light buffer.
+2. Apply target/source masks prepared from static geometry.
+3. Apply separable blur with reusable ping-pong targets.
+4. Composite rear, face and front layers in documented physical order.
+5. Apply Face Graphic transmission using a persistent transmission texture.
+6. Composite direct LEDs and optional outlines.
+
+Treatment count must not create an unbounded number of full-resolution
+framebuffers. Compatible treatments should share passes or atlases where
+correctness permits.
+
+### 10.5 Render area and culling
+
+The logical Designer workspace may be larger than the display. The GPU renders
+only the visible camera rectangle plus the maximum required optical padding.
+
+```text
+render bounds = camera bounds expanded by visible effect radius
+```
+
+Objects outside those bounds are excluded from CPU submission where useful and
+clipped by the GPU. Public video renders an explicit output camera such as
+1920x1080, not the entire authoring workspace.
+
+Whole-viewport redraw is acceptable after the scene is persistent. Dirty
+rectangles are not a launch requirement because overlapping blur and additive
+composition make them complex and error-prone.
+
+### 10.6 Resolution policy
+
+- The final composite uses the visible canvas resolution.
+- Device pixel ratio is capped by a quality profile and GPU limits.
+- Blur/light accumulation defaults to half or quarter resolution when visual
+  tests show equivalent output.
+- Resize allocations are debounced and old targets are released immediately
+  after the replacement is complete.
+- Maximum texture and framebuffer sizes are checked before allocation.
+- Quality may adapt downward after sustained missed frame budgets, but semantic
+  colors and timing do not change.
+
+### 10.7 Context loss
+
+The renderer registers `webglcontextlost` and `webglcontextrestored` before
+playback. On loss it stops frame submission, retains CPU-side prepared scene
+data, reports one diagnostic and attempts a bounded resource rebuild after
+restore.
+
+Repeated restoration failure produces a visible player error with a video or
+poster fallback when available. It must not silently create another context.
+
+### 10.8 Renderer technology decision
+
+Pixi is removed from the new player. Paper remains the Design authoring adapter
+and is not used for Animate playback.
+
+WebGL2 is chosen because it provides broad browser support, explicit resource
+ownership, instancing, reusable framebuffers and shader control. The renderer
+interface remains backend-neutral so WebGPU can be evaluated later from
+measured need rather than introduced as a second launch implementation.
+
+## 11. Animate And Viewer UX
+
+The internal implementation changes completely, but the operator's mental
+model remains similar.
+
+### 11.1 Preserved concepts
+
+- Design and Animate remain distinct modes.
+- Compile remains explicit before Animate can trust changed physical topology.
+- Scene, tracks, clips and timeline remain visible authoring concepts.
+- Play, Pause, Stop, seek and scene selection remain available.
+- `As built` and `LED map` remain presentation choices.
+- Pan, zoom and target selection remain available in the embedded player.
+- Lighting calibration remains contextual to selected zones/channels.
+- Expanded viewing retains Return, scene identity, mapped pixel count and
+  playback controls.
+- Existing validation and stale-compile warnings remain conceptually present.
+
+### 11.2 Intentional UX changes
+
+- Expanded mode reuses the existing player surface.
+- There is no second player modal or duplicate playback loop.
+- `Rendering` refers to bundle preparation or video generation, not ordinary
+  interactive playback.
+- The UI may show a compact quality indicator when adaptive optical resolution
+  is active.
+- Publication is separated from preview through explicit Review/Public actions.
+- Public/YouTube actions show privacy and rights confirmations.
+
+### 11.3 React integration
+
+React receives low-frequency player status only:
+
+```ts
+type PlayerStatus = {
+  state: "loading" | "ready" | "playing" | "paused" | "error";
+  sceneId: string;
+  timeMs: number;
+  durationMs: number;
+  measuredFps?: number;
 };
 ```
 
-Consumers:
+It does not store `animationPixels`, output rows or per-frame preview objects.
+Timeline playhead updates should be visually smooth enough for the operator but
+may be throttled independently of render FPS.
+
+### 11.4 Editing while previewing
+
+- Timeline/effect edits invalidate and rebuild the prepared behavioral runtime.
+- Physical topology changes require Compile before playback resumes.
+- Optical parameter changes update GPU uniforms without recompiling behavior.
+- Static visual-geometry changes rebuild only affected visual resources.
+- Rebuild happens outside the active frame callback and swaps atomically when
+  ready.
+- Playback may pause with a clear `Preparing scene` state when a structural
+  rebuild cannot be made safely in place.
+
+## 12. Share And Video Architecture
+
+### 12.1 Publication flow
 
 ```text
-Zone                -> geometryId
-Build Area          -> geometryId
-Channel             -> geometryId + width/topology
-Face Graphic region -> geometryId + passMode/filterColor
+Publish/Share action
+-> validate permissions and current compile
+-> create immutable bundle hash
+-> upload bundle to appropriate R2 storage
+-> coalesce render job by bundle hash + render profile
+-> render deterministic frames
+-> encode MP4 and poster
+-> publish or authorize delivery
+-> return stable Iluminate share URL
 ```
 
-Electrical routes remain separate because their nodes, terminals, direction
-and connectivity have different semantics.
+Viewing never starts a new render job unless an authorized publication changed
+the source bundle or requested a new render profile.
 
-The persisted geometry in `document_json` is the editorial truth. The geometry
-engine is the sole deterministic interpreter and transformer of that data.
-Paper.js renders it and translates pointer events into commands.
+### 12.2 Render worker
 
-## 5. Face Graphic Contract
+Video generation runs in a separate worker service, never inside the request
+handler serving the editor.
 
-Face Graphic is the top physical definition layer placed over the front face
-of a light box, light chamber or dimensional letter.
+The worker:
 
-Conceptual object:
+1. Claims a queued job with a lease.
+2. Downloads and verifies the immutable bundle.
+3. Loads the same core and WebGL renderer modules as the browser.
+4. Uses a fixed output size, frame rate and deterministic time sequence.
+5. Captures frames without real-time delay.
+6. Encodes MP4/H.264 with FFmpeg.
+7. Generates poster/social images.
+8. Uploads outputs to R2.
+9. Records checksums and marks the job complete.
 
-```ts
-type DesignerFaceGraphicElement = {
-  id: string;
-  name: string;
-  geometryId: string;
-  passMode: "opaque" | "clear" | "translucent";
-  filterColor: string;
-  visible: boolean;
-  locked: boolean;
-};
-```
+Jobs are idempotent and content-addressed. Retries do not create duplicate
+published media. Concurrency and CPU/GPU consumption are bounded by queue
+policy.
 
-Defaults:
+### 12.3 Default public experience
+
+The share page loads:
+
+- Title, author and safe public metadata.
+- Poster.
+- MP4 video in loop with standard controls.
+- Share/copy-link controls.
+- Optional `Open interactive` action.
+
+It does not load React Designer, Paper, authoring state or WebGL until the user
+requests interactivity.
+
+### 12.4 CDN and object storage
+
+Use separate Cloudflare R2 buckets or equivalent hard-separated namespaces:
 
 ```text
-passMode: translucent
-filterColor: #FFFFFF
+iluminate-private-renders
+iluminate-public-shares
 ```
 
-Optical behavior:
+The existing private artwork bucket must not be made public.
+
+Recommended public paths:
 
 ```text
-opaque      -> output = 0
-clear       -> output = computed frontal light
-translucent -> output = computed frontal light × filterColor
+bundles/<bundle-hash>/manifest.json
+bundles/<bundle-hash>/partitura.v2.json
+bundles/<bundle-hash>/visual-scene.v1.bin
+bundles/<bundle-hash>/textures/*
+media/<bundle-hash>/<profile>/scene.mp4
+media/<bundle-hash>/<profile>/poster.webp
 ```
 
-The operation is a color transmission/filter operation, not a repaint. White
-light through red translucent vinyl becomes red. Blue light through an ideal
-red filter becomes nearly black.
+Public immutable objects use long-lived cache headers and a custom CDN domain,
+for example `media.iluminate.app`. Private objects require authenticated or
+signed delivery and are never copied into the public bucket merely to make a
+review link easier.
 
-Face Graphic must not expose:
+### 12.5 YouTube
 
-- LED or pixel density;
-- gap or source distance;
-- intensity;
-- softness or diffusion;
-- beam direction or beam angle;
-- falloff or throw;
-- strings;
-- effects or clips.
+YouTube is an explicit export destination, not the canonical share store.
 
-Editor visibility/opacity controls are presentation aids and must not become
-physical transmission controls.
+- Never upload automatically.
+- Use the customer's OAuth-authorized channel, not a global Iluminate channel.
+- Require an authorized role and a final confirmation.
+- Allow public, unlisted or private visibility where the API permits it.
+- Record the initiating user, channel, video ID and resulting URL.
+- Explain that public publication cannot guarantee removal of external copies.
+- Support `Download MP4` even when YouTube integration is unavailable.
 
-Face Graphic changes:
+## 13. Privacy, Authorization And Share States
 
-- mark `document_json` dirty;
-- invalidate the optical preview;
-- invalidate fabrication export;
-- do not invalidate electrical Compile;
-- do not modify `generated_json` for firmware.
+Every render/share has one explicit state:
 
-## 6. Associative Project Geometry
-
-Support a Fusion-like `Project Geometry` workflow between geometric layers.
-
-```text
-Select source geometry on another layer
--> Project Geometry into active layer
--> linked, read-only projected reference
-```
-
-Conceptual record:
-
-```ts
-type DesignerProjection = {
-  id: string;
-  sourceGeometryId: string;
-  targetLayer: DesignerLayerId;
-  linked: boolean;
-};
-```
+| State | Audience | Delivery | Indexing |
+|---|---|---|---|
+| Private | Authorized organization members | Authenticated private object | No |
+| Review | Possessor of opaque revocable link, optionally password/expiry protected | Signed or gated private object | No |
+| Unlisted | Possessor of stable opaque link | Controlled delivery | `noindex` |
+| Public | Anyone | Public R2/CDN | Allowed |
 
 Rules:
 
-- Linked projection resolves from its source; it is not a second authoritative
-  copy of the path.
-- Changes to the source update the projection.
-- Projected geometry has a distinct canvas presentation.
-- `Break Link` materializes an independent editable geometry object.
-- Source deletion produces a recoverable broken-reference issue.
-- Relinking must be possible.
-- Dependency cycles are invalid.
-- Undo/Redo treats project, relink and break-link as complete commands.
-- A projected reference is excluded from fabrication output unless it is used
-  by a fabricable derived profile or is explicitly materialized.
+- New content starts Private.
+- Generating a video does not make it Public.
+- Only authorized organization roles may change publication state.
+- Organizations may disable Public and YouTube publication entirely.
+- Review links support expiration and immediate revocation.
+- Optional watermarking is part of the render profile for client review.
+- Publication, revocation, download and YouTube actions are auditable.
+- Public promotion requires an explicit rights/approval confirmation.
+- Revocation deletes or disables origin access and purges controlled CDN
+  caches, but the UI must state that downloaded or externally copied media
+  cannot be recalled.
 
-Derived operation example:
+The public web container must not receive database credentials, R2-write
+credentials, session secrets or device credentials. Public metadata and media
+must be delivered through prebuilt manifests, read-only public objects or a
+purpose-built restricted gateway.
 
-```text
-Zone geometry
--> linked projection into Face Graphic
--> outward offset
--> corner fillets
--> fabricable Face Graphic profile
-```
+## 14. Server APIs And Persistence
 
-## 7. Geometry Operations
+### 14.1 APIs retained or introduced
 
-### 7.1 Compound paths and boolean operations
+The target server surface performs coarse operations:
 
-Required before reliable mask/cut export:
+- Save AuthoringDocumentVNext.
+- Compile and validate authoring state.
+- Generate/publish `partitura.v2` for devices.
+- Create immutable player bundle.
+- Create/query/cancel render job.
+- Create/revoke/update share policy.
+- Request a signed private-review URL.
+- Initiate user-authorized YouTube upload.
+- Serve the device partitura artifact.
 
-- compound paths;
-- holes;
-- even-odd fill behavior;
-- union;
-- subtract;
-- intersect;
-- exclude;
-- closed-profile validation;
-- self-intersection detection;
-- duplicate contour detection.
+There is no ordinary frame-render endpoint.
 
-These operations allow letters with counters (`A`, `O`, `P`, `R`), opaque
-backgrounds with illuminated windows and composed logos.
+### 14.2 APIs removed
 
-### 7.2 Offset Path
+- `/api/lighting/partituras/simulate-frame`.
+- Any API returning per-frame output rows for browser playback.
+- Duplicate modal-specific playback APIs or loops.
 
-Required controls:
+An explicit diagnostic endpoint may evaluate a requested frame for support or
+test tooling only if it is authenticated, rate-limited and never used by the
+player. It must call the same core runtime and must not become a fallback.
 
-- inward/outward distance in millimeters;
-- `round`, `miter` and `bevel` joins;
-- miter limit;
-- live preview;
-- support for open and closed paths;
-- preservation of holes and compound paths;
-- deterministic handling of self-intersections;
-- clear failure/warning behavior when an inward offset collapses a profile.
+### 14.3 Persistence additions
 
-Offset is a design/fabrication operation. Machine tool compensation remains in
-the cutter/router CAM workflow.
-
-### 7.3 General fillets
-
-Generalize the existing Channel-node `radiusMm` concept:
-
-- apply to one or several eligible corners;
-- radius in millimeters;
-- live preview;
-- clamp when the requested radius does not fit;
-- warn when a fillet consumes a short neighboring leg;
-- persist parametrically;
-- recalculate when upstream projected geometry changes.
-
-Dogbone and T-bone relief may be added later for CNC-fit workflows. They are
-not required for the first fillet release.
-
-### 7.4 Derived-operation graph
-
-Operations should remain editable rather than immediately destroying their
-inputs:
+Exact SQL belongs to implementation, but the model needs these responsibilities:
 
 ```text
-source -> projection -> offset -> fillet -> resolved profile
+render_artifacts
+  id, client_id, bundle_hash, profile, status,
+  private/public object keys, checksums, dimensions, duration, timestamps
+
+render_jobs
+  id, client_id, bundle_hash, profile, status,
+  attempts, lease, error summary, timestamps
+
+scene_shares
+  id, client_id, partitura_id, artifact_id, opaque slug,
+  access policy, expiry, revoked_at, created_by, timestamps
+
+publication_audit
+  actor, client, action, target, policy transition, timestamp, metadata
 ```
 
-The first version needs only a shallow acyclic dependency graph, not a complete
-Fusion-style feature timeline.
+All mutable records are tenant-scoped. Content hashes deduplicate binary
+artifacts without weakening authorization or exposing cross-tenant metadata.
 
-## 8. Text And Text-To-Path
+`generated_json` will store the current `partitura.v2` device artifact. Old v1
+payloads are cleared during cutover and are not accepted by the new device
+endpoint.
 
-Editable text concept:
+## 15. Performance Contract
 
-```ts
-type DesignerText = {
-  id: string;
-  text: string;
-  fontId: string;
-  fontSizeMm: number;
-  tracking: number;
-  lineHeight: number;
-  alignment: "left" | "center" | "right";
-  transform: DesignerTransform;
-};
-```
+Performance is a product contract with automated gates, not a subjective smoke
+test.
 
-Requirements:
+### 15.1 Per-viewer runtime gates
 
-- Do not depend on fonts installed in the operator's browser/OS.
-- Use a controlled font resource with a stable identifier and content hash.
-- Preserve deterministic glyph shaping and kerning.
-- `Convert to paths` produces normal compound Bezier geometry.
-- Conversion must preserve glyph holes.
-- Conversion is reversible through immediate Undo.
-- Manufacturing export converts all remaining text to outlines.
-- Saved/reloaded text must produce identical outlines.
+- Exactly one WebGL context.
+- Zero network requests per animation frame.
+- Zero React state updates per RGB frame.
+- At most one Worker sample in flight.
+- No unbounded queued frames.
+- No creation of shaders, textures, framebuffers or geometry in steady-state
+  playback.
+- No growth in live GPU-resource counts after warm-up.
+- JavaScript heap growth after warm-up remains within 5 MB over a 60-minute
+  reference loop, excluding browser noise documented by the harness.
+- Paused or hidden player has no active render loop.
+- Context restoration does not create duplicate resources.
 
-Initial scope:
+### 15.2 Frame budgets
 
-- controlled Iluminate font catalog;
-- single-line and basic multiline text;
-- size, tracking, line height and alignment;
-- conversion to paths.
+Reference profiles must be defined with fixed fixtures. Initial targets:
 
-Deferred:
+| Profile | Output | Target | CPU preparation + submission p95 |
+|---|---:|---:|---:|
+| Desktop standard | 1920x1080 @ 30 FPS | Full optical scene | <= 8 ms |
+| Desktop high refresh | 1920x1080 @ 60 FPS | Supported scene profile | <= 12 ms |
+| Mobile standard | viewport @ 30 FPS | Adaptive optical resolution | <= 20 ms |
 
-- client font upload and licensing workflow;
-- text on path;
-- advanced typographic layout;
-- automatic script-font welding.
+GPU completion is measured separately where browser APIs permit it. A target is
+not accepted solely because average FPS appears correct; p95/p99 stalls and
+memory stability must be visible.
 
-## 9. Rendering Pipeline
+### 15.3 Core budgets
 
-Refactor Animate optical rendering into explicit buffers:
+Benchmarks must report at least:
+
+- Prepare time by pixel/clip count.
+- Frame evaluation p50/p95/p99.
+- Bytes allocated per evaluated frame.
+- Peak runtime buffer size.
+- Effect-specific cost.
+
+Steady-state core evaluation should allocate zero large objects. Any unavoidable
+small allocation must be measured, justified and bounded.
+
+### 15.4 Scale budgets
+
+- 1,000 concurrent public video viewers cause zero core frame evaluations on
+  application servers.
+- 1,000 concurrent interactive viewers cause zero core frame evaluations on
+  application servers.
+- Public static delivery is served from CDN/object storage.
+- A single bundle hash creates at most one active render job per profile.
+- Render-worker concurrency is explicitly capped and queue depth observable.
+- Application origin remains responsive during render backlog.
+
+## 16. Observability
+
+### Browser metrics
+
+Collect sampled, privacy-safe metrics:
+
+- Bundle download and verification duration.
+- Core prepare duration.
+- GPU scene upload duration.
+- First rendered frame.
+- Frame CPU p50/p95/p99.
+- Dropped/stale sample count.
+- Adaptive quality transitions.
+- WebGL context loss/restore/failure.
+- Player state transition errors.
+- Approximate heap usage only where the browser exposes it safely.
+
+Do not send one telemetry event per frame. Aggregate locally and flush bounded
+summaries.
+
+### Server/worker metrics
+
+- Bundle compile success/failure and duration.
+- Artifact sizes.
+- Render queue depth and age.
+- Render duration, retry count and failure class.
+- R2 upload/download failures.
+- Publication transitions and authorization failures.
+- CDN hit ratio and origin request volume where available.
+- Device artifact download and rejection rates.
+
+Logs must identify bundle hash, artifact/job ID and tenant-safe correlation ID,
+never raw credentials or private scene contents.
+
+## 17. Validation Strategy
+
+### 17.1 Contract tests
+
+- Strict schema acceptance/rejection for AuthoringDocumentVNext,
+  FirmwarePartituraV2, VisualSceneV1 and PlayerBundleV1.
+- Checksum and version failures.
+- Unknown effects and invalid parameters.
+- Target and pixel-index referential integrity.
+- Output count and device-limit validation.
+
+### 17.2 Core parity tests
+
+Golden vectors have the form:
 
 ```text
-Rear/external buffer
-├── Halo
-└── Wall Wash
-
-Front-light buffer
-├── front material/acrylic presentation
-└── all Front light sources
-
-Face Graphic pass
-└── applies opaque/clear/translucent only to front-light buffer
-
-Final composition
-├── workspace/background
-├── rear/external buffer
-├── filtered front-light buffer
-└── editor selection/outlines
+partitura + sceneId + timeMs -> ordered RGB frame
 ```
 
-A naive top-level multiply sprite is invalid because it would also filter the
-background, Halo and Wall Wash.
+They cover every effect, blend, coordinate space and boundary. The Node core,
+browser Worker and firmware must consume the same input vectors.
 
-Required deterministic visual cases:
+Parity is against the new written contract and approved vectors, not against
+accidental behavior of the old player.
+
+### 17.3 Runtime stress tests
+
+- Ten thousand sequential frames with stable buffer identities.
+- Sixty-minute loop with heap/resource sampling.
+- Rapid play/pause/seek/scene changes.
+- Resize and DPR changes during playback.
+- Tab hide/show and offscreen transitions.
+- Worker delay and stale-frame skipping.
+- Load/destroy cycles.
+- Synthetic context loss and restoration.
+- Maximum supported scene fixture.
 
-- white light under red translucent graphic -> red;
-- red light under red translucent graphic -> red;
-- blue light under red translucent graphic -> nearly off;
-- clear region -> unchanged light;
-- opaque region -> fully blocked light;
-- Halo and Wall Wash -> unaffected by Face Graphic;
-- multiple zones -> continuous spatial mask alignment;
-- zoom/pan -> no mask drift.
+### 17.4 Renderer visual tests
 
-`As built` includes Face Graphic. `LED map` continues to expose the raw mapped
-pixel output for diagnostics.
+Approved images are captured for:
 
-## 10. Manufacturing Export
+- Direct LED map.
+- Front illumination by material.
+- Rear halo and wall wash.
+- Treatment ordering and overlap.
+- Face Graphic opaque, clear and translucent transmission.
+- Day/night backgrounds.
+- Camera crop and optical padding.
+- Half/quarter-resolution optical passes.
+- Embedded and expanded layouts.
 
-### 10.1 SVG first
+Visual tests use perceptual tolerances appropriate for GPU rasterization, with
+separate semantic assertions for layer order and masks.
 
-SVG is the first canonical interchange export because it matches the web/vector
-model and is accepted by modern sign/cutting workflows.
+### 17.5 UX end-to-end tests
 
-Requirements:
+- Compile, enter Animate, play, pause, stop and seek.
+- Change scenes and effect parameters.
+- Select and calibrate one or multiple optical targets.
+- Switch LED Map/As Built.
+- Expand and return without creating a second context.
+- Edit while paused and rebuild correctly.
+- Detect stale physical compile.
+- Create private review, revoke it and verify denial.
+- Publish public video and open share page without editor code.
+- Open interactive share and verify no frame API traffic.
 
-- physical scale 1:1;
-- explicit millimeter dimensions;
-- stable `viewBox`;
-- paths/compound paths only for manufacturing geometry;
-- text converted to paths;
-- grouped output by Designer layer and Face Graphic pass/color;
-- exclude guides, projected construction references, selection visuals,
-  electrical routes and controller graphics unless explicitly requested in a
-  separate fabrication drawing;
-- project/partitura identity, generation time and source checksum metadata.
+### 17.6 Load tests
 
-### 10.2 DXF second
+Load tests must distinguish:
 
-DXF supports path-oriented router/CAM interchange.
+- Application metadata endpoints.
+- Private signed delivery.
+- Public CDN delivery.
+- Render-job creation.
+- Render-worker throughput.
 
-Requirements:
+No load test should simulate public scale by repeatedly calling a frame API,
+because that API does not exist in the target design.
 
-- explicit units;
-- named layers by operation/material;
-- deterministic Bezier/spline flattening tolerance when the destination
-  workflow requires polylines;
-- no raster content;
-- no machine toolpaths.
+### 17.7 Hardware acceptance
 
-### 10.3 Later compatibility
+At least one real ESP32 installation must:
 
-- vector PDF;
-- EPS for older sign/cutter software;
-- no proprietary AI/CDR generation;
-- no STL;
-- no machine-specific binary cutting format.
+- Download `partitura.v2`.
+- Verify and activate it atomically.
+- Match golden RGB frames at selected timestamps.
+- Loop for an extended period without cloud access.
+- Recover the last known good artifact after restart.
+- Reject a deliberately incompatible artifact without interrupting the active
+  scene.
 
-### 10.4 Export validation
+## 18. Implementation Workstreams
 
-Block or warn on:
+These are construction workstreams, not incremental production releases. The
+new path is merged and deployed only when the complete cutover gate passes.
 
-- open contours where a closed profile is required;
-- self-intersections;
-- duplicate contours;
-- invalid holes;
-- geometry outside the fabrication area;
-- features smaller than configured fabrication guidance;
-- broken projection/derived-operation references;
-- unresolved text/font resources;
-- invalid or missing units;
-- empty output.
+### Workstream A — Contract reset
 
-## 11. Work Phases
+Deliverables:
 
-### Phase 0 — Contract and regression baseline — COMPLETE
+- Final AuthoringDocumentVNext schema.
+- Final `partitura.v2` schema.
+- Final VisualSceneV1 and PlayerBundleV1 contracts.
+- Effect parameter contracts and deterministic numeric rules.
+- Device limits and bundle limits.
+- Golden-vector format.
+- New default document containing the current scene reconstructed intentionally.
 
-- Finalize architecture and schema decisions.
-- Add `designerSchemaVersion` or equivalent migration discriminator.
-- Capture legacy/current document fixtures.
-- Add regression coverage for current geometric and electrical workflows.
-- Record current Designer smoke scenarios.
+Exit gate:
 
-Exit criteria:
+- Contracts reviewed by web, core and firmware ownership.
+- No unresolved semantic choice is delegated to renderer implementation.
 
-- Existing Designer behavior is reproducibly covered before refactoring.
+### Workstream B — New lighting-core
 
-### Phase 1 — Internal separation with no UX change — COMPLETE
+Deliverables:
 
-- Extract shared canvas services.
-- Extract geometry-domain operations.
-- Extract electrical-domain operations.
-- Introduce layer-aware tool dispatch.
-- Preserve current Paper.js presentation and behavior.
+- Strict validators.
+- Authoring compiler.
+- Runtime preparation.
+- Allocation-bounded `renderFrameInto`.
+- Effect modules.
+- WS2812B transport projection.
+- Node/browser builds.
+- Core benchmarks and golden tests.
 
-Exit criteria:
+Exit gate:
 
-- Current tests/build/smoke pass with no intended UI behavior change.
+- All golden vectors pass.
+- Performance and allocation budgets pass for reference fixtures.
 
-### Phase 2 — Canonical geometry and commands — COMPLETE
+### Workstream C — ESP32 runtime v2
 
-- Introduce canonical geometry records and geometry identifiers.
-- Make zones/build areas/channels consume the shared model.
-- Add common geometry commands.
-- Add layer policies/factories.
-- Migrate legacy inline geometry on normalization/save.
+Deliverables in the external firmware repository:
 
-Exit criteria:
+- V2 parser and verifier.
+- Prepared runtime tables.
+- Effect implementations/conformance.
+- Atomic storage and activation.
+- Device download/update flow.
+- Hardware parity harness.
 
-- One Pen/Bezier implementation edits every geometric layer.
-- Existing documents reopen without loss.
+Exit gate:
 
-### Phase 3 — Face Graphic authoring layer — COMPLETE
+- Hardware acceptance passes without a v1 reader compiled into the target
+  firmware release.
 
-- Add the Face Graphic category and layer settings.
-- Add native geometric Face Graphic objects.
-- Reuse shared geometric tools.
-- Add pass mode and filter color.
-- Add layer/object selection, ordering, lock and visibility.
+### Workstream D — Browser Worker runtime
 
-Exit criteria:
+Deliverables:
 
-- Face Graphic persists and edits without affecting Compile or wiring.
+- Bundle loader and checksum verification.
+- Runtime Worker.
+- Transferable frame-buffer pool.
+- Clock and scheduler.
+- PlayerController state machine.
+- Visibility/offscreen suspension.
+- Stress and lifecycle tests.
 
-### Phase 4 — Associative Project Geometry — COMPLETE
+Exit gate:
 
-- Add linked projections between geometric layers.
-- Add visual distinction and read-only behavior.
-- Add Break Link, relink and broken-reference handling.
-- Add cycle detection.
+- Local playback runs with network disabled after load.
+- No React frame state and no server frame requests.
 
-Exit criteria:
+### Workstream E — WebGL2 renderer
 
-- Editing source geometry updates the target-layer projection.
+Deliverables:
 
-### Phase 5 — Compound paths and booleans — COMPLETE
+- Renderer resource manager.
+- Static-scene preparation/triangulation.
+- Instanced direct LED pass.
+- Optical accumulation and reusable blur passes.
+- Persistent target/Face Graphic masks.
+- Camera/culling and resize policy.
+- Context restoration.
+- Visual/performance harness.
 
-- Add holes and fill rules.
-- Add union/subtract/intersect/exclude.
-- Add topology validation.
+Exit gate:
 
-Exit criteria:
+- Visual baselines approved.
+- Resource and frame budgets pass.
+- Sixty-minute stress test remains stable.
 
-- Letter counters and opaque masks with transparent windows resolve correctly.
+### Workstream F — Animate UX integration
 
-### Phase 6 — Offset and fillets — COMPLETE
+Deliverables:
 
-- Add robust offset operation and join styles.
-- Generalize parametric fillets.
-- Add derived-operation recalculation and failure reporting.
+- One player surface.
+- Existing control concepts connected to PlayerController.
+- Timeline status bridge without RGB React state.
+- Embedded/expanded responsive layouts over the same surface.
+- Optical calibration uniform/resource updates.
+- Removal of duplicate modal/player loops.
+- Operator end-to-end tests.
 
-Exit criteria:
+Exit gate:
 
-- A projected zone can become an offset, filleted, fabricable profile.
-
-### Phase 7 — Text and outlines — COMPLETE
-
-- Add controlled font resources.
-- Add editable text tool/object.
-- Add deterministic text-to-path conversion.
-- Add text/path persistence and Undo/Redo coverage.
-
-Exit criteria:
-
-- Text produces identical manufacturing geometry across save/reload/export.
-
-### Phase 8 — Face Graphic optical renderer — COMPLETE
-
-- Split rear/external and front-light buffers.
-- Render Face Graphic vector masks.
-- Apply pass/filter semantics only to frontal illumination.
-- Preserve raw LED-map diagnostics.
-
-Exit criteria:
-
-- All canonical optical cases pass without changing Halo/Wall Wash behavior.
-
-Implementation checkpoint (2026-10-06): Animate now builds explicit
-rear/external and front-light Pixi containers. A full-canvas vector
-transmission texture applies `opaque`, `clear` and RGB `translucent` semantics
-only to the front container; compound paths retain their holes, overlaps obey
-the persisted front-to-back order, and the uncovered face is opaque whenever
-a Face Graphic exists. Layer/object visibility and opacity remain editor aids
-and do not alter physical transmission. Direct-mounted Front LEDs are included
-in the filtered buffer. LED Map bypasses the optical pass and remains raw.
-
-### Phase 9 — Fabrication export — COMPLETE
-
-- Implement SVG generation and validation.
-- Add downloadable export UX.
-- Implement DXF after SVG is stable.
-- Add PDF/EPS only from validated real operator requirements.
-
-Exit criteria:
-
-- Export opens at 1:1 scale in selected cutter/router software and contains
-  only intended manufacturing geometry.
-
-Implementation checkpoint (2026-10-06): the Designer exports selected
-Reference/substrate, Diffusors and Face Graphic fabrication categories through
-one validated canonical pipeline. SVG uses explicit millimeter dimensions,
-stable `viewBox`, path-only geometry, compound fill rules, native Beziers,
-material/pass groups and identity/time/source-checksum metadata. Editable text
-is deterministically outlined during export without mutating the document.
-DXF declares millimeter units and named operation/material layers, and flattens
-ellipses/Beziers to closed `LWPOLYLINE` entities with an operator-controlled,
-deterministic tolerance. Artwork, linked construction projections, controller,
-routes and pixels are excluded. Blocking diagnostics cover invalid/open/self-
-intersecting/duplicate geometry, invalid compound contours, unresolved text,
-broken derived operations, invalid units/tolerance and empty output; out-of-
-bounds and small-feature guidance remain warnings. PDF/EPS remain deferred.
-
-### Phase 10 — Integration and documentation — COMPLETE
-
-- Complete old/new document migration coverage.
-- Complete end-to-end electrical and geometry regression.
-- Update all affected `.agent` and `docs` contracts.
-- Regenerate generated context after the structural change is complete.
-
-Exit criteria:
-
-- Production build and full Designer smoke pass.
-- Documentation and executable behavior agree.
-
-Implementation checkpoint (2026-10-06): legacy and current Designer documents
-now normalize without restoring deleted sample zones or routes; explicitly
-empty authored collections remain empty, while fields absent from genuinely
-older documents still receive compatible defaults. Current schema documents
-are normalization-idempotent across save/reload, including canonical compound
-geometry, projections, derived operations, Face Graphic, text and electrical
-routes. Live offset/fillet operations targeting Face Graphic now persist their
-own mask pass/color, participate in the As built frontal-light filter, retain
-those semantics when materialized and export into the matching SVG/DXF material
-group. They remain electrically neutral and never filter Halo or Wall Wash.
-
-The deterministic Designer regression now contains 68 tests across 19 suites,
-including an integrated geometry -> linked projection -> offset -> fillet ->
-red translucent Face Graphic -> electrical compile -> save/reload -> SVG/DXF
-scenario, plus controller/cable movement and detach behavior. The production
-build, TypeScript validation, container deployment and HTTP/API smoke passed on
-2026-10-06. Opening the interchange in each operator's chosen proprietary
-cutter or router software remains an operational acceptance check rather than
-an automated repository test.
-
-## 12. Required Regression Coverage
-
-### Geometry
-
-- Create/edit rectangle, ellipse, polygon and Bezier.
-- Insert/delete nodes.
-- Edit handles and node types.
-- Move/resize/duplicate/delete.
-- Compound paths and holes.
-- Boolean operations.
-- Offset corner cases.
-- Fillet limits.
-- Text conversion.
-- Projection update/break/relink/cycle rejection.
-- Save/reload and Undo/Redo.
-
-### Electrical
-
-- Controller-port to data-cable solder.
-- Cable/string and same-kind joints.
-- Controller dragging with connected cables.
-- Route/joint dragging.
-- Cut route.
-- Detach joint.
-- Delete-route cleanup.
-- Electrical traversal and serial order.
-- Compile errors/warnings and generated pixelMap.
-
-### Renderer
-
-- Front/halo/wall-wash baseline behavior.
-- Face Graphic opaque/clear/translucent behavior.
-- Multiple zones and overlapping front sources.
-- Pan/zoom/resize alignment.
-- Preview regeneration while timeline playback is active.
-
-### Export
-
-- Unit and scale checks.
-- Path/compound-path fidelity.
-- Text outlines.
-- Layer/material grouping.
-- Open/self-intersecting/duplicate path diagnostics.
-- SVG round-trip through representative cutter software.
-- DXF round-trip through representative router/CAM software.
-
-## 13. End-To-End Acceptance Scenario
-
-1. Create editable text.
-2. Convert the text to compound paths.
-3. Use the geometry as a visual zone.
-4. Project it associatively into Face Graphic.
-5. Apply an outward offset.
-6. Apply fabrication fillets.
-7. Mark the resulting Face Graphic region as red translucent vinyl.
-8. Draw controller, data cable and LED string topology.
-9. Compile the physical layout.
-10. Apply a white effect to the corresponding lighting target.
-11. Confirm that only the Face Graphic opening is illuminated and appears red.
-12. Confirm that Halo/Wall Wash, if present, are not filtered.
-13. Edit the source geometry and confirm that the linked projection and derived
-    operations update.
-14. Break the projection link and edit the resulting independent geometry.
-15. Export SVG and DXF at physical 1:1 scale.
-16. Open the export in representative cutter/router operator software.
-17. Reopen a pre-upgrade partitura and confirm no geometry or wiring loss.
-18. Cut/detach an electrical route and confirm that vector-engine changes did
-    not alter electrical semantics.
-
-## 14. Validation Commands
-
-At minimum for each implementation slice:
+- UX acceptance scenario passes.
+- Opening expanded mode never changes context count.
+
+### Workstream G — Publishing and media
+
+Deliverables:
+
+- Bundle artifact persistence.
+- Private/public R2 separation.
+- Render queue and worker.
+- MP4/poster profiles.
+- Share policy and audit model.
+- Private review and public share pages.
+- Optional interactive viewer.
+- Download MP4.
+- YouTube OAuth publication flow.
+
+Exit gate:
+
+- Public video and interactive viewers generate no frame-server load.
+- Privacy transitions and revocation tests pass.
+
+### Workstream H — Atomic cutover and deletion
+
+Deliverables:
+
+- Maintenance-window runbook.
+- Backup of the current record for operational rollback only.
+- Explicit recreation/rewrite of the one authoring document.
+- `partitura.v2` generation and device publication.
+- Coordinated firmware activation.
+- Deletion of the old runtime, player and endpoint.
+- Dependency and documentation cleanup.
+
+Exit gate:
+
+- Production has one core, one player and one firmware schema.
+- No legacy runtime code is reachable or shipped.
+
+## 19. Atomic Cutover Runbook
+
+The implementation may be developed in an isolated branch or changeset, but it
+is not exposed as a second production mode.
+
+1. Freeze authoring and device publication for a defined maintenance window.
+2. Back up the current database record and current firmware artifact solely for
+   full-release rollback.
+3. Confirm new web, core, render worker and firmware artifacts passed all gates.
+4. Deploy the new services without enabling user traffic.
+5. Recreate/rewrite the single authoring document in the VNext schema.
+6. Compile and persist `partitura.v2` plus VisualSceneV1.
+7. Activate firmware v2 and download the new artifact.
+8. Run hardware, browser, expanded-viewer and private-share smoke tests.
+9. Enable user traffic.
+10. Observe defined health metrics through the acceptance window.
+
+If the cutover fails, roll back the complete release and database snapshot. Do
+not activate a compatibility switch inside the new release.
+
+After acceptance:
+
+- Delete old backups according to retention policy.
+- Remove any temporary migration script.
+- Do not retain a callable v1 conversion endpoint.
+
+## 20. Required Deletion Inventory
+
+The cutover is incomplete while equivalent legacy responsibilities remain.
+Delete or replace:
+
+- `services/web/iluminate/components/lighting/designer/designer-webgl-player.tsx`
+- `services/web/iluminate/components/lighting/designer/rendering/designer-player-renderers.ts`
+- `services/web/iluminate/components/lighting/designer/designer-playback-frame.ts`
+- `/api/lighting/partituras/simulate-frame`
+- Playback RAF/fetch loops in `partitura-workspace.tsx` and `PlayerModal`.
+- React `animationPixels`/per-frame preview state as the player data path.
+- The duplicate expanded `DesignerWebglPlayer` mount.
+- Pixi player dependency and Pixi-specific resource handling.
+- `partitura.v1` schemas, fixtures, validator/generator and production exports.
+- Compatibility normalizers for the replaced authoring document.
+- Any documentation claiming server frame simulation is the player path.
+
+Historical facts may remain in Git history; they must not remain as production
+fallback code.
+
+## 21. Proposed Target File Ownership
+
+```text
+services/lighting-core/
+  contracts/*
+  compiler/*
+  runtime/*
+  effects/*
+  transport/*
+  fixtures/*
+  tests/*
+
+services/web/iluminate/components/lighting/player/
+  player-controller.ts
+  player-worker.ts
+  player-worker-protocol.ts
+  player-surface.tsx
+  player-status.ts
+  gpu/
+    webgl2-renderer.ts
+    resource-manager.ts
+    scene-preparer.ts
+    passes/*
+    shaders/*
+
+services/web/iluminate/lib/lighting/
+  player-bundle-loader.ts
+  player-bundle-builder.ts
+
+services/render-worker/
+  worker entrypoint
+  queue adapter
+  deterministic frame capture
+  ffmpeg encoder
+  R2 artifact adapter
+
+services/firmware/
+  contract notes and shared fixtures only
+
+external iluminate-firmware-esp32 repository/
+  v2 parser, prepared runtime, effects, storage and drivers
+```
+
+The public share surface must stay free of authoring and privileged storage
+dependencies.
+
+## 22. Acceptance Scenario
+
+The complete system must pass this scenario without a legacy path:
+
+1. Create or open the new-format partitura document.
+2. Build physical geometry and compile the pixel map.
+3. Create a scene with overlapping effects on zones/groups.
+4. Enter Animate and load one local player bundle.
+5. Play, pause, seek and change presentation with DevTools showing no frame
+   requests.
+6. Expand the viewer and confirm the same canvas/context continues playing.
+7. Change optical calibration and confirm persistent resources update without
+   rebuilding the behavioral runtime.
+8. Loop for sixty minutes and pass heap/GPU stability budgets.
+9. Generate `partitura.v2`, download it to the ESP32 and match selected golden
+   timestamps on hardware.
+10. Disconnect the controller from the network and confirm continuous local
+    playback.
+11. Create a private review render and confirm unauthenticated public access is
+    denied.
+12. Revoke the review link and confirm subsequent access is denied.
+13. Explicitly publish a public version and load its MP4 page from CDN.
+14. Open the optional interactive view and confirm playback remains local.
+15. Simulate 1,000 public viewers and confirm no application-server frame
+    evaluation occurs.
+16. Remove the publication and purge controlled delivery.
+
+## 23. Validation Commands And Harnesses
+
+Existing commands remain useful while the new suites are introduced:
 
 ```bash
-git diff --check
-docker compose up -d --build iluminate-web
+cd services/lighting-core
+npm test
+
+cd services/web/iluminate
+npm test
+npm run build
 ```
 
-Run the web Designer test suite and add focused deterministic tests for every
-new geometry operation. Continue using the Designer API/manual smoke described
-in `.agent/EXECUTION_MAP.md`.
-
-If the lighting-core package receives shared fabrication/geometry contracts,
-also run:
+The reengineering must add stable commands equivalent to:
 
 ```bash
-docker run --rm -v "$PWD/services/lighting-core:/work" -w /work node:22-alpine sh -c "npm ci && npm test"
+# Contract and deterministic core vectors
+npm run test:contracts
+npm run test:runtime
+npm run test:parity
+
+# Measured core/runtime performance
+npm run bench:runtime
+npm run test:runtime-stress
+
+# Renderer correctness and stability
+npm run test:player
+npm run test:player-visual
+npm run test:player-stress
+
+# Product and scale
+npm run test:e2e-player
+npm run test:e2e-share
+npm run test:load-share
 ```
 
-## 15. Documentation Updates Required During Implementation
+Command names may follow repository conventions, but all these validation
+categories are mandatory and must run without manual inspection except final
+visual/hardware approval.
 
-Keep these files aligned as phases land:
+Firmware CI must build the target board configuration and run host/golden tests.
+Hardware-in-loop validation remains a release gate even when it cannot execute
+on every pull request.
 
-- `.agent/RULES.md` when precedence or mandatory context changes;
-- `.agent/DESIGNER_UX_CONTRACT.md` for the new Face Graphic layer/tools;
-- `.agent/DESIGNER_HANDOFF.md` for actual Designer behavior and modules;
-- `.agent/ILUMINATE_UI_STANDARDS.md` for fabrication UI conventions;
-- `.agent/PIXELMAP_COMPOSER_DIRECTION.md` for geometry/Face Graphic boundaries;
-- `.agent/IMPLEMENTATION_PLAN.md` for completed phases;
-- `.agent/AI_CONTEXT_LED_ORCHESTRATION_PLATFORM.md` for product architecture;
-- `docs/partitura-lifecycle.md` for authoring, preview and invalidation rules.
+## 24. Risks And Mitigations
 
-After a major structural or context-inventory change, regenerate the compact
-manifests (they are not routine startup context):
+### Custom renderer complexity
 
-- `.agent/BRAIN_MAP.md`;
-- `.agent/AI_CONTEXT_PACK.md`.
+Risk: replacing Pixi with explicit WebGL2 increases implementation ownership.
 
-## 16. Scope Rejection Checklist
+Mitigation: keep the renderer narrowly specialized, use a small pass graph,
+centralize resource ownership, require visual baselines and avoid building a
+general scene framework.
 
-Reject or explicitly defer work that would turn this upgrade into:
+### Browser/GPU variation
 
-- a general illustration/painting application;
-- a desktop publishing system;
-- a photomanipulation suite;
-- a complete CAD constraint solver;
-- a CAM/toolpath generator;
-- a nesting/production-optimization suite in the first release;
-- an STL/3D manufacturing pipeline;
-- a machine-driver or proprietary cutter-file generator.
+Risk: shader precision, limits and driver behavior vary.
 
-The accepted scope is precise 2D sign-fabrication geometry integrated with
-Iluminate lighting design, electrical topology and optical simulation.
+Mitigation: conservative WebGL2 feature baseline, capability checks, explicit
+limits, adaptive optical resolution, context recovery and tested video fallback.
+
+### Firmware/browser numeric divergence
+
+Risk: floating-point effects differ across JavaScript and ESP32.
+
+Mitigation: documented rounding points, fixed-point math where necessary and
+shared golden vectors at boundary timestamps.
+
+### Worker scheduling and transfer stalls
+
+Risk: frames arrive late under main-thread or device pressure.
+
+Mitigation: bounded buffer pool, one request in flight, stale-frame skipping,
+monotonic clock and adaptive presentation FPS.
+
+### GPU memory regression
+
+Risk: static masks and optical targets consume excessive VRAM.
+
+Mitigation: explicit resource ledger, bounded render-target pool, resolution
+profiles, scene limits and repeated load/destroy stress tests.
+
+### Video/browser visual mismatch
+
+Risk: headless capture differs from interactive output.
+
+Mitigation: same bundle, core, renderer and shaders; fixed render profile;
+cross-capture visual regression suite.
+
+### Render backlog
+
+Risk: many publications saturate the render worker.
+
+Mitigation: hash deduplication, bounded concurrency, queue backpressure,
+priority policy, progress UX and horizontally replaceable workers.
+
+### Client confidentiality
+
+Risk: review content becomes publicly cacheable or is uploaded externally.
+
+Mitigation: separate private/public storage, explicit policy transitions,
+authorization, audit, expiry, watermarking and no automatic YouTube publishing.
+
+### Big-bang cutover
+
+Risk: no compatibility mode reduces incremental production recovery options.
+
+Mitigation: complete preproduction environment, full automated gates, explicit
+maintenance window, whole-release rollback and the intentionally small number
+of existing authoring documents.
+
+## 25. Documentation Updates At Implementation
+
+After this plan is approved and implementation changes behavior, update the
+authoritative sources in the same work:
+
+- `.agent/DESIGNER_HANDOFF.md`
+- `.agent/DESIGNER_UX_CONTRACT.md`
+- `.agent/EFFECT_TARGETING_MODEL.md` if target/runtime semantics change
+- `.agent/DATABASE_MODEL.md`
+- `.agent/PUBLIC_SITE_DIRECTION.md`
+- `docs/partitura-lifecycle.md`
+- `docs/production-deployment.md`
+- `services/lighting-core/README.md`
+- `services/firmware/README.md`
+- `services/web/iluminate-prompt-builder/catalog.mjs`
+- Public/share and render-worker operational runbooks
+
+Do not update those documents speculatively before a corresponding decision is
+approved or implemented. Once implemented, no authoritative document may still
+describe `/simulate-frame`, Pixi reconstruction or a duplicate expanded player
+as the supported path.
+
+## 26. Architecture Review Checklist
+
+The plan is ready to implement when reviewers explicitly accept:
+
+- [x] `partitura.v2` is the only post-cutover firmware/runtime behavior contract.
+- [x] The existing authoring document does not require backward compatibility.
+- [x] Browser playback is completely local after bundle load.
+- [x] React does not receive RGB frames.
+- [x] Pixi is removed from the player and WebGL2 is the baseline backend.
+- [x] Embedded and expanded presentations share one player instance.
+- [x] Optical rendering uses persistent resources and bounded passes.
+- [x] Video is the default public-share experience.
+- [ ] Interactive public viewing is optional and CDN-loaded.
+- [x] Private/review/public states and bucket separation are mandatory.
+- [x] YouTube publication is explicit and customer-authorized.
+- [ ] Firmware work and hardware parity are part of the same release gate.
+- [x] No compatibility adapter, production fallback or dual runtime will ship.
+- [x] The atomic cutover and whole-release rollback strategy are acceptable.
+- [x] Performance budgets are release blockers, not advisory metrics.
+
+## 27. Definition Of Done
+
+This reengineering is complete only when:
+
+1. `partitura.v2` is generated, validated, downloaded and executed by the
+   production ESP32 runtime.
+2. Browser and firmware pass the same approved golden vectors.
+3. The browser player evaluates locally with no per-frame network traffic.
+4. The player uses one WebGL2 context and persistent GPU resources.
+5. Embedded and expanded UX use the same player instance.
+6. Memory, frame and lifecycle performance gates pass.
+7. Private review and public video sharing operate through separated storage.
+8. The public page serves video from CDN and does not load the editor.
+9. Optional interactive sharing runs locally after an immutable bundle download.
+10. The render worker produces deterministic MP4/poster artifacts by bundle hash.
+11. The old player, endpoint, loops, v1 contract and compatibility code are
+    deleted.
+12. Authoritative documentation describes only the new architecture.
+13. Production passes the full acceptance scenario and observation window.
+
+Until all thirteen conditions are met, the project is in reengineering and not
+finished.

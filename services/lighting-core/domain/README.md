@@ -17,4 +17,6 @@ The vocabulary here must match the product document:
 
 No React, Next.js, database client, or ESP32-specific driver code belongs here.
 
-The first implemented partitura model lives under `domain/partituras` and uses `partitura.v1`.
+The implemented firmware-facing model lives under `domain/partituras` and uses
+`partitura.v2`. Realtime preparation and evaluation live under `player/` and
+must remain independent from React, Web Workers and graphics APIs.

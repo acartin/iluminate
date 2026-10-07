@@ -1,10 +1,12 @@
 import type { DesignerBuildAreaForm, DesignerChannelForm, DesignerContour, DesignerControllerForm, DesignerFaceGraphicForm, DesignerForm, DesignerPoint, DesignerRouteForm, DesignerRouteKind, DesignerZoneForm } from "@/lib/lighting/partitura-model";
 import { designerGeometryAsShape, resolveDesignerDerivedGeometry, resolveDesignerProjectionGeometry } from "@/lib/lighting/partitura-model";
 import { designerFontResource } from "@/lib/lighting/designer-font-catalog";
+import { designerFilletCornerIsEligible } from "@/lib/lighting/designer-derived-geometry";
 import { estimateDesignerTextBounds } from "@/lib/lighting/designer-text-geometry";
 import type { DesignerActiveLayer, DesignerMeasurement, DesignerPrimitiveDraft, DesignerRouteDraft, DesignerShapeDraft, DesignerViewport, PaperApi, PaperPoint, PaperRectangle } from "./types";
-import { channelBorderPolylines, channelCenterPolyline, channelContainsPoint, channelIsClosed, channelWidthCm, controllerConnectedPorts, controllerPortPoint, formatDecimal, formatMeasure, openChannelOutline, pointInsideDesignerShape, routeColor, routeDirectionMarkers, routePointFill, routeSelectedColor, sampleRouteLedDots } from "./designer-geometry";
+import { channelCenterPolyline, channelContainsPoint, channelIsClosed, channelTightBend, channelWidthCm, controllerConnectedPorts, controllerPortPoint, formatDecimal, formatMeasure, pointInsideDesignerShape, routeColor, routeDirectionMarkers, routePointFill, routeSelectedColor, sampleRouteLedDots, smoothOpenBezierPoints, type ChannelBendMeasurement } from "./designer-geometry";
 import type { CompiledDesignerLayout } from "./designer-compiler";
+import { resolveChannelOutlineContours } from "./rendering/channel-swept-outline";
 
 let paperScope: PaperApi;
 
@@ -27,9 +29,11 @@ export function drawPaperDesigner({
   selectedTextId,
   selectedChannelId,
   selectedChannelPointIndex,
+  interactiveChannelId,
   selectedRouteId,
   selectedRoutePointIndex,
   selectedController,
+  filletMode = false,
   selectedGeometryKeys = [],
   routeDraft,
   shapeDraft,
@@ -52,9 +56,11 @@ export function drawPaperDesigner({
   selectedTextId?: string;
   selectedChannelId?: string;
   selectedChannelPointIndex?: number;
+  interactiveChannelId?: string;
   selectedRouteId?: string;
   selectedRoutePointIndex?: number;
   selectedController: boolean;
+  filletMode?: boolean;
   selectedGeometryKeys?: string[];
   routeDraft: DesignerRouteDraft | null;
   shapeDraft: DesignerShapeDraft | null;
@@ -72,6 +78,12 @@ export function drawPaperDesigner({
     ((point.y - viewport.y) / viewport.height) * canvasSize.height
   );
   const lengthToScreen = (cm: number) => cm * canvasSize.width / Math.max(1, viewport.width);
+  const filletCandidates = (geometryId: string | undefined) => {
+    if (!filletMode || !geometryId) return undefined;
+    const geometry = designer.geometries?.find((entry) => entry.id === geometryId);
+    if (!geometry) return undefined;
+    return new Set((geometry.points ?? []).map((_, index) => index).filter((index) => designerFilletCornerIsEligible(geometry, index)));
+  };
   const rectToScreen = (shape: { x: number; y: number; width: number; height: number }) => {
     const topLeft = toScreen({ x: shape.x, y: shape.y });
     const bottomRight = toScreen({ x: shape.x + shape.width, y: shape.y + shape.height });
@@ -84,7 +96,7 @@ export function drawPaperDesigner({
   });
   drawPaperDocumentCanvas(designer, toScreen, rectToScreen, colors);
   drawPaperGrid(designer, viewport, canvasSize, toScreen, colors.grid);
-  drawPaperShapeDraft(shapeDraft, toScreen);
+  drawPaperShapeDraft(shapeDraft, toScreen, lengthToScreen);
   drawPaperPrimitiveDraft(primitiveDraft, rectToScreen);
 
   designer.derivedGeometries.filter((operation) => operation.visible && (operation.targetLayer === "reference" ? activeLayer === "artwork" || activeLayer === "reference" : operation.targetLayer === activeLayer)).forEach((operation) => {
@@ -128,6 +140,8 @@ export function drawPaperDesigner({
       drawPaperBuildArea(buildArea, {
         selected: selectedBuildAreaId === buildArea.id || selectedGeometryKeys.includes(`build_area:${buildArea.id}`),
         selectedPointIndex: selectedBuildAreaId === buildArea.id ? selectedBuildAreaPointIndex : undefined,
+        filletCandidateIndices: selectedBuildAreaId === buildArea.id ? filletCandidates(buildArea.geometryId) : undefined,
+        filletMode,
         opacity: layerOpacity,
         toScreen,
         rectToScreen
@@ -141,6 +155,8 @@ export function drawPaperDesigner({
       drawPaperZone(zone, {
         selected: selectedZoneId === zone.id || selectedGeometryKeys.includes(`zone:${zone.id}`),
         selectedPointIndex: selectedZoneId === zone.id ? selectedZonePointIndex : undefined,
+        filletCandidateIndices: selectedZoneId === zone.id ? filletCandidates(zone.geometryId) : undefined,
+        filletMode,
         opacity: layerOpacity,
         toScreen,
         rectToScreen
@@ -150,6 +166,9 @@ export function drawPaperDesigner({
       drawPaperChannel(channel, {
         selected: selectedChannelId === channel.id,
         selectedPointIndex: selectedChannelId === channel.id ? selectedChannelPointIndex : undefined,
+        interactive: interactiveChannelId === channel.id,
+        filletCandidateIndices: selectedChannelId === channel.id ? filletCandidates(channel.geometryId) : undefined,
+        filletMode,
         opacity: layerOpacity,
         toScreen,
         lengthToScreen
@@ -157,7 +176,10 @@ export function drawPaperDesigner({
     });
   }
 
-  if (designer.layers.lightSources.visible) {
+  // Lighting Setup emitters are sampled from physical LED strings. They have
+  // no independent Layers plane, so Hardware / Strings is their visibility
+  // master just as it is for the route itself.
+  if (designer.layers.strings.visible && designer.layers.lightSources.visible) {
     designer.lightSources.filter((source) => source.visible && source.enabled).forEach((source) => {
       const target = source.targetType === "zone"
         ? designer.zones.find((zone) => zone.id === source.targetId)
@@ -188,6 +210,8 @@ export function drawPaperDesigner({
       drawPaperFaceGraphic(element, {
         selected: selectedFaceGraphicId === element.id || selectedGeometryKeys.includes(`face_graphic:${element.id}`),
         selectedPointIndex: selectedFaceGraphicId === element.id ? selectedFaceGraphicPointIndex : undefined,
+        filletCandidateIndices: selectedFaceGraphicId === element.id ? filletCandidates(element.geometryId) : undefined,
+        filletMode,
         opacity: designer.layers.faceGraphic.opacity * element.opacity,
         toScreen,
         rectToScreen
@@ -375,15 +399,38 @@ function drawPaperGrid(designer: DesignerForm, viewport: DesignerViewport, canva
   }
 }
 
-function drawPaperShapeDraft(draft: DesignerShapeDraft | null, toScreen: (point: DesignerPoint) => PaperPoint) {
+function drawPaperShapeDraft(draft: DesignerShapeDraft | null, toScreen: (point: DesignerPoint) => PaperPoint, lengthToScreen: (lengthCm: number) => number) {
   if (!draft) return;
+  const draftChannel: DesignerChannelForm | null = draft.target === "channel" && draft.points.length >= 2 ? {
+    id: "channel_draft",
+    name: "Channel draft",
+    points: smoothOpenBezierPoints(draft.points),
+    pathMode: "bezier",
+    widthMm: draft.widthMm ?? 10,
+    closed: false,
+    cap: "round",
+    visible: true,
+    locked: false,
+    opacity: 1
+  } : null;
+  const tightDraft = draftChannel ? channelTightBend(draftChannel) : null;
+  const draftTrace = draftChannel ? channelCenterPolyline(draftChannel) : draft.points;
   const draftColor = draft.target === "build_area" ? "#a78bfa" : draft.target === "channel" ? "#f59e0b" : draft.target === "face_graphic" ? "#f472b6" : "#38bdf8";
+  if (draft.target === "channel") {
+    const channelBand = new paperScope.Path({
+      strokeColor: draftColor,
+      strokeWidth: Math.max(1, lengthToScreen((draft.widthMm ?? 10) / 10)),
+      strokeCap: "round",
+      opacity: 0.28
+    });
+    draftTrace.forEach((point) => channelBand.add(toScreen(point)));
+  }
   const path = new paperScope.Path({
     strokeColor: draftColor,
     strokeWidth: 1.5,
     dashArray: [8, 5]
   });
-  draft.points.forEach((point) => path.add(toScreen(point)));
+  draftTrace.forEach((point) => path.add(toScreen(point)));
   if (draft.target !== "channel" && draft.points.length > 2) {
     const closeLine = new paperScope.Path.Line({
       from: toScreen(draft.points[draft.points.length - 1]),
@@ -403,11 +450,14 @@ function drawPaperShapeDraft(draft: DesignerShapeDraft | null, toScreen: (point:
       strokeWidth: 1.3
     });
   });
+  if (tightDraft) drawPaperChannelBendMarker(tightDraft, toScreen);
 }
 
 function drawPaperBuildArea(buildArea: DesignerBuildAreaForm, options: {
   selected: boolean;
   selectedPointIndex?: number;
+  filletCandidateIndices?: Set<number>;
+  filletMode?: boolean;
   opacity: number;
   toScreen: (point: DesignerPoint) => PaperPoint;
   rectToScreen: (shape: { x: number; y: number; width: number; height: number }) => PaperRectangle;
@@ -429,9 +479,9 @@ function drawPaperBuildArea(buildArea: DesignerBuildAreaForm, options: {
     fontFamily: "monospace",
     fontSize: 12
   });
-  if (options.selected) drawPaperResizeHandles(buildArea, options);
+  if (options.selected) drawPaperResizeHandles(buildArea, options, options.filletMode && buildArea.shape === "rect");
   if (options.selected && buildArea.shape === "polygon" && buildArea.points && !buildArea.contours) {
-    drawPaperPolygonNodes(buildArea.id, buildArea.points, options.selectedPointIndex, "#7c3aed", options.toScreen);
+    drawPaperPolygonNodes(buildArea.id, buildArea.points, options.selectedPointIndex, "#7c3aed", options.toScreen, options.filletCandidateIndices);
     if (buildArea.pathMode === "bezier") drawPaperBezierHandles(buildArea.id, buildArea.points, options.selectedPointIndex, "#a78bfa", options.toScreen);
   }
 }
@@ -439,6 +489,8 @@ function drawPaperBuildArea(buildArea: DesignerBuildAreaForm, options: {
 function drawPaperZone(zone: DesignerZoneForm, options: {
   selected: boolean;
   selectedPointIndex?: number;
+  filletCandidateIndices?: Set<number>;
+  filletMode?: boolean;
   opacity: number;
   toScreen: (point: DesignerPoint) => PaperPoint;
   rectToScreen: (shape: { x: number; y: number; width: number; height: number }) => PaperRectangle;
@@ -460,9 +512,9 @@ function drawPaperZone(zone: DesignerZoneForm, options: {
     fontSize: 12,
     opacity: Math.max(0.45, options.opacity)
   });
-  if (options.selected) drawPaperResizeHandles(zone, options);
+  if (options.selected) drawPaperResizeHandles(zone, options, options.filletMode && zone.shape === "rect");
   if (options.selected && zone.shape === "polygon" && zone.points && !zone.contours) {
-    drawPaperPolygonNodes(zone.id, zone.points, options.selectedPointIndex, "#2563eb", options.toScreen);
+    drawPaperPolygonNodes(zone.id, zone.points, options.selectedPointIndex, "#2563eb", options.toScreen, options.filletCandidateIndices);
     if (zone.pathMode === "bezier") drawPaperBezierHandles(zone.id, zone.points, options.selectedPointIndex, "#38bdf8", options.toScreen);
   }
 }
@@ -470,18 +522,23 @@ function drawPaperZone(zone: DesignerZoneForm, options: {
 function drawPaperChannel(channel: DesignerChannelForm, options: {
   selected: boolean;
   selectedPointIndex?: number;
+  interactive?: boolean;
+  filletCandidateIndices?: Set<number>;
+  filletMode?: boolean;
   opacity: number;
   toScreen: (point: DesignerPoint) => PaperPoint;
   lengthToScreen: (cm: number) => number;
 }) {
   const center = channelCenterPolyline(channel);
+  const tightBend = options.interactive ? null : channelTightBend(channel);
   if (center.length >= 2) {
+    const channelStrokeWidth = Math.max(1, options.lengthToScreen(channelWidthCm(channel)));
     // Draw the band by stroking the center path with the channel width. This is
-    // always a closed, seamless band (miter joins), unlike a filled offset ring.
+    // the swept footprint of a circular router bit along the center path.
     const band = new paperScope.Path({
       strokeColor: options.selected ? "rgba(245,158,11,0.30)" : "rgba(148,163,184,0.16)",
-      strokeWidth: Math.max(1, options.lengthToScreen(channelWidthCm(channel))),
-      strokeJoin: "miter",
+      strokeWidth: channelStrokeWidth,
+      strokeJoin: "round",
       strokeCap: channel.cap === "round" ? "round" : "butt",
       opacity: options.opacity
     });
@@ -493,17 +550,19 @@ function drawPaperChannel(channel: DesignerChannelForm, options: {
       strokeWidth: options.selected ? 1.6 : 1,
       opacity: options.opacity
     };
-    if (channelIsClosed(channel)) {
-      const borders = channelBorderPolylines(channel);
-      [borders.left, borders.right].forEach((points) => {
+    if (!options.interactive) {
+      resolveChannelOutlineContours(channel).forEach((contour) => {
         const border = new paperScope.Path(borderOptions);
-        points.forEach((point) => border.add(options.toScreen(point)));
+        contour.points.forEach((point) => {
+          const anchor = options.toScreen(point);
+          border.add(new paperScope.Segment(
+            anchor,
+            point.handleIn ? options.toScreen({ x: point.x + point.handleIn.x, y: point.y + point.handleIn.y }).subtract(anchor) : undefined,
+            point.handleOut ? options.toScreen({ x: point.x + point.handleOut.x, y: point.y + point.handleOut.y }).subtract(anchor) : undefined
+          ));
+        });
         border.closed = true;
       });
-    } else {
-      const border = new paperScope.Path(borderOptions);
-      openChannelOutline(channel).forEach((point) => border.add(options.toScreen(point)));
-      border.closed = true;
     }
 
     const centerLine = new paperScope.Path({
@@ -526,15 +585,36 @@ function drawPaperChannel(channel: DesignerChannelForm, options: {
       opacity: Math.max(0.5, options.opacity)
     });
   }
+  if (tightBend) drawPaperChannelBendMarker(tightBend, options.toScreen);
   if (options.selected && channel.points.length) {
-    drawPaperPolygonNodes(channel.id, channel.points, options.selectedPointIndex, "#b45309", options.toScreen);
+    drawPaperPolygonNodes(channel.id, channel.points, options.selectedPointIndex, "#b45309", options.toScreen, options.filletCandidateIndices);
     if (channel.pathMode === "bezier") drawPaperBezierHandles(channel.id, channel.points, options.selectedPointIndex, "#f59e0b", options.toScreen);
   }
+}
+
+function drawPaperChannelBendMarker(measurement: ChannelBendMeasurement, toScreen: (point: DesignerPoint) => PaperPoint) {
+  const center = toScreen(measurement.point);
+  new paperScope.Path.Circle({
+    center,
+    radius: 8,
+    fillColor: "rgba(239,68,68,0.22)",
+    strokeColor: "#ef4444",
+    strokeWidth: 2
+  });
+  new paperScope.PointText({
+    point: new paperScope.Point(center.x + 11, center.y - 10),
+    content: `R ${formatDecimal(measurement.radiusMm)} / ${formatDecimal(measurement.requiredRadiusMm)} mm`,
+    fillColor: "#f87171",
+    fontFamily: "monospace",
+    fontSize: 10
+  });
 }
 
 function drawPaperFaceGraphic(element: DesignerFaceGraphicForm, options: {
   selected: boolean;
   selectedPointIndex?: number;
+  filletCandidateIndices?: Set<number>;
+  filletMode?: boolean;
   opacity: number;
   toScreen: (point: DesignerPoint) => PaperPoint;
   rectToScreen: (shape: { x: number; y: number; width: number; height: number }) => PaperRectangle;
@@ -561,9 +641,9 @@ function drawPaperFaceGraphic(element: DesignerFaceGraphicForm, options: {
     fontSize: 11,
     opacity: Math.max(0.55, options.opacity)
   });
-  if (options.selected) drawPaperResizeHandles(element, options);
+  if (options.selected) drawPaperResizeHandles(element, options, options.filletMode && element.shape === "rect");
   if (options.selected && element.shape === "polygon" && element.points && !element.contours) {
-    drawPaperPolygonNodes(element.id, element.points, options.selectedPointIndex, "#be185d", options.toScreen);
+    drawPaperPolygonNodes(element.id, element.points, options.selectedPointIndex, "#be185d", options.toScreen, options.filletCandidateIndices);
     if (element.pathMode === "bezier") drawPaperBezierHandles(element.id, element.points, options.selectedPointIndex, "#f472b6", options.toScreen);
   }
 }
@@ -630,7 +710,7 @@ function drawPaperContour(contour: DesignerContour, toScreen: (point: DesignerPo
   return path;
 }
 
-function drawPaperResizeHandles(shape: { x: number; y: number; width: number; height: number }, options: { toScreen: (point: DesignerPoint) => PaperPoint }) {
+function drawPaperResizeHandles(shape: { x: number; y: number; width: number; height: number }, options: { toScreen: (point: DesignerPoint) => PaperPoint }, filletCandidate = false) {
   [
     { x: shape.x, y: shape.y },
     { x: shape.x + shape.width, y: shape.y },
@@ -640,21 +720,22 @@ function drawPaperResizeHandles(shape: { x: number; y: number; width: number; he
     new paperScope.Path.Circle({
       center: options.toScreen(point),
       radius: 5,
-      fillColor: "#f8fafc",
-      strokeColor: "#2563eb",
-      strokeWidth: 1.5
+      fillColor: filletCandidate ? "#22c55e" : "#f8fafc",
+      strokeColor: filletCandidate ? "#dcfce7" : "#2563eb",
+      strokeWidth: filletCandidate ? 2 : 1.5
     });
   });
 }
 
-function drawPaperPolygonNodes(id: string, points: DesignerPoint[], selectedPointIndex: number | undefined, strokeColor: string, toScreen: (point: DesignerPoint) => PaperPoint) {
+function drawPaperPolygonNodes(id: string, points: DesignerPoint[], selectedPointIndex: number | undefined, strokeColor: string, toScreen: (point: DesignerPoint) => PaperPoint, filletCandidateIndices?: Set<number>) {
   points.forEach((point, index) => {
     const selected = selectedPointIndex === index;
+    const filletCandidate = filletCandidateIndices?.has(index) === true;
     const center = toScreen(point);
     const options = {
-      fillColor: selected ? "#facc15" : "#f8fafc",
-      strokeColor: selected ? "#0f172a" : strokeColor,
-      strokeWidth: 1.4,
+      fillColor: selected ? "#facc15" : filletCandidate ? "#22c55e" : "#f8fafc",
+      strokeColor: selected ? "#0f172a" : filletCandidate ? "#dcfce7" : strokeColor,
+      strokeWidth: filletCandidate ? 2 : 1.4,
       name: `${id}:point:${index}`
     };
     if (point.nodeType === "corner") {

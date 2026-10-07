@@ -1,4 +1,5 @@
 import type { DesignerActiveLayer, DesignerTool } from "../types";
+import { DEFAULT_CHANNEL_ROUTER_DIAMETER_MM } from "@/lib/lighting/partitura-model";
 
 export type DesignerGeometryTarget = "build_area" | "zone" | "channel" | "face_graphic";
 export type DesignerGeometryToolPolicy = {
@@ -26,6 +27,27 @@ const GEOMETRY_TOOL_POLICIES: Partial<Record<DesignerTool, DesignerGeometryToolP
 };
 
 export const ELECTRICAL_TOOLS: ReadonlySet<DesignerTool> = new Set<DesignerTool>(["led_string", "data_cable", "cut"]);
+
+export const CHANNEL_ROUTER_BIT_PRESETS = [
+  { label: "1/8 in · 3.175 mm", diameterMm: 3.175 },
+  { label: "3/16 in · 4.763 mm", diameterMm: 4.7625 },
+  { label: "6 mm · 0.236 in", diameterMm: 6 },
+  { label: "1/4 in · 6.35 mm", diameterMm: 6.35 },
+  { label: "8 mm · 0.315 in", diameterMm: 8 },
+  { label: "3/8 in · 9.525 mm", diameterMm: 9.525 },
+  { label: "10 mm · 0.394 in", diameterMm: 10 },
+  { label: "12 mm · 0.472 in", diameterMm: 12 },
+  { label: "1/2 in · 12.7 mm", diameterMm: 12.7 }
+] as const;
+
+export function channelWidthForRouterDiameter(diameterMm: number) {
+  if (!Number.isFinite(diameterMm)) return DEFAULT_CHANNEL_ROUTER_DIAMETER_MM;
+  return Math.max(3, Math.min(20, diameterMm));
+}
+
+export function canvasInteractionSnapCm(configuredSnapCm: number, snapToGrid: boolean) {
+  return snapToGrid ? configuredSnapCm : 0;
+}
 
 export function geometryToolPolicy(tool: DesignerTool) {
   return GEOMETRY_TOOL_POLICIES[tool] ?? null;

@@ -5,8 +5,8 @@ Validation rules for partituras and deployment payloads.
 Examples:
 
 - missing references
-- out-of-range segments
-- overlapping LED ranges
+- non-dense pixel indices or serial addresses
+- invalid flattened zone/group membership
 - empty zones
 - unsupported effects
 - incompatible core versions

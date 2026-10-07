@@ -1,6 +1,6 @@
 # Iluminate Database Model
 
-**Status:** initial operational model  
+**Status:** operational model with partitura.v2 render/share pipeline
 **Database:** PostgreSQL  
 **Tenant convention:** `client_id`  
 **Auth source:** copied `auth_clients` model from `datasyncsa`
@@ -121,10 +121,10 @@ Changing LED density resets existing LED routes/cabling.
 
 Current direction for `generated_json`:
 
-- validated `partitura.v1`;
+- validated `partitura.v2` with source checksum and required core version;
 - controller outputs and validated electrical topology;
-- generated physical `pixelMap` from connected routes;
-- visual zones and named groups;
+- generated physical `pixelMap` with dense indices and normalized coordinates;
+- visual zones and named groups flattened to dense `pixelIndices`;
 - scenes/tracks/clips;
 - effect target and coordinate-space metadata.
 
@@ -135,6 +135,30 @@ output/serialIndex -> x/y -> zone/group memberships -> effect sampling
 ```
 
 Operators should not normally edit raw `pixelMap`. They edit zones, groups and continuous LED routes; the system regenerates the map. Logical string ranges are not part of the normal data-entry flow.
+
+### `iluminate.render_artifacts`
+
+Tenant-scoped immutable player bundles and derived MP4/WebP metadata. The
+deduplication key includes `privacy`, so publishing a public artifact can never
+promote or expose a private/review object. Object keys point to one of two
+separate R2 buckets; PostgreSQL stores metadata and checksums, not media bytes.
+
+### `iluminate.render_jobs`
+
+Leased offline-render queue. One active job exists per tenant/artifact. Workers
+claim with `FOR UPDATE SKIP LOCKED`, increment bounded attempts and may reclaim
+expired leases. Browser playback never creates one render job per viewer.
+
+### `iluminate.scene_shares`
+
+Opaque, revocable access records joining a partitura to a render artifact.
+Policies are `private`, `review`, `unlisted` and `public`. Private/review/
+unlisted media stays in the private bucket; public media requires explicit
+rights confirmation in the application flow.
+
+### `iluminate.publication_audit`
+
+Append-only tenant audit for share creation, policy transitions and revocation.
 
 ### `iluminate.deployments`
 
@@ -208,6 +232,12 @@ Revision tables were removed by:
 
 ```text
 services/lighting-core/migrations/2026-08-22_remove_partitura_revisions.sql
+```
+
+The render/share pipeline is created by:
+
+```text
+services/lighting-core/migrations/2026-10-07_create_scene_rendering_and_shares.sql
 ```
 
 See also:

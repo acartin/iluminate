@@ -26,7 +26,7 @@ export const wipeEffect: EffectModule = {
       }
     }
   },
-  render: ({ params, progress, index, total }) => {
+  render: ({ params, progress, index, total }, output = { r: 0, g: 0, b: 0 }) => {
     const fill = parseColor(String(params.color ?? "#2E9BFF"));
     const headColor = parseColor(String(params.headColor ?? "#EAFBFF"));
     const background = parseColor(String(params.backgroundColor ?? "#00040F"));
@@ -48,7 +48,7 @@ export const wipeEffect: EffectModule = {
     const headEdge = Math.max(0.001, headWidth * count);
     const headAmount = clamp(1 - Math.abs(d) / headEdge, 0, 1);
 
-    const shade = mixColors(fill, headColor, headAmount);
-    return mixColors(background, shade, fillAmount);
+    mixColors(fill, headColor, headAmount, output);
+    return mixColors(background, output, fillAmount, output);
   }
 };

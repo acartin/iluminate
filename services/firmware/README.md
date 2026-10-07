@@ -10,9 +10,9 @@ Current organized firmware repo:
 git@github.com:acartin/iluminate-firmware-esp32.git
 ```
 
-The temporary `esp32-fastled-spike/` folder in this monorepo is a hardware proof fixture. It is not the production firmware source tree.
+The retired `esp32-fastled-spike/` folder records why the old local proof was removed. It is not a production firmware source tree.
 
-Within this repo, the controller is represented only by three logical chain outputs: `1`, `2` and `3`. Mapping those outputs to concrete ESP32 pins is an external firmware concern.
+Within this repo, the controller is represented only by three logical outputs: `1`, `2` and `3`. Mapping those outputs to concrete ESP32 pins is an external firmware concern.
 
 ## Current External Firmware Reference
 
@@ -40,9 +40,9 @@ docs/partitura-lifecycle.md
 
 The external firmware interpreter should first target:
 
-- `services/lighting-core/fixtures/partitura-v1-minimal.json`
-- schema version: `partitura.v1`
-- required core version: `0.1.0`
+- `services/lighting-core/fixtures/partitura-v2-minimal.json`
+- schema version: `partitura.v2`
+- required core version: `1.0.0`
 - logical outputs: `1`, `2`, `3`
 - effects: `off`, `solid`, `fade`, `pulse`, `chase`
 - blend modes used by the fixture: `replace`, `max`, `add`
@@ -54,9 +54,9 @@ Minimal firmware acceptance checklist:
 
 1. Load the JSON partitura.
 2. Reject unsupported `schemaVersion`.
-3. Resolve chains by logical `output`, then map those outputs internally to the firmware arrays/pins.
-4. Resolve `segment` ranges from chains.
-5. Resolve `zone` targets from segments and child zones.
+3. Load the dense `pixelMap` and map each logical `output` plus `serialIndex` to the firmware arrays/pins.
+4. Verify dense stable pixel indices and output bounds before activation.
+5. Load the already-flattened `zone.pixelIndices` and `group.pixelIndices` target tables.
 6. Select `defaultScene`.
 7. Run clips from a shared scene clock.
 8. Apply layers and the supported blend modes.
@@ -67,6 +67,7 @@ The TypeScript simulator models WS2812B-like frame behavior for parity work: ser
 
 Current status:
 
-- The ESP32 hardware proof can execute an embedded `partitura.v1`.
+- The obsolete in-repository v1 spike has been removed; it is not a release fallback.
+- Production acceptance requires the external firmware to execute `partitura.v2` and the shared golden vectors.
 - The PlatformIO firmware repo can build and upload from the Windows flashing workstation.
 - The next target is downloading `generated_json` from the web/API so partitura changes no longer require firmware upload.

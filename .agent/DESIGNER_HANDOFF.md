@@ -1,6 +1,6 @@
 # Iluminate Designer Handoff
 
-**Last updated:** 2026-10-06
+**Last updated:** 2026-10-07
 **Purpose:** detailed current implementation handoff. Use the context router in
 `.agent/RULES.md` and read only the headings relevant to the task instead of
 loading this complete file by default.
@@ -12,7 +12,9 @@ Graphic is now a native authoring layer, and geometric layers support
 associative projections, compound paths, live offsets, live fillets and
 deterministic text outlines. Animate now applies Face Graphic as a physical
 filter over an isolated front-light buffer, and Design exports validated SVG
-and DXF fabrication interchange at physical scale.
+and DXF fabrication interchange at physical scale. Animate now uses the
+partitura.v2 Worker + persistent WebGL2 player; embedded and expanded viewer are
+the same mounted surface.
 
 Iluminate now has a first-pass full-screen graphical Designer for routing a real sign:
 
@@ -45,9 +47,15 @@ The Designer is intentionally fabrication-oriented. It is not a raw matrix edito
   - `canvas/designer-tool-policy.ts`: common geometric tool mapping and layer permissions.
   - `designer-compiler.ts`: compiles visual routes into the physical pixelMap and resolves visual targets from zones/groups.
   - `designer-ui.tsx`: toolbox buttons, contextual fields, layers panel and rulers.
-  - `designer-webgl-player.tsx`: Animate player surface; owns viewport, Pixi mounting and zone selection.
-  - `rendering/designer-player-renderers.ts`: isolated Animate buffers, direct LED rendering and Face Graphic optical filtering.
-  - `fabrication/designer-fabrication-export.ts`: canonical validation plus 1:1 SVG and metric DXF serialization.
+- Player modules: `services/web/iluminate/components/lighting/player/`
+  - `player-surface.tsx`: single embedded/expanded Animate surface; owns viewport, visibility and renderer lifetime.
+  - `player-controller.ts`: imperative playback clock, one-frame backpressure and Worker buffer recycling.
+  - `player-worker.ts`: prepared partitura runtime and reusable RGB frame evaluation.
+  - `gpu/webgl2-player-renderer.ts`: persistent instanced WebGL2 rendering and Face Graphic transmission.
+  - `render-harness.tsx`: deterministic headless entry used by the video worker.
+  - `optical-model.ts`: shared optical-model types and defaults.
+- Designer fabrication modules: `services/web/iluminate/components/lighting/designer/fabrication/`
+  - `designer-fabrication-export.ts`: canonical validation plus 1:1 SVG and metric DXF serialization.
 - Grid wrapper: `services/web/iluminate/components/lighting/partitura-designer-workbench.tsx`
 - Model/defaults/normalization: `services/web/iluminate/lib/lighting/partitura-model.ts`
 - Derived offset/fillet engine: `services/web/iluminate/lib/lighting/designer-derived-geometry.ts`
@@ -62,16 +70,28 @@ The Designer is intentionally fabrication-oriented. It is not a raw matrix edito
 
 ### Canonical geometry checkpoint
 
-Normalized documents now write `designerSchemaVersion: 2`, a canonical
-`designer.geometries` collection and stable `geometryId` references from build
-areas, zones and channels. Legacy documents with only inline shape fields are
-migrated during normalization. For compatibility with the current Paper
-renderer, semantic records still carry synchronized inline bounds/points; on
-load canonical geometry is authoritative, and every workspace mutation commits
-the compatibility view back through `canonicalizeDesignerGeometry`.
+Normalized documents now write `designerSchemaVersion: 9`. Version 2 introduced
+the canonical `designer.geometries` collection and stable `geometryId`
+references; version 3 added the Designer-wide CNC cutter diameter/display unit,
+version 4 added the persisted Channel router-bit diameter, version 5 briefly
+carried profile bend metadata, version 6 removed that duplicate input and
+derived the fabrication radius solely from half the router-bit diameter;
+version 8 replaces the temporary unit preference with one bilingual bit preset;
+version 9 preserves the transitional `filletRadiusMm` value for document
+compatibility. It is no longer exposed in Setup; live derived profiles persist
+their own radius and Channel corner nodes persist `radiusMm` directly.
+Legacy documents receive the 3.175 mm (1/8 in) cutter default during
+normalization. For compatibility with the current Paper renderer, semantic
+records still carry synchronized inline bounds/points; on load canonical
+geometry is authoritative, and every workspace mutation commits the
+compatibility view back through `canonicalizeDesignerGeometry`.
 
 Do not bypass that mutation boundary or introduce a second geometry model.
 Face Graphic references this same canonical geometry collection.
+Channel width, caps, Bezier handles and node `radiusMm` resolve through one
+physical-profile function. Designer, fabrication export and `visual-scene.v1`
+consume those resolved contours. Animate renderers must draw the supplied
+contours and must never reconstruct a Channel from its center line.
 
 ### Face Graphic authoring
 
@@ -172,12 +192,25 @@ snapshot source coordinates into the operation record.
 The shared calculation is in
 `lib/lighting/designer-derived-geometry.ts`. Offsets use signed millimeter
 distances and `round`, `miter` or `bevel` joins; miter joins also persist a
-limit. Fillets persist a millimeter radius and an optional flattened
-corner-index selection. Both operations preserve compound contours and
-open/closed topology. Fillet radii clamp to short legs with an explicit
-warning. Collapsed inward offsets, invalid topology, broken sources and cycles
-stay persisted and selectable so the operator can repair the parameters or
-source.
+limit. Whole-profile Fillets persist a millimeter radius and may persist a
+canonical corner-index selection as a live derived profile. Their contextual
+radius field recalculates immediately. Channels instead keep an optional
+`radiusMm` on the selected canonical corner node; the contextual `Fillet` field
+updates the center trace directly with no tool-activation step or derived
+record. The engine emits cubic Bezier arc segments
+instead of fixed-angle straight chords. It trims line–Bezier or Bezier–Bezier
+cusps at numerically solved tangent points, preserves the unaffected curve
+segments, and skips joins whose tangents are already continuous. SVG therefore
+retains smooth `C` curves; DXF alone flattens them using the operator's export
+tolerance. Both calculation paths preserve open/closed topology. Fillet radii
+clamp to short legs with an explicit warning. Collapsed inward offsets, invalid
+topology, broken sources and cycles stay persisted and selectable so the
+operator can repair the parameters or source.
+
+`fabricationCutterDiameterMm` is the canonical physical diameter and defaults
+to 3.175 mm; `fabricationCutterUnit` (`mm`, `in` or `cm`) controls only Setup
+display/input. These are contour-design constraints, not CAM settings: they do
+not affect Compile, offset the exported contour or generate toolpaths.
 
 Derived chains are live and acyclic. A source edit must immediately recalculate
 projection → offset → fillet descendants. Use
@@ -204,8 +237,9 @@ topology across repeated save/reload cycles.
 `designer.texts` persists editable text separately from canonical path geometry.
 Each record carries content, target layer, font ID plus SHA-256, size and
 tracking in millimeters, line height, alignment, position, visibility and lock.
-Text can live in Reference, Diffusors or Face Graphic and uses the same Text
-tool behavior in every geometric layer.
+Persisted text can live in Reference, Diffusors or Face Graphic, but the Text
+creation tool is currently hidden in every geometric layer. Rendering,
+selection, editing and conversion remain available for document compatibility.
 
 The only valid fonts are declared in `designer-font-catalog.ts` and served from
 the pinned `@fontsource/roboto` package. Never fall back to an OS font for
@@ -331,8 +365,8 @@ derived and are never manipulated separately.
 - `channelBorderPolylines` derives independent left/right borders for a closed
   band; `openChannelOutline` derives the capped polygon for an open band;
   `channelContainsPoint` selects pixels by distance to the center line.
-- Removing the last Bezier handle must never change channel topology. Paper,
-  Pixi and Canvas renderers must all respect the same explicit `closed` flag.
+- Removing the last Bezier handle must never change channel topology. Paper and
+  the WebGL2 player must both respect the same explicit `closed` flag.
 - On compile, channels are emitted as zones in `compiledLayout.zones` (and join
   the `full_sign` group), so clips target them like any zone. They appear in the
   Animate and Scenes target lists, and are selectable on the Animate canvas
@@ -344,16 +378,34 @@ derived and are never manipulated separately.
   as a substitute for its owner. Direct legacy zone/channel clip targets remain
   supported, and changing the clip Target performs the same synchronization.
 - The Layers panel `Channels` section selects, renames, deletes and edits width
-  and ends of each channel. Width and ends also appear in the top contextual bar
-  when a channel is selected.
-- Corner fillet: a corner/straight node can carry a parametric `radiusMm`
-  (`DesignerPoint.radiusMm`). The center line inserts a tangent circular arc
-  (clamped by the neighboring segment lengths) and the two borders follow it, so
-  the tape gets a real, editable bend radius. The selected node exposes a
-  `Fillet` field in the contextual bar. Fillet applies to straight/corner nodes
-  without Bezier handles (i.e. polygonal paths); a node with handles is treated
-  as a free curve. Compile warns when a fillet radius is smaller than half the
-  channel width, because the inner border would pinch.
+  and ends of each channel. Channel rows are sortable like Zone rows. Array
+  index 0 is the visual foreground and hit-test priority; Channels remain in
+  front of Zones when the two kinds overlap. Width and ends also appear in the
+  top contextual bar when a channel is selected.
+- While the Channel tool is active, the contextual bar configures a persisted
+  router-bit diameter through one selector of common metric and fractional-inch
+  sizes. Every option shows both units and millimeters remain canonical. The
+  draft renders at that physical width and a finished channel copies it into
+  `widthMm`; the CNC cutter setting remains independent.
+- New open channels default to `cap: "round"`, matching the semicircular end
+  left by a single center-line router pass (`radius = widthMm / 2`). `Butt`
+  remains an explicit edit for workflows that trim or extend the groove.
+- Channel bend validation uses `widthMm / 2`, so the router-bit diameter is the
+  single source of truth. Drafts and saved channels below that radius receive a
+  local red marker with measured/required radii instead of recoloring the whole
+  channel. Handle dragging remains free and is frame-batched. There is no
+  automatic `Adjust tight curves` action; the warning is diagnostic and the
+  designer corrects the curve explicitly.
+- A corner/straight node with a real direction change is an intentional,
+  machinable discontinuity and does not participate in continuous-curve radius
+  warnings. Selecting that node exposes one numeric `Fillet` field in
+  millimeters; changing it redraws the Channel center trace immediately and
+  zero removes it. Do not add a second Fillet activation button, a passive
+  Fillet badge, a Setup radius or a separate `Round corner` control.
+- Channel borders are the swept footprint of the circular router bit along the
+  authoritative center path. At a sharp turn the outer side is a bit-radius arc
+  and the inner side is the intersection of the two offset legs. Do not round,
+  miter or otherwise edit both borders independently.
 
 ### Artwork Tool
 
@@ -633,20 +685,26 @@ Designer document_json
 -> Renderer module presents the installed lighting or the raw LED map
 ```
 
-`designer-webgl-player.tsx` must remain a thin surface/container. Do not place
+`player-surface.tsx` must remain a thin surface/container. Do not place
 optical diffusion math, material presets or pixel drawing algorithms directly in
 that component. Renderer implementations live under:
 
 ```text
-services/web/iluminate/components/lighting/designer/rendering/
+services/web/iluminate/components/lighting/player/
 ```
 
 Current renderer module:
 
-- Animate uses one Pixi/WebGL surface. The previous Canvas 2D diffuser surface
-  was removed; do not create a second canvas renderer for optical presentation.
-- `renderPixiAnimationFrame` composes Front, Halo-Lit and directional Wall
-  Washer mounts. A target may have more than one mount at the same time.
+- Animate uses one persistent WebGL2 surface and a dedicated evaluation Worker.
+  Do not create a second canvas renderer or a second fullscreen player.
+- The core runtime is prepared once, keeps flattened dense pixel membership and
+  renders into a recycled typed array. Only one transferred frame may be in
+  flight. React receives throttled status only.
+- `Webgl2PlayerRenderer` composes Front, Halo-Lit and directional Wall Washer
+  mounts. A target may have more than one mount at the same time.
+- `visual-scene.v1` carries resolved physical Channel contours. The WebGL2
+  outline pass only flattens those canonical curves into GPU segments; it does
+  not offset widths, infer caps or reinterpret corner radii.
 - Optical treatments persist in `designer.opticalTreatments` and reference a
   zone or channel. They consume compiled pixel colors but do not change wiring,
   pixelMap membership, effect targeting or the firmware artifact.
@@ -689,8 +747,9 @@ to the smallest visible zone containing it for diffuser drawing. This keeps
 global effects usable without producing a full-canvas blur when a broad target
 overlaps detailed zones.
 
-Future shader or render-texture refinements must consume the same
-`compiledLayout`, frame colors, viewport and optical-treatment contract.
+The offline render harness consumes the same `partitura.v2`, `visual-scene.v1`,
+core evaluator and WebGL2 renderer as the browser. Future shader refinements
+must preserve that parity and the immutable `player-bundle.v1` boundary.
 
 ## Current Limitations
 

@@ -5,11 +5,12 @@ import { ChevronDown, ChevronUp, Eye, EyeOff, GripVertical, Pause, Play, Plus, T
 import { Button } from "@/components/ui/button";
 import type { EffectDefinition, EffectParameterDefinition } from "@/lib/lighting/effect-catalog";
 import { createClipIdentity, nextEmptyClipLayer, type ClipForm, type ClipParams, type PartituraDocument, type SceneForm } from "@/lib/lighting/partitura-model";
+import { clipIdForSelectedTargets } from "./designer-animation-selection";
 
 type Props = {
   document: PartituraDocument;
   effects: Record<string, EffectDefinition>;
-  selectedTargetId?: string;
+  selectedTargetIds?: string[];
   previewTimeMs: number;
   height: number;
   onChange: (document: PartituraDocument) => void;
@@ -36,7 +37,7 @@ const TRACK_GUTTER_WIDTH = 72;
 export function DesignerAnimateTimeline({
   document,
   effects,
-  selectedTargetId,
+  selectedTargetIds = [],
   previewTimeMs,
   height,
   onChange,
@@ -79,6 +80,7 @@ export function DesignerAnimateTimeline({
   const timelineWidth = TRACK_GUTTER_WIDTH + Math.max(availableAxisWidth, timeAxisWidth);
   const playheadLeft = TRACK_GUTTER_WIDTH + timeToPx(clamp(previewTimeMs, 0, durationMs), pxPerSecond);
   const playheadRenderLeft = Math.round(clamp(playheadLeft, 10, Math.max(10, timelineWidth - 10)));
+  const selectedTargetIdsKey = selectedTargetIds.join("\u0000");
 
   React.useEffect(() => {
     const viewport = timelineViewportRef.current;
@@ -89,12 +91,10 @@ export function DesignerAnimateTimeline({
   }, []);
 
   React.useEffect(() => {
-    if (!activeScene || !selectedTargetId) return;
-    const currentClip = activeScene.clips.find((clip) => clip.id === selectedClipId);
-    if (currentClip?.target === selectedTargetId) return;
-    const nextClip = activeScene.clips.find((clip) => clip.target === selectedTargetId);
-    if (nextClip) setSelectedClipId(nextClip.id);
-  }, [activeScene, selectedClipId, selectedTargetId, setSelectedClipId]);
+    if (!activeScene || !selectedTargetIds.length) return;
+    const nextClipId = clipIdForSelectedTargets(activeScene.clips, selectedClipId, selectedTargetIds);
+    if (nextClipId !== selectedClipId) setSelectedClipId(nextClipId);
+  }, [activeScene, selectedClipId, selectedTargetIdsKey, setSelectedClipId]);
 
   function changeScene(sceneId: string) {
     onChange({ ...document, activeSceneId: sceneId, previewTimeMs: 0 });
@@ -170,7 +170,7 @@ export function DesignerAnimateTimeline({
       id: identity.id,
       name: identity.name,
       enabled: true,
-      target: selectedTargetId && targets.some((target) => target.id === selectedTargetId) ? selectedTargetId : "full_sign",
+      target: selectedTargetIds.find((targetId) => targets.some((target) => target.id === targetId)) ?? "full_sign",
       coordinateSpace: "local",
       effect: effect?.id ?? "solid",
       blend: "replace",

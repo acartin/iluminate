@@ -17,7 +17,7 @@ export const flameEffect: EffectModule = {
       height: { type: "percent", label: "Height", default: 0.96, min: 0.1, max: 1 }
     }
   },
-  render: ({ params, localTimeMs, pixel }) => {
+  render: ({ params, localTimeMs, pixel }, output = { r: 0, g: 0, b: 0 }) => {
     const ember = parseColor("#300000");
     const base = parseColor(String(params.baseColor ?? "#FF1A00"));
     const mid = parseColor("#FF6200");
@@ -44,13 +44,15 @@ export const flameEffect: EffectModule = {
     const core = smoothstep(0.25, 0.95, 1 - Math.abs(warpedX - 0.5) * 1.35);
     const baseGlow = Math.pow(proximityToBase, 1.45);
     const heat = clamp(baseGlow * 0.86 + tongues * 0.72 + columns * 0.5 + core * 0.12 + fine * 0.16 - cooling * distanceFromBase * 0.24, 0, 1);
-    const color = heat < 0.34
-      ? mixColors(ember, base, heat / 0.34)
-      : heat < 0.72
-        ? mixColors(base, mid, (heat - 0.34) / 0.38)
-        : heat < 0.94
-          ? mixColors(mid, tip, (heat - 0.72) / 0.22)
-          : mixColors(tip, white, (heat - 0.94) / 0.06);
-    return scaleColor(color, 0.12 + smoothstep(0.02, 1, heat) * 0.88);
+    if (heat < 0.34) {
+      mixColors(ember, base, heat / 0.34, output);
+    } else if (heat < 0.72) {
+      mixColors(base, mid, (heat - 0.34) / 0.38, output);
+    } else if (heat < 0.94) {
+      mixColors(mid, tip, (heat - 0.72) / 0.22, output);
+    } else {
+      mixColors(tip, white, (heat - 0.94) / 0.06, output);
+    }
+    return scaleColor(output, 0.12 + smoothstep(0.02, 1, heat) * 0.88, output);
   }
 };

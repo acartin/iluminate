@@ -26,6 +26,7 @@ o desde el inicio cuando la tarea es de infraestructura/operacion. En Iluminate,
 | `services/web/iluminate/` | Build/smoke de Next via Docker | `docker compose build iluminate-web` y `curl -I http://localhost:${ILUMINATE_WEB_PORT:-8420}` si esta levantado |
 | `services/web/iluminate-public/` | Typecheck, lint, build y smoke del sitio publico via Docker | `docker compose build iluminate-public-web` y `curl -I http://localhost:${ILUMINATE_PUBLIC_WEB_PORT:-8430}` si esta levantado |
 | `services/web/iluminate-prompt-builder/` | Tests del motor, build de imagen y smoke HTTP | `docker run --rm -v "$PWD/services/web/iluminate-prompt-builder:/work" -w /work node:22-alpine npm test` y `docker build -f services/web/iluminate-prompt-builder/Dockerfile -t iluminate-prompt-builder:test .` |
+| `services/render-worker/` | Typecheck/build del worker y coherencia con Compose | `docker build -f services/render-worker/Dockerfile -t iluminate-render-worker:check .` y `docker compose config` |
 | `services/lighting-core/` | Build y fixtures del dominio | `docker run --rm -v "$PWD/services/lighting-core:/work" -w /work node:22-alpine sh -c "npm ci && npm test"` |
 | `services/lighting-core/pixel-map/` | Build core y validar generation/simulation por API si afecta web | `docker compose up -d --build iluminate-web` |
 | `services/lighting-core/domain/effects/` | Build core/web y smoke de `/api/lighting/effects`; si cambia renderer, generar frame de Lab por API | `docker compose up -d --build iluminate-web` |
@@ -33,7 +34,6 @@ o desde el inicio cuando la tarea es de infraestructura/operacion. En Iluminate,
 | `services/web/iluminate/components/lighting/partitura-designer-workbench.tsx` | Build Next y smoke manual/API del grid Designer | `docker compose up -d --build iluminate-web` |
 | `services/web/iluminate/lib/lighting/partitura-model.ts` | Build Next/core; si cambia Designer defaults, revisar API/DB porque documentos persistidos pueden ocultar cambios | `docker compose up -d --build iluminate-web` |
 | `services/auth/` | Por ahora docs/estructura; futuro tests/API auth | no aplica hasta tener runtime |
-| `services/simulator/` | Por ahora docs/estructura; futuro tests deterministas | no aplica hasta tener runtime |
 | `services/device-protocol/` | Contratos y fixtures; futuro tests de schema | no aplica hasta tener runtime |
 | `services/firmware/` | Revision de notas y spikes temporales; el firmware PlatformIO organizado vive fuera de este repo | revision manual; build real en repo firmware externo |
 | `docs/` | Revision de documentacion de arquitectura | no requiere runtime |
@@ -52,12 +52,20 @@ o desde el inicio cuando la tarea es de infraestructura/operacion. En Iluminate,
 - `DB_NAME`
 - `DB_PORT`
 - `ILUMINATE_DATABASE_URL`
+- `ILUMINATE_INTERNAL_TOKEN`
+- `ILUMINATE_RENDER_APP_ORIGIN` (configurado por Compose para el worker)
+- `ILUMINATE_PUBLIC_MEDIA_ORIGIN`
+- `CLOUDFLARE_R2_ENDPOINT`
+- `CLOUDFLARE_R2_REGION`
+- `CLOUDFLARE_R2_ACCESS_KEY_ID`
+- `CLOUDFLARE_R2_SECRET_ACCESS_KEY`
+- `CLOUDFLARE_R2_PRIVATE_RENDER_BUCKET`
+- `CLOUDFLARE_R2_PUBLIC_SHARE_BUCKET`
 
 Variables previstas:
 
 - `ILUMINATE_REDIS_URL`
 - `ILUMINATE_SECRET_KEY`
-- `ILUMINATE_INTERNAL_TOKEN`
 
 ## Checklist operativo minimo
 

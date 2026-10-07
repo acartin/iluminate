@@ -14,6 +14,7 @@ import type {
 } from "@/lib/lighting/partitura-model";
 
 export type DesignerTool = "select" | "measure" | "image_place" | "build_area_rect" | "build_area_ellipse" | "build_area_polygon" | "build_area_bezier" | "reference_text" | "zone_rect" | "zone_ellipse" | "zone_polygon" | "zone_bezier" | "zone_text" | "channel_bezier" | "face_graphic_rect" | "face_graphic_ellipse" | "face_graphic_polygon" | "face_graphic_bezier" | "face_graphic_text" | "led_string" | "data_cable" | "cut" | "pan";
+export type DesignerFilletCornerTarget = { type: "build_area" | "zone" | "channel" | "face_graphic"; id: string; cornerIndex: number };
 export type DesignerRouteTerminal = { routeId: string; pointIndex: number };
 export type DesignerSelection =
   | { type: "artwork"; id: string }
@@ -32,7 +33,7 @@ export type ResizeHandle = "nw" | "ne" | "sw" | "se";
 export type DesignerViewport = { x: number; y: number; width: number; height: number };
 export type DesignerActiveLayer = keyof DesignerLayersForm;
 export type DesignerRouteDraft = { kind: DesignerRouteKind; points: DesignerPoint[]; routeId?: string };
-export type DesignerShapeDraft = { target: "build_area" | "zone" | "channel" | "face_graphic"; mode: "straight" | "bezier"; points: DesignerPoint[] };
+export type DesignerShapeDraft = { target: "build_area" | "zone" | "channel" | "face_graphic"; mode: "straight" | "bezier"; points: DesignerPoint[]; widthMm?: number };
 export type DesignerPrimitiveDraft = {
   target: "build_area" | "zone" | "face_graphic";
   shape: "rect" | "ellipse";

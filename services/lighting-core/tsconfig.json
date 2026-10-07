@@ -10,6 +10,6 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["domain/**/*.ts", "generators/**/*.ts", "player/**/*.ts", "validators/**/*.ts", "tests/**/*.ts", "index.ts"],
+  "include": ["contracts/**/*.ts", "domain/**/*.ts", "generators/**/*.ts", "player/**/*.ts", "validators/**/*.ts", "tests/**/*.ts", "index.ts"],
   "exclude": ["dist", "node_modules"]
 }

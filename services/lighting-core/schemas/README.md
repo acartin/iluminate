@@ -6,4 +6,8 @@ The schema must not be a private serialization format from Konva, a timeline lib
 
 Current schemas:
 
-- `partitura.v1.schema.json`
+- `partitura.v2.schema.json`
+
+The v2 schema is strict and requires a source checksum, all three logical
+outputs, dense pixel indices, flattened target membership and versioned core
+compatibility.

@@ -13,11 +13,11 @@ export const pulseEffect: EffectModule = {
       maxIntensity: { type: "percent", label: "Max intensity", default: 1, min: 0, max: 1 }
     }
   },
-  render: ({ params, progress }) => {
+  render: ({ params, progress }, output) => {
     const color = parseColor(String(params.color));
     const min = typeof params.minIntensity === "number" ? params.minIntensity : 0;
     const max = typeof params.maxIntensity === "number" ? params.maxIntensity : 1;
     const intensity = min + (max - min) * ((Math.sin(progress * Math.PI * 2 - Math.PI / 2) + 1) / 2);
-    return scaleColor(color, intensity);
+    return scaleColor(color, intensity, output);
   }
 };

@@ -220,6 +220,14 @@ body:has(.hero-light) .site-header {
 .archive-grid .project-card-media { aspect-ratio: 4 / 4.3; }
 
 .project-hero { position: relative; min-height: 100svh; overflow: hidden; }
+.share-scene { min-height: 100svh; padding-top: 155px; padding-bottom: 80px; }
+.share-scene-heading { display: grid; grid-template-columns: 1fr 3fr; gap: 24px; align-items: end; margin-bottom: 42px; }
+.share-scene-heading h1 { margin: 0; font-size: clamp(52px, 8vw, 128px); line-height: .86; letter-spacing: -.075em; }
+.share-scene-heading p { grid-column: 2; margin: 0; color: var(--muted-dark); }
+.share-video-frame { overflow: hidden; background: #000; border: 1px solid var(--line-dark); }
+.share-video-frame video { display: block; width: 100%; height: 100%; object-fit: contain; }
+.share-scene-footer { display: flex; justify-content: space-between; align-items: start; gap: 40px; padding-top: 28px; border-top: 1px solid var(--line-dark); }
+.share-scene-footer p { max-width: 680px; margin: 0; color: var(--muted-dark); font-size: clamp(16px, 1.5vw, 22px); }
 .project-hero-copy { position: absolute; z-index: 3; left: var(--page); top: 170px; width: min(650px, 48vw); }
 .project-hero-copy h1 { margin: 22px 0 28px; font-size: clamp(68px, 10vw, 160px); line-height: .82; letter-spacing: -.09em; }
 .project-hero-copy p { max-width: 500px; font-size: clamp(17px, 1.5vw, 23px); }

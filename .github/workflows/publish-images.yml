@@ -7,6 +7,7 @@ on:
     paths:
       - .github/workflows/publish-images.yml
       - services/lighting-core/**
+      - services/render-worker/**
       - services/web/iluminate/**
       - services/web/iluminate-public/**
   workflow_dispatch:
@@ -26,6 +27,8 @@ jobs:
             dockerfile: services/web/iluminate/Dockerfile
           - image: iluminate-public
             dockerfile: services/web/iluminate-public/Dockerfile
+          - image: iluminate-render-worker
+            dockerfile: services/render-worker/Dockerfile
 
     steps:
       - name: Checkout repository

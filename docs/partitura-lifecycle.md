@@ -28,7 +28,9 @@ iluminate.partituras.document_json
 
 The web UI edits this document and persists it as one JSON value. Designer objects, zones, groups, scenes and clips are not separate database tables at this stage.
 
-Do not create parallel editable state in another table, another JSON column, Paper.js project JSON, Pixi/WebGL state or a simulator-private model. Canvas and player libraries are views over `document_json`, not sources of truth.
+Do not create parallel editable state in another table, another JSON column,
+Paper.js project JSON, renderer state or a simulator-private model. Canvas and
+player libraries are views over `document_json`, not sources of truth.
 
 ### Derived Compile Data
 
@@ -66,6 +68,12 @@ memory and downloads a 1:1 vector interchange file. Electrical routes,
 controller graphics, pixelMap and linked construction projections are not part
 of these files.
 
+Designer Setup persists a CNC cutter diameter canonically in millimeters plus
+an independent display unit. The default is 3.175 mm (1/8 in). This value only
+supplies the radius for operator-selected, manufacturability-oriented fillets;
+it does not perform inside/outside compensation, create toolpaths or affect the
+electrical Compile signature.
+
 Designer normalization treats explicit empty arrays as intentional authoring
 state. Deleting every zone or every route and saving must reopen empty; only a
 legacy document in which the field is absent receives historical defaults.
@@ -82,7 +90,10 @@ PostgreSQL
 iluminate.partituras.generated_json
 ```
 
-`generated_json` is produced from the current `document_json` and its fresh `compiledLayout` through `lighting-core` generation and validation. It is the JSON shape that the firmware interpreter consumes.
+`generated_json` is a validated `partitura.v2`, produced from the current
+`document_json` and its fresh `compiledLayout` through `lighting-core`. Its
+`sourceChecksum` proves which authoring content produced it. This is the JSON
+shape that the firmware interpreter consumes.
 
 The generated artifact must remain declarative. It must not include ESP32 pins, FastLED array names, WiFi credentials, per-device secrets, or firmware code.
 
@@ -114,15 +125,16 @@ createDefaultPartituraDocument()
 
 This is a product template, not the live source of truth. Changing it affects newly created partituras only. Existing partituras live in Postgres and must be migrated or updated explicitly when needed.
 
-### Firmware Spike Fixture
+### Removed Firmware Spike
 
-The monorepo contains a temporary Arduino IDE spike under:
+The old Arduino IDE spike path remains only as a tombstone under:
 
 ```text
 services/firmware/esp32-fastled-spike/
 ```
 
-This spike embeds a partitura JSON string to prove that an ESP32 can parse and execute `partitura.v1`. It is not the production firmware source tree.
+The v1 sketch and fixture were deleted. They are not a supported fallback or a
+compatibility path.
 
 ### PlatformIO Firmware Repository
 
@@ -144,7 +156,10 @@ Local clone on the Windows flashing workstation:
 C:\work\Proyecto Iluminate\Dev\iluminate-firmware-esp32
 ```
 
-At the current stage, the PlatformIO firmware still embeds a partitura JSON string. This is temporary and exists only to validate the runtime on hardware.
+The external PlatformIO repository is the only valid place for the production
+ESP32 interpreter. It must consume `partitura.v2`; this monorepo cannot claim
+firmware acceptance until that repository builds and the fixture passes on
+hardware.
 
 ## Target Flow
 
@@ -156,7 +171,10 @@ Web editor
   -> Save persists document_json only
   -> Compile derives document_json.compiledLayout
   -> Animate builds a temporary preview artifact from document_json + compiledLayout
-  -> Generate/Publish validates and persists generated_json
+  -> Generate validates and persists generated_json (partitura.v2)
+  -> Share builds an immutable player bundle from generated_json + visual scene
+  -> browser player evaluates frames in a Worker and renders with persistent WebGL2
+  -> render worker evaluates the same bundle at deterministic timestamps and encodes video
   -> device endpoint exposes generated_json
   -> ESP32 downloads generated_json
   -> ESP32 stores/applies it locally
@@ -179,7 +197,8 @@ Click Save -> persists current document_json; it does not compile secretly.
 Click Compile -> regenerates compiledLayout, clears stale preview/generated artifacts, and saves the compiled document.
 Compile belongs to Design; Animate consumes an already compiled document.
 Click Play/Preview -> requires a fresh compiledLayout; it may generate a temporary preview artifact but must not persist it as truth.
-Click Generate/Publish -> creates generated_json from the current document_json + fresh compiledLayout.
+Click Generate -> creates and saves generated_json from the current document_json + fresh compiledLayout.
+Click Share -> regenerates/saves first, then creates an isolated render artifact and access policy.
 ESP32 Download -> reads generated_json only.
 ```
 
@@ -248,52 +267,84 @@ The compiled Designer expands connected LED routes into:
 pixelMap[]
 ```
 
-Each pixel carries:
+Each generated v2 pixel carries:
 
 ```text
-output, serialIndex, stringId, routeOffsetCm, x, y, tangentDeg
+index, output, serialIndex, stringId, routeOffsetCm, x, y,
+normalizedX, normalizedY, tangentDeg
 ```
 
 A straight strip is just a spatial row where `y` is stable and `x` changes along the route.
 An area, letter, circle or light box uses the same structure with multiple rows or custom coordinates.
 
-Effects should render against resolved spatial pixels. Serial effects can use `output/serialIndex`; spatial effects can use `x/y` or normalized coordinates.
+Zones and groups carry flattened dense `pixelIndices`. Effects render against
+those resolved arrays; the realtime evaluator does not traverse geometry or
+string IDs. Serial effects can use `output/serialIndex`; spatial effects can use
+`x/y` or normalized coordinates.
 
-## Preview Rendering
+## Player And Preview Rendering
 
-The Animate/player renderer is not part of the firmware artifact. It is a web
-preview layer that consumes the compiled physical `pixelMap` plus the current
-scene frame colors.
+The Animate/player renderer is not part of the firmware artifact. It consumes
+`partitura.v2` plus a separate `visual-scene.v1`. Embedded Play and expanded
+Viewer are layout modes of the same `PlayerSurface`; there is no second viewer
+implementation.
 
-Rendering responsibilities are split:
+The hot path is fixed:
 
-- direct LED preview draws addressable pixels at their physical coordinates;
-- diffuser preview simulates acrylic/backlight optics from the same pixels;
-- player UI owns viewport, pan/zoom, selection and timeline controls.
+- `preparePartituraRuntime` compiles targets and clip evaluators once;
+- a dedicated Worker owns the clock and writes RGB into one reusable typed array;
+- at most one frame is in flight, and the transferred buffer is returned for reuse;
+- React receives only throttled status, never per-pixel frame state;
+- one persistent WebGL2 renderer owns buffers, programs and textures;
+- hidden/offscreen surfaces suspend rendering and context loss is recoverable.
 
-Diffuser simulation must be implemented as a separate rendering module, not as
-timeline or player UI logic. It should model each active LED as a local light
-contribution, accumulate those contributions, clip them by zone geometry and
-then apply material/distance parameters. It must not fill an entire zone from a
-single average color, because that hides sparse LED layouts and makes effects
-look more uniform than the physical sign would be.
+Optical presentation remains a renderer concern. It models local LED
+contributions and Face Graphic transmission from the immutable visual scene; it
+must not mutate the score, wiring or firmware target membership.
 
-## Current Hardware Validation State
+## Player Bundles, Video And Sharing
 
-The first hardware proof has validated:
+Publishing creates `player-bundle.v1`, identified by a SHA-256 content hash. A
+bundle contains the validated score, visual scene, manifest and any immutable
+textures. The browser and headless render harness both verify asset byte sizes,
+checksums and runtime versions before use.
+
+Render jobs are leased, retryable and coalesced per tenant/artifact. Chromium
+invokes the same core and WebGL2 renderer at exact timestamps; FFmpeg produces
+H.264 MP4 plus a WebP poster. Interactive recreation is never the default for a
+community share, so concurrent viewers consume CDN bytes rather than application
+CPU or browser authoring state.
+
+Storage and access are deliberately separated:
+
+- `private`: tenant bucket only, no external URL;
+- `review`: opaque, revocable, non-indexed gateway URL with short-lived signed media;
+- `unlisted`: stable opaque, non-indexed possession link using private media;
+- `public`: public bucket/CDN and public-site Open Graph video metadata, only
+  after explicit rights confirmation.
+
+Private/review/unlisted media must never be copied into the public bucket.
+Revocation prevents new signed URLs; already downloaded files cannot be
+recalled. Public publishing is distribution and likewise cannot guarantee
+recall from third-party caches or copies.
+
+## Hardware Acceptance State
+
+Historical v1 spike results are not acceptance for v2. Production acceptance
+now requires, in the external PlatformIO repository:
 
 - PlatformIO local build on Windows;
 - PlatformIO upload to ESP32 over COM3;
 - serial monitor at 115200;
-- embedded `partitura.v1` parsing;
-- WS2812B output on `output 1`;
-- one 100 LED strip;
-- four logical 25 LED regions in the temporary spike fixture;
-- `solid`, `chase`, `pulse`, `toggle`;
-- calibration scene playback.
+- strict `partitura.v2` parsing and source/core compatibility checks;
+- the dense-index fixture on logical outputs 1, 2 and 3;
+- parity for every effect in the supported contract;
+- bounded memory over a long loop and safe rejection of invalid fixtures;
+- download, atomic local activation, reboot recovery and status reporting;
+- measured WS2812B output on target ESP32 hardware.
 
-The next architectural milestone is a local web loader:
+The device endpoint remains:
 
 ```text
-ESP32 downloads generated_json from Iluminate web/API
+ESP32 downloads generated_json (partitura.v2) from Iluminate web/API
 ```

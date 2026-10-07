@@ -26,7 +26,7 @@ export const cometEffect: EffectModule = {
       }
     }
   },
-  render: ({ params, progress, localTimeMs, index, total }) => {
+  render: ({ params, progress, localTimeMs, index, total }, output = { r: 0, g: 0, b: 0 }) => {
     const color = parseColor(String(params.color ?? "#2E9BFF"));
     const headColor = parseColor(String(params.headColor ?? "#FFFFFF"));
     const background = parseColor(String(params.backgroundColor ?? "#00040F"));
@@ -52,7 +52,7 @@ export const cometEffect: EffectModule = {
     const core = Math.exp(-((t / 0.16) ** 2));
     const body = Math.exp(-t * (2.6 + wobble * 2));
     const intensity = clamp((body * 0.8 + core * 0.95) * flicker, 0, 1);
-    const shade = mixColors(color, headColor, clamp(core * 0.95 + Math.max(0, wobble) * 0.2, 0, 1));
-    return mixColors(background, shade, intensity);
+    mixColors(color, headColor, clamp(core * 0.95 + Math.max(0, wobble) * 0.2, 0, 1), output);
+    return mixColors(background, output, intensity, output);
   }
 };

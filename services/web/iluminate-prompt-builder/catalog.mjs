@@ -128,7 +128,7 @@ export const DOMAINS = [
   {
     id: "face_graphic", group: "designer", label: "Face Graphic y filtro óptico",
     summary: "Máscaras opaque/clear/translucent, filterColor y efecto exclusivo sobre luz frontal.",
-    paths: ["services/web/iluminate/components/lighting/designer/rendering/designer-player-renderers.ts", "services/web/iluminate/lib/lighting/partitura-model.ts", "services/web/iluminate/components/lighting/designer/designer-paper-renderer.ts"],
+    paths: ["services/web/iluminate/components/lighting/player/gpu/webgl2-player-renderer.ts", "services/web/iluminate/lib/lighting/visual-scene-builder.ts", "services/web/iluminate/lib/lighting/partitura-model.ts", "services/web/iluminate/components/lighting/designer/designer-paper-renderer.ts"],
     context: [".agent/DESIGNER_HANDOFF.md", ".agent/DESIGNER_UX_CONTRACT.md"],
     validations: ["Pruebas ópticas de Face Graphic", "Smoke As built y LED map", "Build web"],
     keywords: ["face graphic", "máscara", "translucent", "opaque", "filter", "óptica"]
@@ -150,20 +150,20 @@ export const DOMAINS = [
     keywords: ["timeline", "scene", "track", "clip", "playhead", "lane", "mute"]
   },
   {
-    id: "player_runtime", group: "animation", label: "Player, emulación y frames",
-    summary: "Loop de Animate, generación de frames, tiempo, reproducción de clips y simulación WS2812B.",
-    paths: ["services/web/iluminate/components/lighting/designer/designer-webgl-player.tsx", "services/web/iluminate/components/lighting/designer/rendering/designer-player-renderers.ts", "services/lighting-core/player/scene-player.ts", "services/lighting-core/player/ws2812b-simulator.ts", "services/web/iluminate/app/api/lighting/partituras/simulate-frame"],
+    id: "player_runtime", group: "animation", label: "Player, Worker y frames",
+    summary: "Runtime precompilado, clock imperativo, backpressure de un frame, buffers reciclados y reproducción de clips.",
+    paths: ["services/web/iluminate/components/lighting/player/player-surface.tsx", "services/web/iluminate/components/lighting/player/player-controller.ts", "services/web/iluminate/components/lighting/player/player-worker.ts", "services/lighting-core/player/scene-player.ts", "services/lighting-core/player/ws2812b-simulator.ts"],
     context: [".agent/EFFECT_TARGETING_MODEL.md", "docs/partitura-lifecycle.md", ".agent/DESIGNER_HANDOFF.md"],
     validations: ["Prueba de regresión del frame/clip afectado", "Pruebas de lighting-core", "Pruebas del Designer", "Build web"],
-    keywords: ["player", "runtime", "emulación", "simulación", "frame", "play", "pixi", "ws2812"]
+    keywords: ["player", "runtime", "worker", "emulación", "simulación", "frame", "play", "backpressure", "ws2812"]
   },
   {
-    id: "optical_renderer", group: "animation", label: "Renderer Pixi y presentación óptica",
-    summary: "Buffers front/rear, píxeles directos, diffuser, As built, LED map y composición Pixi.",
-    paths: ["services/web/iluminate/components/lighting/designer/rendering/designer-player-renderers.ts", "services/web/iluminate/components/lighting/designer/designer-webgl-player.tsx"],
+    id: "optical_renderer", group: "animation", label: "Renderer WebGL2 y presentación óptica",
+    summary: "Recursos GPU persistentes, píxeles directos, diffuser, Face Graphic, As built y LED map.",
+    paths: ["services/web/iluminate/components/lighting/player/gpu/webgl2-player-renderer.ts", "services/web/iluminate/components/lighting/player/optical-model.ts", "services/web/iluminate/lib/lighting/visual-scene-builder.ts"],
     context: [".agent/DESIGNER_HANDOFF.md", ".agent/DESIGNER_UX_CONTRACT.md"],
     validations: ["Pruebas del renderer", "Smoke As built/LED map", "Build web"],
-    keywords: ["pixi", "renderer", "diffuser", "as built", "led map", "buffer"]
+    keywords: ["webgl2", "renderer", "gpu", "diffuser", "as built", "led map", "buffer"]
   },
   {
     id: "effects", group: "animation", label: "Catálogo y matemáticas de efectos",
@@ -191,11 +191,11 @@ export const DOMAINS = [
   },
   {
     id: "core_schema_validation", group: "domain", label: "Schema, generator y validator del core",
-    summary: "partitura.v1, tipos canónicos, generación, fixtures y validación determinista.",
+    summary: "partitura.v2, índices densos, tipos canónicos, generación, fixtures y validación determinista.",
     paths: ["services/lighting-core/domain/partituras", "services/lighting-core/schemas", "services/lighting-core/generators", "services/lighting-core/validators", "services/lighting-core/fixtures"],
     context: ["docs/partitura-lifecycle.md", ".agent/EFFECT_TARGETING_MODEL.md"],
     validations: ["npm test de services/lighting-core", "Validar fixtures válidos e inválidos", "Build del core"],
-    keywords: ["schema", "validator", "generator", "fixture", "partitura.v1"]
+    keywords: ["schema", "validator", "generator", "fixture", "partitura.v2"]
   },
   {
     id: "persistence_database", group: "platform", label: "PostgreSQL y persistencia",
@@ -226,8 +226,16 @@ export const DOMAINS = [
     summary: "Compatibilidad del intérprete ESP32, fixture, outputs y límites; firmware real fuera del repo.",
     paths: ["services/firmware", "services/lighting-core/fixtures", "docs/partitura-lifecycle.md"],
     context: ["docs/partitura-lifecycle.md", "services/firmware/README.md", ".agent/EFFECT_TARGETING_MODEL.md"],
-    validations: ["Validar fixture partitura.v1", "Confirmar compatibilidad documentada", "Build real solo en repo externo"],
+    validations: ["Validar fixture partitura.v2", "Confirmar compatibilidad documentada", "Build y hardware real solo en repo externo"],
     keywords: ["firmware", "esp32", "fastled", "platformio", "fixture"]
+  },
+  {
+    id: "scene_sharing", group: "platform", label: "Bundles, video y scene sharing",
+    summary: "Player bundles inmutables, render jobs, Chromium/FFmpeg, R2 privado/público, links revocables y publicación pública.",
+    paths: ["services/render-worker", "services/lighting-core/contracts/player-bundle.ts", "services/lighting-core/migrations/2026-10-07_create_scene_rendering_and_shares.sql", "services/web/iluminate/lib/lighting/player-bundle-builder.ts", "services/web/iluminate/lib/lighting/player-bundle-loader.ts", "services/web/iluminate/lib/server/scene-publication.ts", "services/web/iluminate/lib/server/scene-share-viewer.ts", "services/web/iluminate/lib/server/r2-render-artifacts.ts", "services/web/iluminate/app/api/lighting/partituras/[id]/shares", "services/web/iluminate/app/api/lighting/scene-shares", "services/web/iluminate/app/internal/render", "services/web/iluminate/app/review", "services/web/iluminate-public/app/share", "compose.yml", ".env.example"],
+    context: ["docs/partitura-lifecycle.md", ".agent/DATABASE_MODEL.md", "services/render-worker/README.md", ".agent/DESIGNER_HANDOFF.md", ".agent/PUBLIC_SITE_DIRECTION.md", ".agent/EXECUTION_MAP.md"],
+    validations: ["Build worker", "Build dashboard y sitio público", "Verificar aislamiento de buckets/policies", "Smoke de render y revocación"],
+    keywords: ["share", "video", "render", "bundle", "r2", "cdn", "review", "unlisted", "public"]
   },
   {
     id: "public_site", group: "operations", label: "Sitio público y catálogo",
@@ -263,6 +271,7 @@ export const PRESETS = [
   { id: "electrical", label: "Cableado / Compile", description: "Strings, controller, soldadura o pixelMap.", domains: ["electrical_routes", "compile_pixelmap"], unprotect: ["electrical_model", "compile_lifecycle"] },
   { id: "effects", label: "Efectos", description: "Catálogo o renderer matemático de efectos.", domains: ["effects"], unprotect: ["effect_contract"] },
   { id: "data", label: "Persistencia", description: "Partitura, PostgreSQL o migraciones.", domains: ["partitura_model", "persistence_database"], unprotect: ["partitura_schema", "database"] },
+  { id: "sharing", label: "Scene sharing / renders", description: "Bundles, render worker, review y publicación pública.", domains: ["scene_sharing"], unprotect: ["user_behavior", "compile_lifecycle", "api_contract", "database", "infrastructure", "public_experience"] },
   { id: "public", label: "Sitio público", description: "Contenido, rutas o experiencia pública.", domains: ["public_site"], unprotect: ["public_experience", "ui_layout", "user_behavior"] },
   { id: "docs", label: "Contexto IA", description: "Reglas, docs y artefactos de contexto.", domains: ["context_docs"], unprotect: ["documentation"] }
 ];

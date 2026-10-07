@@ -5,13 +5,13 @@
 
 ## Snapshot
 
-- Generated UTC: `2026-10-06T17:28:42Z`
+- Generated UTC: `2026-10-07T06:52:07Z`
 - Repository root: `/srv/iluminate`
-- Git branch: `HETZNER-DEV-2026-Setiembre-30`
-- Git commit: `91f2ae7`
-- Worktree: `dirty` (45 changed paths, excluding generated context files)
-- Status fingerprint: `dca6248ba2ccfdeb17b2ca8b8a1342c603203c74c738d2f703f36e52e81dddc5`
-- Tracked diff fingerprint: `3a6190d6c5b6fda41c9a6187408b132b72b308309ebd080ea40e3b72958dcffb`
+- Git branch: `HETZNER-DEV-2026-Octubre-6`
+- Git commit: `e18e2e0`
+- Worktree: `dirty` (118 changed paths, excluding generated context files)
+- Status fingerprint: `806ad5bb47a8db74d6fa077184dbf18d2e63967336d00fa7781e00ec506986a2`
+- Tracked diff fingerprint: `deea6532705e636054b65de603777ad7d969936cb2634b8981b2ba4d12ba195a`
 
 The commit identifies the base revision. When the worktree is dirty, the two
 fingerprints distinguish the local state without copying diffs or secrets into
@@ -26,7 +26,7 @@ this file. Untracked file contents are never read for fingerprinting.
 | `services/web/iluminate-prompt-builder` | Internal generator for scoped AI change contracts. |
 | `services/lighting-core` | Canonical LED, effect, partitura and validation domain. |
 | `services/auth` | Identity, sessions, organizations, roles and permissions. |
-| `services/simulator` | Reusable simulation domain as it leaves the web prototype. |
+| `services/render-worker` | Private queue worker for deterministic MP4/WebP scene rendering. |
 | `services/device-protocol` | Cloud/controller protocol contracts. |
 | `services/firmware` | Compatibility notes and temporary spikes; organized firmware is external. |
 | `docs` | Lifecycle and operational runbooks selected by task. |
@@ -38,6 +38,7 @@ this file. Untracked file contents are never read for fingerprinting.
 iluminate-public-web
 iluminate-web
 postgres
+render-worker
 ```
 
 ## Context Inventory
@@ -89,7 +90,7 @@ services/lighting-core/schemas
 services/lighting-core/storage
 services/lighting-core/tests
 services/lighting-core/validators
-services/simulator
+services/render-worker
 services/web
 services/web/iluminate
 services/web/iluminate-prompt-builder

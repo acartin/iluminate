@@ -49,7 +49,7 @@ export const menuCatalog: MenuSection[] = [
         id: "partitura-generator",
         label: "Partitura Generator",
         href: "/partituras/generator",
-        description: "Internal generator and validation workbench for partitura.v1.",
+        description: "Internal generator and validation workbench for partitura.v2.",
         required_permission: "lighting:partituras:manage"
       },
       {

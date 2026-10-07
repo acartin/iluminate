@@ -107,7 +107,7 @@ this file. Untracked file contents are never read for fingerprinting.
 | \`services/web/iluminate-prompt-builder\` | Internal generator for scoped AI change contracts. |
 | \`services/lighting-core\` | Canonical LED, effect, partitura and validation domain. |
 | \`services/auth\` | Identity, sessions, organizations, roles and permissions. |
-| \`services/simulator\` | Reusable simulation domain as it leaves the web prototype. |
+| \`services/render-worker\` | Private queue worker for deterministic MP4/WebP scene rendering. |
 | \`services/device-protocol\` | Cloud/controller protocol contracts. |
 | \`services/firmware\` | Compatibility notes and temporary spikes; organized firmware is external. |
 | \`docs\` | Lifecycle and operational runbooks selected by task. |

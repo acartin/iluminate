@@ -135,7 +135,7 @@ export function PartituraGeneratorWorkbench() {
       <div>
         <div className="mb-2 flex items-center gap-2">
           <Badge>{loading ? "Loading" : "Persistent"}</Badge>
-          <Badge>partitura.v1</Badge>
+          <Badge>partitura.v2</Badge>
         </div>
         <h1 className="text-page-title font-light">Partituras</h1>
         <p className="mt-2 max-w-3xl text-page-subtitle text-muted-foreground">

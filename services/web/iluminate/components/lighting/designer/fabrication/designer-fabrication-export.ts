@@ -2,7 +2,8 @@ import type { DesignerContour, DesignerFaceGraphicPassMode, DesignerForm, Design
 import { resolveDesignerDerivedGeometry, resolveDesignerProjectionGeometry } from "@/lib/lighting/partitura-model";
 import { designerFontResource } from "@/lib/lighting/designer-font-catalog";
 import { designerTextToGeometry } from "@/lib/lighting/designer-text-geometry";
-import { channelBorderPolylines, channelIsClosed, openChannelOutline, pointInPolygon, shapeOutlinePoints } from "../designer-geometry";
+import { pointInPolygon, shapeOutlinePoints } from "../designer-geometry";
+import { resolveChannelOutlineContours } from "../rendering/channel-swept-outline";
 import { validateDesignerGeometryTopology } from "../geometry/designer-geometry-boolean";
 
 export type FabricationExportFormat = "svg" | "dxf";
@@ -104,9 +105,8 @@ function collectFabricationPaths(designer: DesignerForm, fontDataById: Map<strin
   if (enabled("zones")) {
     designer.zones.forEach((item) => paths.push({ id: item.id, name: item.name, layer: "zones", groupName: "DIFFUSORS_ZONES", geometry: nativeGeometry(item, "geometry_zone") }));
     designer.channels.forEach((channel) => {
-      const borders = channelIsClosed(channel) ? channelBorderPolylines(channel) : null;
-      const outline = borders ? borders.left : openChannelOutline(channel);
-      if (outline.length < 3 || (borders && borders.right.length < 3)) {
+      const contours = resolveChannelOutlineContours(channel);
+      if (!contours.length || contours.some((contour) => contour.points.length < 3)) {
         issues.push({ severity: "error", code: "open-profile", objectId: channel.id, message: `${channel.name} cannot produce a closed channel outline.` });
         return;
       }
@@ -115,9 +115,7 @@ function collectFabricationPaths(designer: DesignerForm, fontDataById: Map<strin
         name: channel.name,
         layer: "zones",
         groupName: "DIFFUSORS_CHANNELS",
-        geometry: borders
-          ? geometryFromContours(`fabrication_channel_${channel.id}`, [borders.left, borders.right])
-          : geometryFromPolyline(`fabrication_channel_${channel.id}`, outline)
+        geometry: geometryFromContours(`fabrication_channel_${channel.id}`, contours.map((contour) => contour.points))
       });
     });
   }
@@ -342,11 +340,6 @@ function geometryContours(geometry: DesignerGeometry): DesignerContour[] {
   if (geometry.contours?.length) return geometry.contours;
   if (!geometry.points?.length) return [];
   return [{ points: geometry.points, pathMode: geometry.pathMode ?? "straight", closed: true }];
-}
-
-function geometryFromPolyline(id: string, points: DesignerPoint[]): DesignerGeometry {
-  const xs = points.map((point) => point.x); const ys = points.map((point) => point.y);
-  return { id, kind: "path", x: Math.min(...xs), y: Math.min(...ys), width: Math.max(...xs) - Math.min(...xs), height: Math.max(...ys) - Math.min(...ys), points, pathMode: "straight", closed: true, fillRule: "nonzero" };
 }
 
 function geometryFromContours(id: string, contours: DesignerPoint[][]): DesignerGeometry {

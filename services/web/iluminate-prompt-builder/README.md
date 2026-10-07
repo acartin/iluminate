@@ -15,7 +15,9 @@ cambio destinados a nuevas sesiones de IA.
 
 El catálogo vive en `catalog.mjs` y fue derivado de los servicios, rutas,
 contratos y pruebas actuales del repositorio. Debe actualizarse cuando aparezca
-un dominio durable o cambie su ownership.
+un dominio durable o cambie su ownership. Sus contextos deben seguir el router
+de `.agent/RULES.md`; los presets que cruzan servicios deben abrir explícitamente
+las superficies sensibles necesarias sin desproteger dominios no relacionados.
 
 ## Ejecutar
 

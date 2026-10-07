@@ -43,4 +43,7 @@ partitura or simulator semantics.
 The initial project collection contains clearly labelled Iluminate concept
 studies. Interactive previews are local presentation components, not the
 canonical simulator. They should be replaced by published read-only partitura
-snapshots once the reusable player is extracted into `services/simulator`.
+snapshots when interactive public playback is implemented. That playback must
+consume immutable published bundles and reuse the contract implemented under
+`services/web/iluminate/components/lighting/player`; it must not create a
+second simulator or authoring model in the public application.

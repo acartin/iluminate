@@ -33,7 +33,7 @@ services/
   web/iluminate-prompt-builder # internal static generator for scoped AI change contracts
   lighting-core      # LED choreography domain and partitura model
   auth               # identity and authorization domain
-  simulator          # reusable simulation domain, when it outgrows web
+  render-worker      # private queue worker for deterministic scene media
   device-protocol    # controller/cloud communication contracts
   firmware           # notes for the external ESP32 firmware interpreter
 ```
@@ -47,6 +47,8 @@ Owns:
 - Canvas and timeline presentation.
 - User-facing screens.
 - Calls to auth and lighting APIs.
+- The reusable browser player surface, Worker controller and WebGL2 renderer.
+- The protected render harness consumed by the offline render worker.
 
 Does not own:
 
@@ -139,11 +141,25 @@ Does not own:
 - deployment rules,
 - simulator behavior.
 
-### `services/simulator`
+### `services/render-worker`
 
-Owns reusable simulation logic after it becomes independent from the first web prototype.
+Owns:
 
-The simulator must interpret the same partitura semantics as firmware. It should not introduce a second authoring model.
+- leasing and consuming offline render jobs;
+- driving the protected dashboard render harness with Chromium;
+- encoding MP4/WebP outputs and writing them to the correct private/public R2 bucket;
+- bounded retries, temporary-frame cleanup and worker health diagnostics.
+
+Does not own:
+
+- partitura, effect, clock or optical semantics;
+- the reusable browser player or WebGL2 renderer;
+- share authorization, policy transitions or publication rights;
+- a public HTTP endpoint.
+
+The worker must consume immutable `player-bundle.v1` artifacts and the same
+runtime/renderer contract as browser playback. It must not introduce a second
+simulation or authoring model.
 
 ### `services/device-protocol`
 
@@ -176,7 +192,6 @@ web/iluminate
 
 web/iluminate-public
   -> lighting-core/contracts
-  -> simulator
   -> published public API/content only
 
 lighting-core/api
@@ -185,9 +200,10 @@ lighting-core/api
   -> lighting-core/storage
   -> auth/contracts, when identity context is needed
 
-simulator
-  -> lighting-core/domain
-  -> lighting-core/schemas
+render-worker
+  -> lighting-core/contracts
+  -> web/iluminate protected render harness
+  -> render queue and render-artifact storage
 
 device-protocol
   -> lighting-core/contracts, only for exported partitura/deployment shapes
@@ -203,7 +219,7 @@ Avoid:
 - `web/iluminate` becoming the source of truth for partituras.
 - `web/iluminate-public` connecting directly to PostgreSQL or receiving private service credentials.
 - API handlers duplicating validation rules that belong in `validators/`.
-- simulator storing its own incompatible partitura format.
+- render-worker implementing its own effect, clock, optical or partitura semantics.
 
 ---
 

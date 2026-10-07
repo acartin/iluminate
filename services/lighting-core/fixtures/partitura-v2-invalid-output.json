@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "partitura.v2",
+  "projectId": "fixture",
+  "sourceChecksum": "sha256:117b959bbef22c8409c0356651999e0d3163066ad3b815de1ac3d6c82901f54c",
+  "requiredCoreVersion": "1.0.0",
+  "defaultScene": "normal",
+  "outputs": [{ "id": "output_4", "name": "Bad", "output": 4, "pixelCount": 0 }],
+  "pixelMap": [],
+  "zones": [],
+  "groups": [],
+  "scenes": [{ "id": "normal", "name": "Normal", "loop": true, "durationMs": 1, "tracks": [] }]
+}

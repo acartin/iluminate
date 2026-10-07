@@ -12,7 +12,7 @@ test("player contract points to runtime paths and protects unrelated surfaces", 
     allowedDomainIds: ["player_runtime"],
     protectedSurfaceIds: allProtected
   });
-  assert.match(prompt, /Player, emulación y frames/);
+  assert.match(prompt, /Player, Worker y frames/);
   assert.match(prompt, /services\/lighting-core\/player\/scene-player\.ts/);
   assert.match(prompt, /\.agent\/EFFECT_TARGETING_MODEL\.md/);
   assert.match(prompt, /No muevas, añadas, elimines ni renombres botones/);
@@ -47,6 +47,43 @@ test("selection summary deduplicates shared paths and context", () => {
   assert.equal(summary.domains, 2);
   assert.ok(summary.paths >= 5);
   assert.ok(summary.contexts >= 2);
+});
+
+test("scene sharing preset opens its cross-service surfaces and routes complete context", () => {
+  const preset = PRESETS.find((entry) => entry.id === "sharing");
+  const domain = DOMAINS.find((entry) => entry.id === "scene_sharing");
+  assert.ok(preset);
+  assert.ok(domain);
+  assert.deepEqual(preset.domains, ["scene_sharing"]);
+  ["api_contract", "database", "infrastructure", "public_experience"].forEach((id) => {
+    assert.ok(preset.unprotect.includes(id), "sharing preset must open " + id);
+  });
+  [
+    "services/render-worker/README.md",
+    ".agent/DESIGNER_HANDOFF.md",
+    ".agent/PUBLIC_SITE_DIRECTION.md",
+    ".agent/EXECUTION_MAP.md"
+  ].forEach((path) => assert.ok(domain.context.includes(path), "missing sharing context " + path));
+  [
+    "services/lighting-core/migrations/2026-10-07_create_scene_rendering_and_shares.sql",
+    "services/web/iluminate/app/api/lighting/scene-shares",
+    "services/web/iluminate/app/internal/render",
+    "compose.yml"
+  ].forEach((path) => assert.ok(domain.paths.includes(path), "missing sharing path " + path));
+  assert.ok(!domain.context.includes("docs/upgrade.doc"), "historical upgrade plan must not be routine sharing context");
+
+  const prompt = createPrompt({
+    objective: "Implementa un cambio autorizado de scene sharing.",
+    mode: "implement",
+    allowedDomainIds: preset.domains,
+    protectedSurfaceIds: allProtected.filter((id) => !preset.unprotect.includes(id))
+  });
+  assert.match(prompt, /services\/web\/iluminate\/app\/internal\/render/);
+  assert.match(prompt, /services\/render-worker\/README\.md/);
+  assert.doesNotMatch(prompt, /No cambies endpoints, DTOs/);
+  assert.doesNotMatch(prompt, /No cambies PostgreSQL, migraciones/);
+  assert.doesNotMatch(prompt, /No cambies Docker, Compose/);
+  assert.doesNotMatch(prompt, /No cambies contenido, SEO, rutas/);
 });
 
 test("catalog identifiers and preset references are internally valid", () => {

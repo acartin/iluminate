@@ -2,24 +2,32 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { readFile } from "node:fs/promises";
 import paper from "paper";
-import type { DesignerChannelForm } from "../../../lib/lighting/partitura-model";
+import type { VisualShape } from "@iluminate/lighting-core";
+import type { ClipForm, DesignerChannelForm } from "../../../lib/lighting/partitura-model";
 import { DESIGNER_SCHEMA_VERSION, canonicalizeDesignerGeometry, createDefaultOpticalTreatment, createDefaultPartituraDocument, nextEmptyClipLayer, normalizeDefaultSignLayout, resolveDesignerDerivedGeometry, resolveDesignerProjectionGeometry, wouldCreateDesignerDerivedGeometryCycle, wouldCreateDesignerProjectionCycle } from "../../../lib/lighting/partitura-model";
-import { filletDesignerGeometry, offsetDesignerGeometry } from "../../../lib/lighting/designer-derived-geometry";
+import { designerFilletCornerIsEligible, filletDesignerGeometry, offsetDesignerGeometry } from "../../../lib/lighting/designer-derived-geometry";
 import { DEFAULT_DESIGNER_FONT_ID, designerFontResource } from "../../../lib/lighting/designer-font-catalog";
 import { designerTextToGeometry } from "../../../lib/lighting/designer-text-geometry";
 import { compileDesignerLayout, designerCompileSignature } from "./designer-compiler";
-import { geometryToolAllowedOnLayer, geometryToolPolicy } from "./canvas/designer-tool-policy";
-import { applyDesignerGeometryCommand } from "./geometry/designer-geometry-commands";
+import { canvasInteractionSnapCm, CHANNEL_ROUTER_BIT_PRESETS, channelWidthForRouterDiameter, geometryToolAllowedOnLayer, geometryToolPolicy } from "./canvas/designer-tool-policy";
+import { applyDesignerGeometryCommand, applyDesignerNativeFillet } from "./geometry/designer-geometry-commands";
 import { applyDesignerBooleanOperation, validateDesignerGeometryTopology } from "./geometry/designer-geometry-boolean";
-import { applyFaceGraphicToOpticalMode, applyFaceGraphicTransmission, faceGraphicMaskUv, faceGraphicTransmissionAtPoint, frontMaterialOffStyle, orderOpticalTreatmentsForRendering, registerPixiFrameResource, releasePixiFrameResources, resolvePhysicalFaceGraphics } from "./rendering/designer-player-renderers";
-import { requestPlaybackPreview, resolvePlaybackPixels } from "./designer-playback-frame";
+import { applyFaceGraphicToOpticalMode, applyFaceGraphicTransmission, faceGraphicMaskUv, faceGraphicTransmissionAtPoint, frontMaterialOffStyle, orderOpticalTreatmentsForRendering, resolvePhysicalFaceGraphics } from "../player/optical-model";
+import { buildOutlineSegments, selectedOutlineShapes } from "../player/gpu/webgl2-player-renderer";
+import { resolveChannelOutlineContours, sweptChannelOutlineContours } from "./rendering/channel-swept-outline";
 import { generateDesignerFabricationExport } from "./fabrication/designer-fabrication-export";
 import { designerLayerForSelection, designerSelectionForClipTarget } from "./types";
+import { clipIdForSelectedTargets, designerClipTargetIdsForSelection } from "./designer-animation-selection";
 import {
+  channelAllowedBendRadiusMm,
   channelBorderPolylines,
   channelCenterPolyline,
+  channelHasTightBends,
   channelIsClosed,
+  channelMinimumBendRadiusMm,
+  channelTightBend,
   controllerPortPoint,
+  designerFilletCornerForHit,
   detachSolderedRoutePoint,
   distanceToChannelCenter,
   nextDesignerItemNumber,
@@ -31,7 +39,8 @@ import {
   moveControllerWithSolderedCables,
   resolveRouteOutputs,
   setChannelNodeType,
-  smoothBezierPoints
+  smoothBezierPoints,
+  smoothOpenBezierPoints
 } from "./designer-geometry";
 
 describe("Layers panel organization", () => {
@@ -58,32 +67,172 @@ describe("Layers panel organization", () => {
     assert.equal(designerLayerForSelection({ type: "zone", id: "zone_1" }), "zones");
     assert.equal(designerLayerForSelection({ type: "face_graphic", id: "face_graphic_1" }), "faceGraphic");
   });
+
+  it("updates the Hardware master visibility as one atomic layer mutation", async () => {
+    const panelSource = await readFile("components/lighting/designer/designer-ui.tsx", "utf8");
+    const workspaceSource = await readFile("components/lighting/partitura-workspace.tsx", "utf8");
+    const rendererSource = await readFile("components/lighting/designer/designer-paper-renderer.ts", "utf8");
+
+    assert.match(panelSource, /onChange=\{\(patch\) => onPatchLayers\(\["strings", "hardware"\], patch\)\}/);
+    assert.match(workspaceSource, /function patchDesignerLayers\([\s\S]*?layers\.forEach\([\s\S]*?updateDesigner\(/);
+    assert.match(rendererSource, /if \(designer\.layers\.strings\.visible && designer\.layers\.lightSources\.visible\)/);
+    assert.doesNotMatch(panelSource, /onPatchLayer\("strings", patch\);\s*onPatchLayer\("hardware", patch\)/);
+  });
+});
+
+describe("Designer text tool visibility", () => {
+  it("keeps controlled text support without exposing text creation in the tool rail", async () => {
+    const source = await readFile("components/lighting/partitura-workspace.tsx", "utf8");
+
+    assert.doesNotMatch(source, /<ToolButton[^>]+tool === "(?:reference_text|zone_text|face_graphic_text)"/);
+    assert.match(source, /function createTextAt\(point: DesignerPoint\)/);
+    assert.match(source, /async function convertTextToPaths\(textId: string\)/);
+  });
+});
+
+describe("Designer snap-to-grid control", () => {
+  it("uses the configured Setup interval only while snapping is enabled", () => {
+    assert.equal(canvasInteractionSnapCm(2.5, true), 2.5);
+    assert.equal(canvasInteractionSnapCm(2.5, false), 0);
+  });
+
+  it("keeps the magnet toggle and Setup close action in the global bar", async () => {
+    const source = await readFile("components/lighting/partitura-workspace.tsx", "utf8");
+
+    assert.match(source, /aria-label="Snap to grid" aria-pressed=\{snapToGrid\}/);
+    assert.match(source, /aria-label="Close Setup"/);
+    assert.match(source, /setupDetailsRef\.current\.open = false/);
+  });
+});
+
+describe("Animate WebGL outlines", () => {
+  it("prepares persistent segments for zone boundaries and channel borders", () => {
+    const zone: VisualShape = {
+      id: "zone_outline",
+      name: "Zone outline",
+      kind: "zone",
+      primitive: "rectangle",
+      x: 2,
+      y: 3,
+      width: 10,
+      height: 6,
+      contours: [],
+      fillRule: "evenodd"
+    };
+    const channel: VisualShape = {
+      id: "channel_outline",
+      name: "Channel outline",
+      kind: "channel",
+      primitive: "path",
+      x: 0,
+      y: 0,
+      width: 10,
+      height: 0,
+      contours: [{ points: [{ x: 0, y: 1 }, { x: 10, y: 1 }, { x: 10, y: -1 }, { x: 0, y: -1 }], pathMode: "straight" }],
+      fillRule: "evenodd"
+    };
+
+    assert.deepEqual(Array.from(buildOutlineSegments([zone])), [2, 3, 12, 3, 12, 3, 12, 9, 12, 9, 2, 9, 2, 9, 2, 3]);
+    assert.deepEqual(Array.from(buildOutlineSegments([channel])), [0, 1, 10, 1, 10, 1, 10, -1, 10, -1, 0, -1, 0, -1, 0, 1]);
+  });
+
+  it("uses the same resolved Channel contours as Designer instead of reconstructing its center line", async () => {
+    const rounded: DesignerChannelForm = {
+      id: "rounded_sign",
+      name: "Rounded sign",
+      points: [
+        { x: 129, y: 0, nodeType: "corner", radiusMm: 80 },
+        { x: 129, y: 40, nodeType: "corner", radiusMm: 80 },
+        { x: 43, y: 40, nodeType: "corner", radiusMm: 80 },
+        { x: 43, y: 0, nodeType: "corner", radiusMm: 80 }
+      ],
+      pathMode: "bezier",
+      widthMm: 10,
+      closed: true,
+      cap: "butt",
+      visible: true,
+      locked: false,
+      opacity: 1
+    };
+    const contours = resolveChannelOutlineContours(rounded);
+    const shape: VisualShape = {
+      id: rounded.id,
+      name: rounded.name,
+      kind: "channel",
+      primitive: "path",
+      x: 42.5,
+      y: -0.5,
+      width: 87,
+      height: 41,
+      contours: contours.map(({ points, pathMode }) => ({ points, pathMode })),
+      fillRule: "evenodd"
+    };
+    const segments = buildOutlineSegments([shape]);
+
+    assert.equal(contours.length, 2);
+    assert.ok(segments.length / 4 > 100);
+    assert.ok(contours.flatMap((contour) => contour.points).some((point) => point.x > 129 && point.y > 0 && point.y < 8));
+    const playerSource = await readFile("components/lighting/player/gpu/webgl2-player-renderer.ts", "utf8");
+    assert.doesNotMatch(playerSource, /channelOutlinePolylines/);
+    assert.match(playerSource, /shape\.contours\.map\(\(contour\) => flattenContour/);
+  });
+
+  it("gates the outline pass with the Animate checkbox state", async () => {
+    const source = await readFile("components/lighting/player/gpu/webgl2-player-renderer.ts", "utf8");
+    const outlineGate = source.slice(source.indexOf("if (this.settings.showOutlines) {"), source.indexOf("private directPixelRadius"));
+    assert.match(outlineGate, /this\.drawOutlineBatch\(this\.zoneOutlines/);
+    assert.match(outlineGate, /this\.drawOutlineBatch\(this\.channelOutlines/);
+    assert.match(outlineGate, /if \(this\.selectedOutline\) \{/);
+    assert.match(outlineGate, /this\.drawOutlineBatch\(this\.selectedOutline/);
+  });
+
+  it("builds selection feedback for exactly one clicked zone without exposing nodes", () => {
+    const shapes = [
+      { id: "zone_a", kind: "zone" as const },
+      { id: "zone_b", kind: "zone" as const },
+      { id: "channel_a", kind: "channel" as const }
+    ] as VisualShape[];
+
+    assert.deepEqual(selectedOutlineShapes(shapes, { type: "zone", id: "zone_b" }).map((shape) => shape.id), ["zone_b"]);
+    assert.deepEqual(selectedOutlineShapes(shapes, { type: "channel", id: "missing" }), []);
+  });
 });
 
 describe("compound paths and boolean operations", () => {
   const rectangle = (id: string, x: number, y: number, width: number, height: number) => ({ id, kind: "rect" as const, x, y, width, height });
 
-  it("subtracts an inner profile as a persistent even-odd hole", () => {
+  it("makes subtract and exclude equivalent when the later profile is fully nested", () => {
     paper.setup(new paper.Size(200, 200));
-    const result = applyDesignerBooleanOperation(paper, [rectangle("outer", 0, 0, 20, 20), rectangle("inner", 5, 5, 10, 10)], "subtract", "result");
-    assert.deepEqual(result.issues, []);
-    assert.equal(result.geometry?.fillRule, "evenodd");
-    assert.equal(result.geometry?.contours?.length, 2);
-    const shape = { shape: "polygon" as const, ...result.geometry!, pathMode: result.geometry?.pathMode ?? "straight" };
-    assert.equal(pointInsideDesignerShape(shape, { x: 2, y: 2 }), true);
-    assert.equal(pointInsideDesignerShape(shape, { x: 10, y: 10 }), false);
+    const operands = [rectangle("outer", 0, 0, 20, 20), rectangle("inner", 5, 5, 10, 10)];
+    const subtract = applyDesignerBooleanOperation(paper, operands, "subtract", "subtract");
+    const exclude = applyDesignerBooleanOperation(paper, operands, "exclude", "exclude");
+    assert.deepEqual(subtract.issues, []);
+    assert.deepEqual(exclude.issues, []);
+    assert.equal(subtract.geometry?.fillRule, "evenodd");
+    assert.equal(subtract.geometry?.contours?.length, 2);
+    assert.equal(exclude.geometry?.contours?.length, 2);
+    for (const geometry of [subtract.geometry!, exclude.geometry!]) {
+      const shape = { shape: "polygon" as const, ...geometry, pathMode: geometry.pathMode ?? "straight" };
+      assert.equal(pointInsideDesignerShape(shape, { x: 2, y: 2 }), true);
+      assert.equal(pointInsideDesignerShape(shape, { x: 10, y: 10 }), false);
+    }
   });
 
   it("supports union, intersect and exclude through the shared geometry engine", () => {
     paper.setup(new paper.Size(200, 200));
     const operands = [rectangle("left", 0, 0, 10, 10), rectangle("right", 5, 0, 10, 10)];
     const union = applyDesignerBooleanOperation(paper, operands, "union", "union");
+    const subtract = applyDesignerBooleanOperation(paper, operands, "subtract", "subtract");
     const intersect = applyDesignerBooleanOperation(paper, operands, "intersect", "intersect");
     const exclude = applyDesignerBooleanOperation(paper, operands, "exclude", "exclude");
     assert.deepEqual(union.issues, []);
     assert.deepEqual([union.geometry?.x, union.geometry?.width], [0, 15]);
     assert.deepEqual([intersect.geometry?.x, intersect.geometry?.width], [5, 5]);
     assert.equal(exclude.geometry?.contours?.length, 2);
+    const subtractShape = { shape: "polygon" as const, ...subtract.geometry!, pathMode: subtract.geometry?.pathMode ?? "straight" };
+    const excludeShape = { shape: "polygon" as const, ...exclude.geometry!, pathMode: exclude.geometry?.pathMode ?? "straight" };
+    assert.equal(pointInsideDesignerShape(subtractShape, { x: 12, y: 5 }), false);
+    assert.equal(pointInsideDesignerShape(excludeShape, { x: 12, y: 5 }), true);
   });
 
   it("rejects self intersections and duplicate contours before fabrication", () => {
@@ -159,10 +308,111 @@ describe("parametric offset and fillet operations", () => {
 
   it("fillets selected corners and clamps radii that exceed neighboring legs", () => {
     const selected = filletDesignerGeometry(rectangle, 20, [0], "selected_fillet");
+    const all = filletDesignerGeometry(rectangle, 20, undefined, "all_fillet");
     const clamped = filletDesignerGeometry(rectangle, 100, undefined, "clamped_fillet");
     assert.equal(selected.issue, null);
-    assert.ok((selected.geometry?.points?.length ?? 0) > 4);
+    assert.equal(selected.geometry?.pathMode, "bezier");
+    assert.equal(selected.geometry?.points?.length, 5);
+    assert.equal(selected.geometry?.points?.filter((point) => point.handleIn || point.handleOut).length, 2);
+    assert.equal(all.geometry?.points?.length, 8);
     assert.ok(clamped.warnings.some((warning) => warning.includes("clamped")));
+  });
+
+  it("applies consecutive node fillets directly to the same native object", () => {
+    const designer = createDefaultPartituraDocument("direct_fillet").designer;
+    const source = designer.buildAreas[0];
+    source.shape = "rect";
+    source.x = 0;
+    source.y = 0;
+    source.width = 10;
+    source.height = 8;
+    const derivedCount = designer.derivedGeometries.length;
+
+    const first = applyDesignerNativeFillet(designer, { type: "build_area", id: source.id, cornerIndex: 0 }, 20);
+    assert.equal(first.applied, true);
+    assert.equal(first.designer.buildAreas[0].id, source.id);
+    assert.equal(first.designer.buildAreas[0].name, source.name);
+    assert.equal(first.designer.buildAreas[0].shape, "polygon");
+    assert.equal(first.designer.buildAreas[0].points?.length, 5);
+    assert.equal(first.designer.derivedGeometries.length, derivedCount);
+
+    const second = applyDesignerNativeFillet(first.designer, { type: "build_area", id: source.id, cornerIndex: 3 }, 20);
+    assert.equal(second.applied, true);
+    assert.equal(second.designer.buildAreas[0].id, source.id);
+    assert.equal(second.designer.buildAreas[0].points?.length, 6);
+    assert.equal(second.designer.buildAreas[0].points?.filter((point) => point.handleIn || point.handleOut).length, 4);
+    assert.equal(second.designer.derivedGeometries.length, derivedCount);
+
+    const alreadyTangent = applyDesignerNativeFillet(second.designer, { type: "build_area", id: source.id, cornerIndex: 0 }, 20);
+    assert.equal(alreadyTangent.applied, false);
+    assert.ok(alreadyTangent.warnings.some((warning) => warning.includes("Bezier tangents")));
+  });
+
+  it("trims an existing Bezier segment and inserts a tangent circular fillet", () => {
+    const curved = {
+      id: "curved",
+      kind: "path" as const,
+      x: 0,
+      y: 0,
+      width: 10,
+      height: 10,
+      points: [
+        { x: 0, y: 0, handleOut: { x: 2, y: 0 } },
+        { x: 10, y: 0, handleIn: { x: -2, y: 0 } },
+        { x: 10, y: 10 },
+        { x: 0, y: 10 }
+      ],
+      pathMode: "bezier" as const,
+      closed: true
+    };
+    const result = filletDesignerGeometry(curved, 2, [0], "curved_fillet");
+    assert.equal(result.issue, null);
+    assert.deepEqual(result.warnings, []);
+    assert.equal(result.geometry?.points?.length, 5);
+    assert.notDeepEqual(result.geometry?.points, curved.points);
+    assert.ok(result.geometry?.points?.slice(0, 2).every((point) => point.handleIn || point.handleOut));
+  });
+
+  it("fillets a pointed Bezier cusp without straightening either side", () => {
+    const cusp = {
+      id: "cusp",
+      kind: "path" as const,
+      x: 0,
+      y: 0,
+      width: 10,
+      height: 5,
+      points: [
+        { x: 0, y: 0, handleOut: { x: 2, y: 0 } },
+        { x: 5, y: 5, handleIn: { x: -2, y: -2 }, handleOut: { x: 2, y: -2 } },
+        { x: 10, y: 0, handleIn: { x: -2, y: 0 } }
+      ],
+      pathMode: "bezier" as const,
+      closed: false
+    };
+    assert.equal(designerFilletCornerIsEligible(cusp, 1), true);
+    const result = filletDesignerGeometry(cusp, 3.175 / 2, [1], "cusp_fillet");
+    assert.equal(result.issue, null);
+    assert.deepEqual(result.warnings, []);
+    assert.equal(result.geometry?.points?.length, 5);
+    assert.ok(result.geometry?.points?.[0].handleOut);
+    assert.ok(result.geometry?.points?.at(-1)?.handleIn);
+    assert.ok((result.geometry?.height ?? 5) < cusp.height);
+    assert.equal(designerFilletCornerIsEligible(result.geometry!, 1), false);
+  });
+
+  it("maps visible native corners to the same fillet interaction across geometric layers", () => {
+    const document = createDefaultPartituraDocument("fillet_hit");
+    const designer = document.designer;
+    designer.buildAreas[0].shape = "rect";
+    designer.faceGraphics = [{ id: "face", name: "Face", shape: "polygon", x: 0, y: 0, width: 10, height: 10, points: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }], pathMode: "straight", passMode: "opaque", filterColor: "#FFFFFF", visible: true, locked: false, opacity: 1 }];
+    assert.deepEqual(designerFilletCornerForHit(designer, { type: "build_area_resize", id: designer.buildAreas[0].id, handle: "se" }), { type: "build_area", id: designer.buildAreas[0].id, cornerIndex: 2 });
+    assert.deepEqual(designerFilletCornerForHit(designer, { type: "zone_point", id: designer.zones[0].id, pointIndex: 1 }), { type: "zone", id: designer.zones[0].id, cornerIndex: 1 });
+    assert.deepEqual(designerFilletCornerForHit(designer, { type: "channel_point", id: "channel_1", pointIndex: 1 }), { type: "channel", id: "channel_1", cornerIndex: 1 });
+    assert.deepEqual(designerFilletCornerForHit(designer, { type: "face_graphic_point", id: "face", pointIndex: 2 }), { type: "face_graphic", id: "face", cornerIndex: 2 });
+    designer.derivedGeometries = [{ id: "node_fillet", name: "Node fillet", geometryId: "geometry_node_fillet", sourceGeometryId: designer.zones[0].geometryId!, targetLayer: "zones", operation: "fillet", radiusMm: 2, cornerIndices: [1], visible: true }];
+    const reloaded = normalizeDefaultSignLayout(JSON.parse(JSON.stringify({ ...document, designer }))).designer;
+    assert.deepEqual(reloaded.derivedGeometries[0].cornerIndices, [1]);
+    assert.equal(resolveDesignerDerivedGeometry(reloaded, "node_fillet").geometry?.pathMode, "bezier");
   });
 
   it("recalculates a projection-offset-fillet chain and rejects dependency cycles", () => {
@@ -242,6 +492,35 @@ describe("fabrication SVG and DXF export", () => {
     assert.doesNotMatch(result.svg, /led_string|controller/i);
   });
 
+  it("round-trips a direct native fillet and exports it as a compact SVG curve", async () => {
+    const document = createDefaultPartituraDocument("fabrication_direct_fillet");
+    const source = document.designer.buildAreas[0];
+    source.shape = "rect";
+    source.x = 0;
+    source.y = 0;
+    source.width = 10;
+    source.height = 8;
+    const applied = applyDesignerNativeFillet(document.designer, { type: "build_area", id: source.id, cornerIndex: 0 }, 20);
+    assert.equal(applied.applied, true);
+    const saved = normalizeDefaultSignLayout(JSON.parse(JSON.stringify({ ...document, designer: canonicalizeDesignerGeometry(applied.designer) })));
+    const reloaded = saved.designer.buildAreas.find((entry) => entry.id === source.id)!;
+    assert.equal(reloaded.name, source.name);
+    assert.equal(reloaded.pathMode, "bezier");
+    assert.equal(reloaded.points?.length, 5);
+    assert.equal(saved.designer.derivedGeometries.length, document.designer.derivedGeometries.length);
+
+    const result = await generateDesignerFabricationExport({
+      designer: saved.designer,
+      identity: { projectId: saved.projectId, partituraId: "1", partituraKey: "direct-fillet", partituraName: "Direct fillet" },
+      sourceDocument: saved,
+      options: { includeReference: true, includeZones: false, includeFaceGraphic: false },
+      generatedAt: "2026-10-06T12:00:00.000Z"
+    });
+    assert.equal(result.issues.some((issue) => issue.severity === "error"), false);
+    assert.match(result.svg, /\bC\s/);
+    assert.doesNotMatch(result.svg, /geometry_derived/);
+  });
+
   it("outlines controlled editable text during export without mutating it", async () => {
     const document = createDefaultPartituraDocument("fabrication_text");
     if (!document.designer) assert.fail("default designer missing");
@@ -292,7 +571,7 @@ describe("fabrication SVG and DXF export", () => {
     if (!document.designer) assert.fail("default designer missing");
     const source = document.designer.zones[0];
     document.designer.projections = [{ id: "projection_cut", name: "Construction projection", geometryId: "geometry_projection_cut", sourceGeometryId: source.geometryId!, targetLayer: "faceGraphic", linked: true, visible: true }];
-    document.designer.derivedGeometries = [{ id: "derived_cut", name: "Cut offset", geometryId: "geometry_derived_cut", sourceGeometryId: "geometry_projection_cut", targetLayer: "faceGraphic", operation: "offset", distanceMm: 2, join: "round", miterLimit: 4, passMode: "translucent", filterColor: "#FF0000", visible: true }];
+    document.designer.derivedGeometries = [{ id: "derived_cut", name: "Cut fillet", geometryId: "geometry_derived_cut", sourceGeometryId: "geometry_projection_cut", targetLayer: "faceGraphic", operation: "fillet", radiusMm: 2, cornerIndices: [0], passMode: "translucent", filterColor: "#FF0000", visible: true }];
     const result = await generateDesignerFabricationExport({
       designer: document.designer,
       identity: { projectId: document.projectId, partituraId: "1", partituraKey: "derived", partituraName: "Derived" },
@@ -302,6 +581,7 @@ describe("fabrication SVG and DXF export", () => {
     });
     assert.match(result.svg, /id="derived_cut"/);
     assert.match(result.svg, /data-filter-color="#FF0000"/);
+    assert.match(result.svg, /\bC\s/);
     assert.match(result.dxf, /FACE_TRANSLUCENT_FF0000/);
     assert.doesNotMatch(result.svg, /id="projection_cut"/);
     assert.equal(result.issues.some((issue) => issue.severity === "error"), false);
@@ -355,6 +635,7 @@ describe("canonical designer geometry schema", () => {
     if (!legacy.designer) assert.fail("default designer missing");
     delete legacy.designer.designerSchemaVersion;
     delete legacy.designer.geometries;
+    delete (legacy.designer as Partial<typeof legacy.designer>).filletRadiusMm;
     legacy.designer.zones[0].geometryId = undefined;
 
     const normalized = normalizeDefaultSignLayout(legacy).designer;
@@ -362,6 +643,36 @@ describe("canonical designer geometry schema", () => {
     assert.equal(normalized?.zones[0].geometryId, "geometry_zone_fondo");
     assert.ok(normalized?.geometries?.some((geometry) => geometry.id === normalized.zones[0].geometryId));
     assert.deepEqual(normalized?.zones[0].points, legacy.designer.zones[0].points);
+    assert.equal(normalized.fabricationCutterDiameterMm, 3.175);
+    assert.equal(normalized.fabricationCutterUnit, "mm");
+    assert.equal(normalized.filletRadiusMm, 1.5875);
+    assert.equal(normalized.channelRouterDiameterMm, 10);
+  });
+
+  it("persists a custom cutter diameter independently from canvas units", () => {
+    const document = createDefaultPartituraDocument("cutter_setup");
+    const baseline = normalizeDefaultSignLayout(JSON.parse(JSON.stringify(document))).designer;
+    const compileBefore = designerCompileSignature(baseline);
+    const normalized = normalizeDefaultSignLayout(JSON.parse(JSON.stringify({
+      ...document,
+      designer: { ...baseline, rulerUnit: "cm", fabricationCutterDiameterMm: 6.35, fabricationCutterUnit: "in", filletRadiusMm: 8 }
+    }))).designer;
+    assert.equal(normalized.fabricationCutterDiameterMm, 6.35);
+    assert.equal(normalized.fabricationCutterUnit, "in");
+    assert.equal(normalized.filletRadiusMm, 8);
+    assert.equal(normalized.rulerUnit, "cm");
+    assert.equal(designerCompileSignature(normalized), compileBefore);
+  });
+
+  it("persists the Channel routing profile without invalidating electrical compile", () => {
+    const document = createDefaultPartituraDocument("channel_router_setup");
+    const normalized = normalizeDefaultSignLayout(JSON.parse(JSON.stringify(document)));
+    const compileBefore = designerCompileSignature(normalized.designer);
+    normalized.designer.channelRouterDiameterMm = 6.35;
+
+    const reloaded = normalizeDefaultSignLayout(JSON.parse(JSON.stringify(normalized)));
+    assert.equal(reloaded.designer.channelRouterDiameterMm, 6.35);
+    assert.equal(designerCompileSignature(reloaded.designer), compileBefore);
   });
 
   it("preserves deliberately empty geometry and wiring collections", () => {
@@ -443,6 +754,51 @@ describe("shared geometry tool policy", () => {
     assert.equal(geometryToolAllowedOnLayer("build_area_rect", "zones"), false);
     assert.equal(geometryToolAllowedOnLayer("zone_bezier", "zones"), true);
   });
+
+  it("uses the configured router-bit diameter as the channel trace width", async () => {
+    assert.deepEqual(CHANNEL_ROUTER_BIT_PRESETS.map((preset) => preset.diameterMm), [3.175, 4.7625, 6, 6.35, 8, 9.525, 10, 12, 12.7]);
+    assert.equal(CHANNEL_ROUTER_BIT_PRESETS.find((preset) => preset.label.startsWith("1/4 in"))?.diameterMm, 6.35);
+    assert.equal(channelWidthForRouterDiameter(8), 8);
+    assert.equal(channelWidthForRouterDiameter(2), 3);
+    assert.equal(channelWidthForRouterDiameter(25), 20);
+
+    const canvasSource = await readFile("components/lighting/designer/designer-paper-canvas.tsx", "utf8");
+    assert.match(canvasSource, /widthMm: channelWidthForRouterDiameter\(shapeDraft\.widthMm \?\? channelRouterDiameterMm\)/);
+    assert.match(canvasSource, /cap:\s*"round",/);
+    assert.doesNotMatch(canvasSource, /constrainedChannelBezierHandle/);
+    assert.doesNotMatch(canvasSource, /widthMm:\s*10,/);
+    assert.doesNotMatch(canvasSource, /cap:\s*"butt",/);
+
+    const workspaceSource = await readFile("components/lighting/partitura-workspace.tsx", "utf8");
+    assert.doesNotMatch(workspaceSource, /No lighting setup/);
+    assert.match(workspaceSource, /Router bit Ø/);
+    assert.doesNotMatch(workspaceSource, /label="Unit"/);
+    assert.match(workspaceSource, /setChannelNodeRadius/);
+    assert.match(workspaceSource, /label="Fillet"/);
+    assert.doesNotMatch(workspaceSource, /label="Fillet radius"/);
+    assert.doesNotMatch(workspaceSource, /tool === "fillet"/);
+    assert.doesNotMatch(workspaceSource, /updateChannelPoint\(selectedChannel/);
+  });
+
+  it("keeps Channel node and handle drags local until one committed pointer release", async () => {
+    const canvasSource = await readFile("components/lighting/designer/designer-paper-canvas.tsx", "utf8");
+    assert.match(canvasSource, /drag\.type === "channel-point"[\s\S]*?requestAnimationFrame\(flushChannelDragPreview\)/);
+    assert.match(canvasSource, /drag\.type === "channel-handle"[\s\S]*?requestAnimationFrame\(flushChannelDragPreview\)/);
+    assert.match(canvasSource, /interactiveChannelId: drag\?\.type === "channel-move" \|\| drag\?\.type === "channel-point" \|\| drag\?\.type === "channel-handle"/);
+    assert.match(canvasSource, /designer: channelDragPreview \? \{/);
+
+    const previewStart = canvasSource.indexOf("function flushChannelDragPreview()");
+    const commitStart = canvasSource.indexOf("function commitChannelDragPreview(");
+    const panStart = canvasSource.indexOf("function startPanDrag(");
+    assert.ok(previewStart >= 0 && commitStart > previewStart && panStart > commitStart);
+    assert.doesNotMatch(canvasSource.slice(previewStart, commitStart), /onChangeRef\.current/);
+    assert.match(canvasSource.slice(commitStart, panStart), /onChangeRef\.current/);
+    assert.match(canvasSource, /endedDrag\?\.type === "channel-point" \|\| endedDrag\?\.type === "channel-handle"\) commitChannelDragPreview\(\)/);
+
+    const rendererSource = await readFile("components/lighting/designer/designer-paper-renderer.ts", "utf8");
+    assert.match(rendererSource, /const tightBend = options\.interactive \? null : channelTightBend\(channel\)/);
+    assert.match(rendererSource, /if \(!options\.interactive\) \{\s*resolveChannelOutlineContours\(channel\)/);
+  });
 });
 
 describe("Face Graphic authoring", () => {
@@ -502,18 +858,6 @@ describe("Face Graphic authoring", () => {
 });
 
 describe("Face Graphic optical renderer", () => {
-  it("releases every temporary Pixi resource exactly once between frames", () => {
-    const owner = {};
-    const destroyed: string[] = [];
-    registerPixiFrameResource(owner, { destroy: () => destroyed.push("blur") });
-    registerPixiFrameResource(owner, { destroy: () => destroyed.push("mask") });
-
-    releasePixiFrameResources(owner);
-    releasePixiFrameResources(owner);
-
-    assert.deepEqual(destroyed, ["blur", "mask"]);
-  });
-
   it("keeps an unlit Front diffuser black instead of exposing a gray material base", () => {
     assert.deepEqual(frontMaterialOffStyle("silicone"), { color: 0x000000, alpha: 1 });
     assert.deepEqual(frontMaterialOffStyle("milky_white"), { color: 0x000000, alpha: 1 });
@@ -697,37 +1041,6 @@ describe("timeline clip placement", () => {
   });
 });
 
-describe("animation frame playback", () => {
-  it("renders a missing clip preview as an explicit off frame instead of gray unmapped pixels", () => {
-    assert.deepEqual(resolvePlaybackPixels(undefined, [
-      { output: 1, serialIndex: 0 },
-      { output: 2, serialIndex: 4 }
-    ]), [
-      { output: 1, serialIndex: 0, color: { r: 0, g: 0, b: 0 } },
-      { output: 2, serialIndex: 4, color: { r: 0, g: 0, b: 0 } }
-    ]);
-
-    const wipeFrame = [{ output: 1, serialIndex: 0, color: { r: 0, g: 4, b: 15 } }];
-    assert.equal(resolvePlaybackPixels(wipeFrame, [{ output: 1, serialIndex: 0 }]), wipeFrame);
-  });
-
-  it("recovers after a transient frame request failure and accepts the next clip frame", async () => {
-    const failed = await requestPlaybackPreview(async () => {
-      throw new Error("temporary frame failure");
-    });
-    const recovered = await requestPlaybackPreview(async () => ({
-      ok: true,
-      preview: { timeMs: 500, pixels: [{ output: 1, serialIndex: 0, color: { r: 12, g: 237, b: 39 } }] }
-    }));
-
-    assert.equal(failed, null);
-    assert.deepEqual(recovered, {
-      timeMs: 500,
-      pixels: [{ output: 1, serialIndex: 0, color: { r: 12, g: 237, b: 39 } }]
-    });
-  });
-});
-
 const square = [
   { x: 0, y: 0 },
   { x: 10, y: 0 },
@@ -751,6 +1064,194 @@ function closedBezierChannel(): DesignerChannelForm {
 }
 
 describe("closed channel geometry", () => {
+  it("uses half the router-bit diameter as the minimum center-line radius", () => {
+    const channel = { ...closedBezierChannel(), widthMm: 12 };
+    assert.equal(channelAllowedBendRadiusMm(channel), 6);
+    assert.equal(channelAllowedBendRadiusMm({ ...channel, widthMm: 6 }), 3);
+  });
+
+  it("accepts the saved Channel 2 curve when its 6 mm router bit is the only radius constraint", () => {
+    const channel: DesignerChannelForm = {
+      id: "channel_2",
+      name: "Channel 2",
+      points: [
+        { x: 58.732, y: 29.275, nodeType: "smooth", handleIn: { x: -1.71792, y: -0.42192 }, handleOut: { x: 1.71792, y: 0.42192 } },
+        { x: 69.648, y: 29.201, nodeType: "smooth", handleIn: { x: -4.5278076625, y: 1.2982251886 }, handleOut: { x: 2.975, y: -0.853 } },
+        { x: 78.569, y: 29.922, nodeType: "smooth", handleIn: { x: -3.844, y: 1.129 }, handleOut: { x: 4.0012814374, y: -1.1751942619 } },
+        { x: 83.28, y: 27.976, nodeType: "smooth", handleIn: { x: -0.74898687, y: 1.1289365007 }, handleOut: { x: 0.755, y: -1.138 } }
+      ],
+      pathMode: "bezier",
+      widthMm: 6,
+      closed: false,
+      cap: "round",
+      visible: true,
+      locked: false,
+      opacity: 1
+    };
+    assert.ok(channelMinimumBendRadiusMm(channel) > 13 && channelMinimumBendRadiusMm(channel) < 14);
+    assert.equal(channelAllowedBendRadiusMm(channel), 3);
+    assert.equal(channelHasTightBends(channel), false);
+  });
+
+  it("detects tight curves and reports their local radius without changing the trace", () => {
+    const points = [{ x: 0, y: 0 }, { x: 1, y: 1 }, { x: 2, y: 0 }];
+    const channel: DesignerChannelForm = {
+      id: "tight_channel",
+      name: "Tight channel",
+      points: smoothOpenBezierPoints(points),
+      pathMode: "bezier",
+      widthMm: 10,
+      closed: false,
+      cap: "round",
+      visible: true,
+      locked: false,
+      opacity: 1
+    };
+    assert.equal(channelHasTightBends(channel), true);
+    const issue = channelTightBend(channel);
+    assert.ok(issue);
+    assert.equal(issue.requiredRadiusMm, 5);
+    assert.ok(Number.isFinite(issue.point.x) && Number.isFinite(issue.point.y));
+  });
+
+  it("keeps a sharp Channel corner valid and applies its selected-node Fillet directly to the center trace", () => {
+    const document = createDefaultPartituraDocument("channel_corner_fillet");
+    if (!document.designer) assert.fail("default designer missing");
+    const cornerChannel: DesignerChannelForm = {
+      id: "channel_corner",
+      name: "Corner channel",
+      points: [
+        { x: 0, y: 0, nodeType: "straight" },
+        { x: 5, y: 0, nodeType: "corner" },
+        { x: 5, y: 5, nodeType: "straight" }
+      ],
+      pathMode: "bezier",
+      widthMm: 10,
+      closed: false,
+      cap: "round",
+      visible: true,
+      locked: false,
+      opacity: 1
+    };
+    const canonical = canonicalizeDesignerGeometry({ ...document.designer, channels: [cornerChannel] });
+    assert.equal(channelMinimumBendRadiusMm(canonical.channels[0]), Number.POSITIVE_INFINITY);
+    assert.equal(channelHasTightBends(canonical.channels[0]), false);
+
+    const sharpBorders = channelBorderPolylines(canonical.channels[0]);
+    assert.ok(sharpBorders.left.some((point) => Math.abs(point.x - 4.5) < 1e-8 && Math.abs(point.y - 0.5) < 1e-8));
+    const outsideJoin = sharpBorders.right.filter((point) => Math.hypot(point.x - 5, point.y) < 0.500001);
+    assert.ok(outsideJoin.length > 2);
+    outsideJoin.forEach((point) => assert.ok(Math.abs(Math.hypot(point.x - 5, point.y) - 0.5) < 1e-6));
+
+    const rounded = canonicalizeDesignerGeometry({
+      ...canonical,
+      channels: canonical.channels.map((channel) => ({
+        ...channel,
+        points: channel.points.map((point, index) => index === 1 ? { ...point, radiusMm: 7 } : point)
+      }))
+    }).channels[0];
+    const roundedCenter = channelCenterPolyline(rounded);
+    assert.equal(rounded.closed, false);
+    assert.ok(roundedCenter.length > cornerChannel.points.length);
+    assert.ok(!roundedCenter.some((point) => Math.abs(point.x - 5) < 1e-8 && Math.abs(point.y) < 1e-8));
+    assert.ok(roundedCenter.some((point) => Math.abs(point.x - 4.3) < 1e-8 && Math.abs(point.y) < 1e-8));
+    assert.ok(roundedCenter.some((point) => Math.abs(point.x - 5) < 1e-8 && Math.abs(point.y - 0.7) < 1e-8));
+    assert.equal(channelHasTightBends(rounded), false);
+
+    const mixedBezier = canonicalizeDesignerGeometry({
+      ...canonical,
+      channels: [{
+        ...cornerChannel,
+        points: [
+          { ...cornerChannel.points[0], handleOut: { x: 2, y: 0 } },
+          { ...cornerChannel.points[1], radiusMm: 7 },
+          cornerChannel.points[2]
+        ]
+      }]
+    }).channels[0];
+    const mixedCenter = channelCenterPolyline(mixedBezier);
+    assert.ok(mixedCenter.length > cornerChannel.points.length);
+    assert.ok(!mixedCenter.some((point) => Math.abs(point.x - 5) < 1e-8 && Math.abs(point.y) < 1e-8));
+
+    const constrainedBezier: DesignerChannelForm = {
+      ...cornerChannel,
+      points: [
+        { x: 84.78749381416414, y: 35.17708416164228, nodeType: "smooth", handleOut: { x: 0.17767116704313363, y: -0.02526377465237741 } },
+        { x: 85.21552102505045, y: 34.895068968984134, nodeType: "straight", radiusMm: 9 },
+        { x: 86.316, y: 32.502, nodeType: "straight" }
+      ]
+    };
+    const constrainedCenter = channelCenterPolyline(constrainedBezier);
+    assert.ok(constrainedCenter.length > constrainedBezier.points.length);
+    assert.ok(!constrainedCenter.some((point) => Math.hypot(point.x - constrainedBezier.points[1].x, point.y - constrainedBezier.points[1].y) < 1e-8));
+
+    const constrainedResult = filletDesignerGeometry({
+      id: "constrained_channel_center",
+      kind: "path",
+      x: 84,
+      y: 32,
+      width: 3,
+      height: 4,
+      points: constrainedBezier.points,
+      pathMode: "bezier",
+      closed: false
+    }, 9, [1]);
+    assert.match(constrainedResult.warnings.join(" "), /clamped to fit/);
+  });
+
+  it("projects the circular bit footprint symmetrically for right-hand corners", () => {
+    const channel: DesignerChannelForm = {
+      id: "right_corner",
+      name: "Right corner",
+      points: [{ x: 0, y: 0 }, { x: 5, y: 0 }, { x: 5, y: -5 }],
+      pathMode: "straight",
+      widthMm: 10,
+      closed: false,
+      cap: "round",
+      visible: true,
+      locked: false,
+      opacity: 1
+    };
+    const borders = channelBorderPolylines(channel);
+    assert.ok(borders.right.some((point) => Math.abs(point.x - 4.5) < 1e-8 && Math.abs(point.y + 0.5) < 1e-8));
+    const outsideJoin = borders.left.filter((point) => Math.hypot(point.x - 5, point.y) < 0.500001);
+    assert.ok(outsideJoin.length > 2);
+    outsideJoin.forEach((point) => assert.ok(Math.abs(Math.hypot(point.x - 5, point.y) - 0.5) < 1e-6));
+  });
+
+  it("builds an acute Channel border from the swept bit footprint without internal seams", async () => {
+    paper.setup(new paper.Size(200, 200));
+    const acuteChannel: DesignerChannelForm = {
+      id: "acute_saved_channel",
+      name: "Acute saved Channel",
+      points: [
+        { x: 71.195, y: 29.033, nodeType: "smooth", handleIn: { x: 0, y: -0.8964 }, handleOut: { x: 0, y: 0.8964 } },
+        { x: 69.413, y: 31.048 },
+        { x: 70.894, y: 33.856, nodeType: "corner", radiusMm: 3 },
+        { x: 85.421, y: 33.822, nodeType: "corner", radiusMm: 3 },
+        { x: 80.898, y: 29.089, nodeType: "smooth", handleIn: { x: -0.0612, y: 0.86598 }, handleOut: { x: 0.0612, y: -0.86598 } }
+      ],
+      pathMode: "bezier",
+      widthMm: 6,
+      closed: false,
+      cap: "round",
+      visible: true,
+      locked: false,
+      opacity: 1
+    };
+    const contours = sweptChannelOutlineContours(paper, channelCenterPolyline(acuteChannel), 0.6, false, true);
+    assert.equal(contours.length, 1);
+    assert.ok(contours[0].every((point) => distanceToChannelCenter(acuteChannel, point) > 0.25));
+
+    const rendererSource = await readFile("components/lighting/designer/designer-paper-renderer.ts", "utf8");
+    assert.match(rendererSource, /strokeColor: options\.selected \? "rgba\(245,158,11,0\.30\)" : "rgba\(148,163,184,0\.16\)"/);
+    assert.match(rendererSource, /strokeWidth: channelStrokeWidth,\s+strokeJoin: "round"/);
+    assert.match(rendererSource, /resolveChannelOutlineContours\(channel\)/);
+    assert.doesNotMatch(rendererSource, /openChannelOutline\(channel\)/);
+    assert.doesNotMatch(rendererSource, /resolveCrossings/);
+    assert.doesNotMatch(rendererSource, /strokeWidth: channelStrokeWidth \+ \(options\.selected \? 3\.2 : 2\)/);
+  });
+
   it("stays closed while every Bezier node is converted to a corner or straight node", () => {
     for (const nodeType of ["corner", "straight"] as const) {
       let channel = closedBezierChannel();
@@ -764,8 +1265,9 @@ describe("closed channel geometry", () => {
         assert.notDeepEqual(center.at(-1), center[0]);
 
         const borders = channelBorderPolylines(channel);
-        assert.equal(borders.left.length, center.length);
-        assert.equal(borders.right.length, center.length);
+        assert.ok(borders.left.length >= center.length);
+        assert.ok(borders.right.length >= center.length);
+        assert.ok([...borders.left, ...borders.right].every((point) => Number.isFinite(point.x) && Number.isFinite(point.y)));
       }
 
       assert.deepEqual(channelCenterPolyline(channel), square);
@@ -790,6 +1292,8 @@ describe("closed channel geometry", () => {
     const [channel] = normalizeDefaultSignLayout(document).designer.channels;
     assert.equal(channel.closed, true);
     assert.equal(channel.cap, "butt");
+    assert.equal("minBendRadiusMm" in channel, false);
+    assert.equal("bendDirection" in channel, false);
   });
 });
 
@@ -820,6 +1324,33 @@ describe("animation target picking", () => {
       id: "zone_behind"
     });
   });
+
+  it("uses Channels panel order as overlap selection precedence", () => {
+    const designer = createDefaultPartituraDocument("channel_layer_order").designer!;
+    const channel = (id: string): DesignerChannelForm => ({
+      id,
+      name: id,
+      points: [{ x: 0, y: 0 }, { x: 10, y: 0 }],
+      pathMode: "straight",
+      widthMm: 10,
+      closed: false,
+      cap: "round",
+      visible: true,
+      locked: false,
+      opacity: 1
+    });
+    designer.zones = [];
+    designer.channels = [channel("channel_front"), channel("channel_back")];
+    const viewport = { x: 0, y: -5, width: 20, height: 10 };
+    const canvas = { width: 1000, height: 500 };
+
+    assert.deepEqual(pickDesignerHit(designer, "zones", { x: 5, y: 0 }, viewport, canvas), { type: "channel", id: "channel_front" });
+    assert.deepEqual(pickAnimationTarget(designer, { x: 5, y: 0 }, 0.1), { type: "channel", id: "channel_front" });
+
+    designer.channels.reverse();
+    assert.deepEqual(pickDesignerHit(designer, "zones", { x: 5, y: 0 }, viewport, canvas), { type: "channel", id: "channel_back" });
+    assert.deepEqual(pickAnimationTarget(designer, { x: 5, y: 0 }, 0.1), { type: "channel", id: "channel_back" });
+  });
 });
 
 describe("timeline clip target selection", () => {
@@ -839,6 +1370,31 @@ describe("timeline clip target selection", () => {
     designer.channels = [closedBezierChannel()];
 
     assert.deepEqual(designerSelectionForClipTarget(designer, "channel_test"), { type: "channel", id: "channel_test" });
+  });
+
+  it("maps a selected zone to all of its clip targets", () => {
+    const designer = createDefaultPartituraDocument("zone_to_clip_selection").designer!;
+    designer.zones = [{ id: "zone_logo", name: "Logo", shape: "rect", x: 0, y: 0, width: 10, height: 10, visible: true, locked: false, opacity: 1 }];
+    designer.lightSources = [
+      { ...createDefaultOpticalTreatment("zone", "zone_logo", "front"), id: "source_logo_front" },
+      { ...createDefaultOpticalTreatment("zone", "zone_logo", "halo"), id: "source_logo_halo" }
+    ];
+
+    assert.deepEqual(
+      designerClipTargetIdsForSelection(designer, { type: "zone", id: "zone_logo" }),
+      ["source_logo_front", "source_logo_halo", "zone_logo"]
+    );
+  });
+
+  it("preserves the selected clip when its source belongs to the selected zone", () => {
+    const clips = [
+      { id: "clip_front", target: "source_logo_front" },
+      { id: "clip_halo", target: "source_logo_halo" }
+    ] as ClipForm[];
+    const targets = ["source_logo_front", "source_logo_halo", "zone_logo"];
+
+    assert.equal(clipIdForSelectedTargets(clips, "clip_halo", targets), "clip_halo");
+    assert.equal(clipIdForSelectedTargets(clips, undefined, targets), "clip_front");
   });
 });
 

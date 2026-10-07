@@ -2,12 +2,13 @@ import { NextResponse } from "next/server";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { normalizeDefaultSignLayout, type PartituraDocument } from "@/lib/lighting/partitura-model";
+import { computeAuthoringSourceChecksum } from "@/lib/server/partitura-checksum";
 
 export const runtime = "nodejs";
 type LightingCore = typeof import("../../../../../../../lighting-core/index.js");
 
 export async function POST(request: Request) {
-  const { generatePartitura, simulateWs2812bFrame, validatePartitura } = await loadLightingCore();
+  const { generatePartitura, validatePartitura } = await loadLightingCore();
   let document: PartituraDocument;
   try { document = normalizeDefaultSignLayout((await request.json()) as PartituraDocument); } catch { return NextResponse.json({ ok: false, message: "Request body must be JSON." }, { status: 400 }); }
   const layout = document.compiledLayout;
@@ -17,6 +18,7 @@ export async function POST(request: Request) {
   const disabledSourceIds = new Set((document.designer?.lightSources ?? []).filter((source) => !source.enabled).map((source) => source.id));
   const partitura = generatePartitura({
     projectId: normalizeCoreId(document.projectId, "project"),
+    sourceChecksum: computeAuthoringSourceChecksum(document),
     defaultScene: document.activeSceneId,
     outputs: layout.outputs,
     pixelMap: layout.pixelMap,
@@ -45,10 +47,7 @@ export async function POST(request: Request) {
     metadata: { source: "designer-physical" }
   });
   const validation = validatePartitura(partitura);
-  const activeScene = partitura.scenes.find((scene) => scene.id === partitura.defaultScene);
-  const timeMs = Math.min(Math.max(0, document.previewTimeMs), Math.max(0, (activeScene?.durationMs ?? 1) - 1));
-  const frame = validation.ok ? simulateWs2812bFrame(partitura, partitura.defaultScene, timeMs) : null;
-  return NextResponse.json({ ok: validation.ok, validation, partitura, preview: frame ? { ...frame, pixelCount: frame.outputs.reduce((total, output) => total + output.pixelCount, 0), outputRows: frame.outputs } : null });
+  return NextResponse.json({ ok: validation.ok, validation, partitura });
 }
 
 async function loadLightingCore(): Promise<LightingCore> {

@@ -56,6 +56,7 @@ export function DesignerLayersPanel({
   assets,
   onActivateLayer,
   onPatchLayer,
+  onPatchLayers,
   onUploadArtwork,
   onPatchArtwork,
   onPatchBuildArea,
@@ -85,6 +86,7 @@ export function DesignerLayersPanel({
   assets: Array<{ id: string; fileName: string; mimeType: string }>;
   onActivateLayer: (layer: DesignerActiveLayer) => void;
   onPatchLayer: (layer: keyof DesignerLayersForm, patch: Partial<DesignerLayerSettings>) => void;
+  onPatchLayers: (layers: Array<keyof DesignerLayersForm>, patch: Partial<DesignerLayerSettings>) => void;
   onUploadArtwork: (file: File) => void | Promise<void>;
   onPatchArtwork: (artworkId: string, patch: Partial<DesignerArtworkForm>) => void;
   onPatchBuildArea: (buildAreaId: string, patch: Partial<Pick<DesignerBuildAreaForm, "name" | "visible" | "locked" | "opacity">>) => void;
@@ -102,7 +104,7 @@ export function DesignerLayersPanel({
   onPatchChannel: (channelId: string, patch: Partial<Pick<DesignerChannelForm, "name" | "widthMm" | "closed" | "cap" | "visible">>) => void;
   onPatchController: (patch: Partial<Pick<DesignerForm["controller"], "name" | "visible">>) => void;
   onPatchRoute: (routeId: string, patch: Partial<Pick<DesignerForm["routes"][number], "name" | "visible">>) => void;
-  onReorderItems: (layer: "artwork" | "reference" | "zones" | "faceGraphic" | "strings", activeId: string, overId: string) => void;
+  onReorderItems: (layer: "artwork" | "reference" | "zones" | "channels" | "faceGraphic" | "strings", activeId: string, overId: string) => void;
   onSelect: (selection: DesignerSelection) => void;
   onClose: () => void;
 }) {
@@ -372,24 +374,32 @@ export function DesignerLayersPanel({
             onToggle={() => setExpandedDiffusorGroups((current) => ({ ...current, channels: !current.channels }))}
           >
             {(designer.channels ?? []).length ? (
-              (designer.channels ?? []).filter((channel) => matchesSearch(channel.name, "channel")).map((channel) => (
-                <LayerChildRow
-                  key={channel.id}
-                  label={channel.name}
-                  selected={selection?.type === "channel" && selection.id === channel.id}
-                  color="amber"
-                  icon={Waves}
-                  visible={channel.visible}
-                  onToggleVisible={() => onPatchChannel(channel.id, { visible: channel.visible === false })}
-                  onClick={() => {
-                    activateLayer("zones");
-                    onSelect({ type: "channel", id: channel.id });
-                  }}
-                  onRename={(name) => onPatchChannel(channel.id, { name })}
-                  lightingCount={designer.lightSources.filter((source) => source.targetType === "channel" && source.targetId === channel.id && source.enabled && source.stringIds.length > 0).length}
-                  onOpenLighting={() => onOpenLighting({ type: "channel", id: channel.id })}
-                />
-              ))
+              <SortableLayerList
+                ids={designer.channels.map((channel) => channel.id)}
+                sensors={sensors}
+                disabled={designer.layers.zones.locked}
+                onReorder={(activeId, overId) => onReorderItems("channels", activeId, overId)}
+              >
+                {designer.channels.filter((channel) => matchesSearch(channel.name, "channel")).map((channel) => (
+                  <SortableLayerChildRow key={channel.id} id={channel.id} disabled={designer.layers.zones.locked}>
+                    <LayerChildRow
+                      label={channel.name}
+                      selected={selection?.type === "channel" && selection.id === channel.id}
+                      color="amber"
+                      icon={Waves}
+                      visible={channel.visible}
+                      onToggleVisible={() => onPatchChannel(channel.id, { visible: channel.visible === false })}
+                      onClick={() => {
+                        activateLayer("zones");
+                        onSelect({ type: "channel", id: channel.id });
+                      }}
+                      onRename={(name) => onPatchChannel(channel.id, { name })}
+                      lightingCount={designer.lightSources.filter((source) => source.targetType === "channel" && source.targetId === channel.id && source.enabled && source.stringIds.length > 0).length}
+                      onOpenLighting={() => onOpenLighting({ type: "channel", id: channel.id })}
+                    />
+                  </SortableLayerChildRow>
+                ))}
+              </SortableLayerList>
             ) : (
               <p className="px-2 py-1 text-[11px] leading-4 text-muted-foreground">Use the Channel tool to trace a 3-20 mm neon-flex channel.</p>
             )}
@@ -436,10 +446,7 @@ export function DesignerLayersPanel({
             onActivateLayer(activeLayer === "strings" ? "strings" : "hardware");
             setExpandedLayers((current) => ({ ...current, strings: !expanded, hardware: !expanded }));
           }}
-          onChange={(patch) => {
-            onPatchLayer("strings", patch);
-            onPatchLayer("hardware", patch);
-          }}
+          onChange={(patch) => onPatchLayers(["strings", "hardware"], patch)}
         >
           <RouteFolder
             label="Data cables"

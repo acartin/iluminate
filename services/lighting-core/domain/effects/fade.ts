@@ -12,5 +12,5 @@ export const fadeEffect: EffectModule = {
       toColor: { type: "color", label: "To color", required: true, default: "#FFFFFF" }
     }
   },
-  render: ({ params, progress }) => mixColors(parseColor(String(params.fromColor)), parseColor(String(params.toColor)), progress)
+  render: ({ params, progress }, output) => mixColors(parseColor(String(params.fromColor)), parseColor(String(params.toColor)), progress, output)
 };

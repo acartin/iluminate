@@ -33,7 +33,7 @@ export type EffectRenderContext = {
   pixel: EffectPixel;
 };
 
-export type EffectRenderer = (context: EffectRenderContext) => Rgb;
+export type EffectRenderer = (context: EffectRenderContext, output?: Rgb) => Rgb;
 
 /** One effect owns its metadata and its renderer. Add a file, register it, done. */
 export type EffectModule = {

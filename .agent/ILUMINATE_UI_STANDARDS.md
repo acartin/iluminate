@@ -202,7 +202,8 @@ No instalar librerias visuales grandes sin justificar.
 Permitido con criterio:
 
 - Paper.js para el canvas de autoria vectorial avanzada. El Designer debe renderizar sobre HTML canvas + Paper.js; no reconstruir un motor SVG paralelo para strings, zonas o controlador.
-- PixiJS si el simulador lo requiere.
+- WebGL2 directo para el player, con recursos persistentes y evaluación de
+  frames fuera de React. No introducir un segundo motor de simulación.
 - Librerias funcionales pequenas.
 - Iconos de la libreria ya presente.
 

@@ -1,5 +1,5 @@
-export const PARTITURA_SCHEMA_VERSION = "partitura.v1" as const;
-export const SUPPORTED_CORE_VERSION = "0.1.0" as const;
+export const PARTITURA_SCHEMA_VERSION = "partitura.v2" as const;
+export const SUPPORTED_CORE_VERSION = "1.0.0" as const;
 export const LOGICAL_OUTPUTS = [1, 2, 3] as const;
 
 export type PartituraSchemaVersion = typeof PARTITURA_SCHEMA_VERSION;
@@ -17,6 +17,8 @@ export type Output = { id: string; name: string; output: LogicalOutput; pixelCou
 
 /** One addressable WS28xx pixel, georeferenced from its Designer route. */
 export type SpatialPixel = {
+  /** Dense, stable index used by firmware, browser buffers and visual artifacts. */
+  index: number;
   id: string;
   output: LogicalOutput;
   serialIndex: number;
@@ -25,13 +27,14 @@ export type SpatialPixel = {
   x: number;
   y: number;
   tangentDeg: number;
+  normalizedX: number;
+  normalizedY: number;
 };
 
-/** Generated membership: a visual zone selects physical pixel IDs. */
-export type Zone = { id: string; name: string; pixelIds: string[] };
-export type GroupMember = { type: "zone" | "group"; id: string };
-/** A semantic composition only. It never creates pixels or changes wiring. */
-export type Group = { id: string; name: string; members: GroupMember[] };
+/** Generated membership is fully resolved at compile time. */
+export type Zone = { id: string; name: string; pixelIndices: number[] };
+/** Groups are flattened at compile time so playback never traverses a graph. */
+export type Group = { id: string; name: string; pixelIndices: number[] };
 
 export type EffectParameterValue = string | number | boolean | null | string[] | number[];
 export type EffectParams = Record<string, EffectParameterValue>;
@@ -56,6 +59,8 @@ export type Scene = { id: string; name: string; loop: boolean; durationMs: numbe
 export type Partitura = {
   schemaVersion: PartituraSchemaVersion;
   projectId: string;
+  /** SHA-256 of the compiled source used to derive this immutable artifact. */
+  sourceChecksum: `sha256:${string}`;
   requiredCoreVersion: string;
   defaultScene: string;
   outputs: Output[];

@@ -3,21 +3,30 @@ import {
   Clip,
   EffectCoordinateSpace,
   EffectParams,
-  Group,
   Output,
   PARTITURA_SCHEMA_VERSION,
   Partitura,
   PartituraTarget,
   Scene,
-  SpatialPixel,
   SUPPORTED_CORE_VERSION,
   Track,
   Zone
 } from "../domain/partituras/types.js";
 
 export type OutputConfig = Omit<Output, "name"> & { name?: string };
-export type ZoneConfig = Omit<Zone, "name"> & { name?: string };
-export type GroupConfig = Omit<Group, "name"> & { name?: string };
+export type PixelConfig = {
+  id: string;
+  output: Output["output"];
+  serialIndex: number;
+  stringId: string;
+  routeOffsetCm: number;
+  x: number;
+  y: number;
+  tangentDeg: number;
+};
+export type ZoneConfig = { id: string; name?: string; pixelIds: string[] };
+export type GroupMemberConfig = { type: "zone" | "group"; id: string };
+export type GroupConfig = { id: string; name?: string; members: GroupMemberConfig[] };
 export type ClipConfig = Omit<Clip, "id" | "layer" | "blend" | "params" | "coordinateSpace"> & {
   id?: string;
   layer?: number;
@@ -30,10 +39,11 @@ export type SceneConfig = Omit<Scene, "name" | "tracks" | "durationMs"> & { name
 
 export type GeneratePartituraInput = {
   projectId: string;
+  sourceChecksum: Partitura["sourceChecksum"];
   requiredCoreVersion?: string;
   defaultScene?: string;
   outputs: OutputConfig[];
-  pixelMap: SpatialPixel[];
+  pixelMap: PixelConfig[];
   zones: ZoneConfig[];
   groups?: GroupConfig[];
   scenes?: SceneConfig[];
@@ -42,23 +52,74 @@ export type GeneratePartituraInput = {
 
 export function generatePartitura(input: GeneratePartituraInput): Partitura {
   const outputs = input.outputs.map((output) => ({ ...output, name: output.name ?? output.id }));
-  const zones = input.zones.map((zone) => ({ ...zone, name: zone.name ?? zone.id, pixelIds: Array.from(new Set(zone.pixelIds)) }));
-  const groups = (input.groups ?? []).map((group) => ({ ...group, name: group.name ?? group.id }));
+  const sortedPixels = input.pixelMap
+    .map((pixel) => ({ ...pixel }))
+    .sort((left, right) => left.output - right.output || left.serialIndex - right.serialIndex);
+  const bounds = coordinateBounds(sortedPixels);
+  const pixelMap = sortedPixels.map((pixel, index) => ({
+    ...pixel,
+    index,
+    normalizedX: (pixel.x - bounds.minX) / bounds.width,
+    normalizedY: (pixel.y - bounds.minY) / bounds.height
+  }));
+  const pixelIndexById = new Map(pixelMap.map((pixel) => [pixel.id, pixel.index]));
+  const zones = input.zones.map((zone) => ({
+    id: zone.id,
+    name: zone.name ?? zone.id,
+    pixelIndices: uniqueSortedIndices(zone.pixelIds.flatMap((id) => {
+      const index = pixelIndexById.get(id);
+      return index === undefined ? [] : [index];
+    }))
+  }));
+  const groups = flattenGroups(input.groups ?? [], zones);
   const defaultScene = input.defaultScene ?? input.scenes?.[0]?.id ?? "default";
   const scenes = input.scenes?.length ? input.scenes.map(normalizeScene) : [createDefaultScene(defaultScene)];
 
   return {
     schemaVersion: PARTITURA_SCHEMA_VERSION,
     projectId: input.projectId,
+    sourceChecksum: input.sourceChecksum,
     requiredCoreVersion: input.requiredCoreVersion ?? SUPPORTED_CORE_VERSION,
     defaultScene,
     outputs,
-    pixelMap: input.pixelMap.map((pixel) => ({ ...pixel })),
+    pixelMap,
     zones,
     groups,
     scenes,
     metadata: input.metadata
   };
+}
+
+function coordinateBounds(pixels: PixelConfig[]) {
+  if (!pixels.length) return { minX: 0, minY: 0, width: 1, height: 1 };
+  const minX = Math.min(...pixels.map((pixel) => pixel.x));
+  const maxX = Math.max(...pixels.map((pixel) => pixel.x));
+  const minY = Math.min(...pixels.map((pixel) => pixel.y));
+  const maxY = Math.max(...pixels.map((pixel) => pixel.y));
+  return { minX, minY, width: Math.max(1, maxX - minX), height: Math.max(1, maxY - minY) };
+}
+
+function flattenGroups(groups: GroupConfig[], zones: Zone[]) {
+  const zonePixels = new Map(zones.map((zone) => [zone.id, zone.pixelIndices]));
+  const groupById = new Map(groups.map((group) => [group.id, group]));
+  const memo = new Map<string, number[]>();
+  const resolve = (id: string, trail: string[] = []): number[] => {
+    const cached = memo.get(id);
+    if (cached) return cached;
+    if (trail.includes(id)) return [];
+    const group = groupById.get(id);
+    if (!group) return [];
+    const indices = uniqueSortedIndices(group.members.flatMap((member) => member.type === "zone"
+      ? zonePixels.get(member.id) ?? []
+      : resolve(member.id, [...trail, id])));
+    memo.set(id, indices);
+    return indices;
+  };
+  return groups.map((group) => ({ id: group.id, name: group.name ?? group.id, pixelIndices: resolve(group.id) }));
+}
+
+function uniqueSortedIndices(indices: number[]) {
+  return Array.from(new Set(indices)).sort((left, right) => left - right);
 }
 
 function normalizeScene(scene: SceneConfig): Scene {

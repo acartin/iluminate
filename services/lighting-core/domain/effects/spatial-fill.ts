@@ -32,7 +32,7 @@ export const spatialFillEffect: EffectModule = {
       softness: { type: "percent", label: "Softness", default: 0.12, min: 0, max: 1 }
     }
   },
-  render: ({ params, progress, pixel }) => {
+  render: ({ params, progress, pixel }, output) => {
     const color = parseColor(String(params.color ?? "#00AAFF"));
     const background = parseColor(String(params.backgroundColor ?? "#000000"));
     const axis = params.axis === "x" ? "x" : "y";
@@ -42,6 +42,6 @@ export const spatialFillEffect: EffectModule = {
     const directedCoordinate = direction === "reverse" ? 1 - coordinate : coordinate;
     const edge = progress;
     const intensity = softness <= 0 ? (directedCoordinate <= edge ? 1 : 0) : clamp((edge - directedCoordinate) / softness + 1, 0, 1);
-    return mixColors(background, color, intensity);
+    return mixColors(background, color, intensity, output);
   }
 };

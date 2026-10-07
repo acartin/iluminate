@@ -5,7 +5,7 @@ publican los contenedores y qué partes están operativas o pendientes. Está
 escrito como guía humana de operación; no debe contener contraseñas, tokens,
 llaves privadas ni valores de secretos.
 
-Última revisión: 2026-09-23.
+Última revisión: 2026-10-07.
 
 ## Estado actual
 
@@ -17,6 +17,8 @@ llaves privadas ni valores de secretos.
 | `https://www.iluminate.space` | Operativo | Sirve el mismo contenedor público mediante una segunda ruta del túnel |
 | `https://app.iluminate.space` | No publicado | La aplicación todavía usa autenticación provisional |
 | PostgreSQL de producción | No desplegado | Se añadirá cuando la aplicación autenticada esté lista |
+| Render y share de escenas | Implementado, no publicado | Requiere PostgreSQL, dos buckets R2, origen CDN y token interno de producción |
+| Render worker | Imagen automatizada; servicio no desplegado | Chromium/FFmpeg consume una cola PostgreSQL; no recibe tráfico público |
 | Sitio DataSyncSA | No desplegado | Compartirá la VM, con contenedor y ciclo propios |
 | Despliegue automático al servidor | Pendiente | La construcción y publicación de imágenes sí está automatizada |
 
@@ -32,6 +34,20 @@ cloudflared en prd-web-01
   -> red Docker web-ingress
   -> iluminate-public:3000
 ```
+
+Cuando se publique la aplicación autenticada, el video de escenas seguirá una
+ruta desacoplada del tráfico de reproducción:
+
+```text
+dashboard -> PostgreSQL queue -> render worker -> R2 privado o R2 público
+                                                   |
+viewer privado <- URL firmada                    CDN -> /share/{slug}
+```
+
+El navegador nunca solicita un frame al servidor. El player interactivo evalúa
+la partitura localmente; el share público sirve MP4/poster por CDN. Cien o mil
+reproducciones públicas aumentan principalmente el tráfico del CDN, no el
+trabajo de Next.js, PostgreSQL ni del render worker.
 
 El proveedor de Internet no permite port forwarding. `cloudflared` inicia las
 conexiones hacia Cloudflare desde la VM, por lo que no se abren los puertos 80
@@ -89,7 +105,8 @@ La separación elegida es:
 | `iluminate.space` | Marca, contenido público, aprendizaje y SEO |
 | `www.iluminate.space` | Alias público servido por el mismo contenedor |
 | `app.iluminate.space` | Login, registro, recuperación, proyectos, Designer y workspace |
-| `share.iluminate.space` | Posible visor público futuro; no existe actualmente |
+| `iluminate.space/share/{slug}` | Share público video-first; se habilitará junto con el pipeline R2 |
+| `app.iluminate.space/review/{slug}` | Revisión privada/revocable con medios firmados |
 
 El Designer forma parte de `app.iluminate.space`; no necesita un subdominio
 propio. Una ruta típica será:
@@ -154,15 +171,16 @@ El workflow se encuentra en:
 .github/workflows/publish-images.yml
 ```
 
-Se ejecuta al hacer push a `main` cuando cambia el workflow, `lighting-core` o
-alguna de las dos aplicaciones web. Ejecuta las validaciones definidas en los
-Dockerfiles, construye las imágenes y las publica en GHCR.
+Se ejecuta al hacer push a `main` cuando cambia el workflow, `lighting-core`, el
+render worker o alguna de las dos aplicaciones web. Ejecuta las validaciones
+definidas en los Dockerfiles, construye las imágenes y las publica en GHCR.
 
 Imágenes actuales:
 
 ```text
 ghcr.io/acartin/iluminate-public
 ghcr.io/acartin/iluminate-web
+ghcr.io/acartin/iluminate-render-worker
 ```
 
 Cada construcción publica dos tags:
@@ -298,7 +316,8 @@ Cuando esté lista, el stack previsto dentro de la misma VM será:
 cloudflared
 ├── iluminate-public
 └── iluminate-web
-      └── postgres (red interna, sin ruta de túnel ni puerto público)
+      ├── postgres (red interna, sin ruta de túnel ni puerto público)
+      └── iluminate-render-worker (sin ruta de túnel ni puerto público)
 ```
 
 PostgreSQL debe ejecutarse en un contenedor separado con volumen persistente.
@@ -316,6 +335,37 @@ commit con migración
 
 No copiar una base de desarrollo completa a producción ni modificar el esquema
 de producción manualmente.
+
+## Render de escenas, privacidad y CDN
+
+El pipeline requiere tres almacenes lógicamente separados:
+
+| Almacén | Acceso | Contenido |
+| --- | --- | --- |
+| R2 de artwork existente | Privado | Fuentes del Designer |
+| `CLOUDFLARE_R2_PRIVATE_RENDER_BUCKET` | Privado | Bundles y medios de revisión; solo URLs firmadas de corta duración |
+| `CLOUDFLARE_R2_PUBLIC_SHARE_BUCKET` | Público por CDN | Manifiestos, MP4 y posters publicados explícitamente |
+
+Los dos buckets de render deben existir y tener nombres diferentes. Solo el
+bucket público se conecta a `ILUMINATE_PUBLIC_MEDIA_ORIGIN`. Además se requiere
+`ILUMINATE_INTERNAL_TOKEN`, compartido únicamente por `iluminate-web` y los
+workers, para proteger `/internal/render`. No iniciar el worker con valores
+vacíos o de ejemplo.
+
+La migración requerida es:
+
+```text
+services/lighting-core/migrations/2026-10-07_create_scene_rendering_and_shares.sql
+```
+
+El orden de alta es: buckets y CDN, backup PostgreSQL, migración, dashboard,
+worker, share privado de prueba, share público de prueba y prueba de revocación.
+El runbook detallado vive en `services/render-worker/README.md`.
+
+YouTube no es el almacén canónico y no recibe subidas automáticas. Una futura
+exportación a YouTube debe ser una acción separada, explícita y autorizada por
+el cliente. Publicar un archivo implica que su retirada total posterior no se
+puede garantizar.
 
 ## DataSyncSA
 
@@ -360,6 +410,8 @@ despliegue.
 4. Terminar autenticación antes de publicar `app.iluminate.space`.
 5. Añadir PostgreSQL, migraciones y backups cuando la app autenticada esté
    lista.
-6. Incorporar DataSyncSA con un despliegue independiente.
-7. Automatizar el pull y restart solo después de contar con health check y
+6. Crear y configurar los buckets R2 privado/público, el origen CDN y el token
+   interno; ejecutar el smoke test completo de render y revocación.
+7. Incorporar DataSyncSA con un despliegue independiente.
+8. Automatizar el pull y restart solo después de contar con health check y
    rollback probado.

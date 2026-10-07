@@ -1,4 +1,5 @@
 export * from "./domain/effects/catalog.js";
+export * from "./contracts/player-bundle.js";
 export * from "./domain/partituras/types.js";
 export * from "./generators/partitura-generator.js";
 export * from "./pixel-map/builders.js";

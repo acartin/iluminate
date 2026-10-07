@@ -8,6 +8,7 @@ export function validatePartitura(partitura: Partitura): ValidationResult {
   const issues: ValidationIssue[] = [];
   check(partitura.schemaVersion === PARTITURA_SCHEMA_VERSION, issues, "schema.unsupported", "schemaVersion", `schemaVersion must be ${PARTITURA_SCHEMA_VERSION}.`);
   checkId(partitura.projectId, "projectId", issues);
+  check(/^sha256:[0-9a-f]{64}$/.test(partitura.sourceChecksum), issues, "checksum.invalid", "sourceChecksum", "sourceChecksum must be a lowercase SHA-256 digest.");
   check(isSemver(partitura.requiredCoreVersion), issues, "coreVersion.invalid", "requiredCoreVersion", "requiredCoreVersion must use MAJOR.MINOR.PATCH format.");
   check(!isVersionGreater(partitura.requiredCoreVersion, SUPPORTED_CORE_VERSION), issues, "coreVersion.unsupported", "requiredCoreVersion", `requiredCoreVersion ${partitura.requiredCoreVersion} is newer than supported core ${SUPPORTED_CORE_VERSION}.`);
 
@@ -23,13 +24,18 @@ export function validatePartitura(partitura: Partitura): ValidationResult {
     outputsByNumber.set(output.output, output);
     check(Number.isInteger(output.pixelCount) && output.pixelCount >= 0, issues, "output.pixelCount.invalid", `${path}.pixelCount`, "output.pixelCount must be a non-negative integer.");
   });
+  check(LOGICAL_OUTPUTS.every((output) => outputNumbers.has(output)) && partitura.outputs.length === LOGICAL_OUTPUTS.length, issues, "outputs.shape.invalid", "outputs", "Partitura v2 must declare logical outputs 1, 2 and 3 exactly once.");
 
   check(partitura.pixelMap.length > 0, issues, "pixelMap.empty", "pixelMap", "pixelMap must include physical pixels.");
   const pixelIds = new Set<string>();
+  const pixelIndices = new Set<number>();
   const addresses = new Set<string>();
   const countByOutput = new Map<number, number>();
   partitura.pixelMap.forEach((pixel, index) => {
     const path = `pixelMap[${index}]`;
+    check(Number.isInteger(pixel.index) && pixel.index === index, issues, "pixelMap.index.invalid", `${path}.index`, "pixel index must be dense and match sorted array order.");
+    check(!pixelIndices.has(pixel.index), issues, "pixelMap.index.duplicate", `${path}.index`, `Pixel index ${pixel.index} is duplicated.`);
+    pixelIndices.add(pixel.index);
     checkUniqueId(pixel.id, pixelIds, `${path}.id`, issues);
     const output = outputsByNumber.get(pixel.output);
     check(Boolean(output), issues, "pixelMap.output.missing", `${path}.output`, `Pixel ${pixel.id} references an undeclared output.`);
@@ -38,6 +44,8 @@ export function validatePartitura(partitura: Partitura): ValidationResult {
     check(Number.isFinite(pixel.routeOffsetCm) && pixel.routeOffsetCm >= 0, issues, "pixelMap.offset.invalid", `${path}.routeOffsetCm`, "routeOffsetCm must be non-negative.");
     check(Number.isFinite(pixel.x) && Number.isFinite(pixel.y), issues, "pixelMap.coordinate.invalid", path, "Pixel coordinates must be finite.");
     check(Number.isFinite(pixel.tangentDeg), issues, "pixelMap.tangent.invalid", `${path}.tangentDeg`, "tangentDeg must be finite.");
+    check(Number.isFinite(pixel.normalizedX) && pixel.normalizedX >= 0 && pixel.normalizedX <= 1, issues, "pixelMap.normalizedX.invalid", `${path}.normalizedX`, "normalizedX must be between 0 and 1.");
+    check(Number.isFinite(pixel.normalizedY) && pixel.normalizedY >= 0 && pixel.normalizedY <= 1, issues, "pixelMap.normalizedY.invalid", `${path}.normalizedY`, "normalizedY must be between 0 and 1.");
     const address = `${pixel.output}:${pixel.serialIndex}`;
     check(!addresses.has(address), issues, "pixelMap.address.duplicate", path, `Pixel address ${address} is duplicated.`);
     addresses.add(address);
@@ -50,21 +58,17 @@ export function validatePartitura(partitura: Partitura): ValidationResult {
   partitura.zones.forEach((zone, index) => {
     const path = `zones[${index}]`;
     checkUniqueId(zone.id, zoneIds, `${path}.id`, issues);
-    warn(zone.pixelIds.length > 0, issues, "zone.empty", path, `Zone ${zone.id} selects no pixels.`);
-    zone.pixelIds.forEach((pixelId) => check(pixelIds.has(pixelId), issues, "zone.pixel.missing", `${path}.pixelIds`, `Zone ${zone.id} references missing pixel ${pixelId}.`));
+    warn(zone.pixelIndices.length > 0, issues, "zone.empty", path, `Zone ${zone.id} selects no pixels.`);
+    validateMembership(zone.pixelIndices, `${path}.pixelIndices`, partitura.pixelMap.length, issues);
   });
 
   const groupIds = new Set<string>();
   partitura.groups.forEach((group, index) => {
     const path = `groups[${index}]`;
     checkUniqueId(group.id, groupIds, `${path}.id`, issues);
-    check(group.members.length > 0, issues, "group.empty", path, `Group ${group.id} has no members.`);
+    check(group.pixelIndices.length > 0, issues, "group.empty", path, `Group ${group.id} selects no pixels.`);
+    validateMembership(group.pixelIndices, `${path}.pixelIndices`, partitura.pixelMap.length, issues);
   });
-  partitura.groups.forEach((group, index) => group.members.forEach((member) => {
-    const exists = member.type === "zone" ? zoneIds.has(member.id) : groupIds.has(member.id);
-    check(exists, issues, "group.member.missing", `groups[${index}].members`, `Group ${group.id} references missing ${member.type} ${member.id}.`);
-  }));
-  validateGroupCycles(partitura, issues);
 
   const sceneIds = new Set<string>();
   partitura.scenes.forEach((scene, sceneIndex) => {
@@ -99,13 +103,13 @@ function validateTarget(target: PartituraTarget, path: string, zoneIds: Set<stri
   check(target.type === "zone" ? zoneIds.has(target.id) : groupIds.has(target.id), issues, "target.missing", `${path}.target`, `Target ${target.type}:${target.id} does not exist.`);
 }
 
-function validateGroupCycles(partitura: Partitura, issues: ValidationIssue[]) {
-  const children = new Map(partitura.groups.map((group) => [group.id, group.members.filter((member) => member.type === "group").map((member) => member.id)]));
-  const visit = (id: string, trail: string[]) => {
-    if (trail.includes(id)) { issues.push({ severity: "error", code: "group.cycle", path: "groups", message: `Group hierarchy contains a cycle: ${[...trail, id].join(" -> ")}.` }); return; }
-    (children.get(id) ?? []).forEach((child) => visit(child, [...trail, id]));
-  };
-  partitura.groups.forEach((group) => visit(group.id, []));
+function validateMembership(indices: number[], path: string, pixelCount: number, issues: ValidationIssue[]) {
+  const seen = new Set<number>();
+  indices.forEach((index, membershipIndex) => {
+    check(Number.isInteger(index) && index >= 0 && index < pixelCount, issues, "target.pixelIndex.invalid", `${path}[${membershipIndex}]`, `Pixel index ${index} is outside the pixel map.`);
+    check(!seen.has(index), issues, "target.pixelIndex.duplicate", `${path}[${membershipIndex}]`, `Pixel index ${index} is duplicated in the target.`);
+    seen.add(index);
+  });
 }
 
 function validateEffectParams(effect: string, params: Record<string, unknown>, path: string, issues: ValidationIssue[]) {

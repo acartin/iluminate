@@ -51,6 +51,7 @@ export function simulateWs2812bFrame(partitura: Partitura, sceneId: string, time
         const renderedPixel = renderedByAddress.get(`${output.output}:${serialIndex}`);
         return toWs2812bPixel(
           renderedPixel ?? {
+            index: serialIndex,
             output: output.output,
             serialIndex,
             stringId: "unmapped",

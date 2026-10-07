@@ -25,7 +25,7 @@ export const spatialWaveEffect: EffectModule = {
       contrast: { type: "percent", label: "Contrast", default: 0.72, min: 0, max: 1 }
     }
   },
-  render: ({ params, localTimeMs, pixel }) => {
+  render: ({ params, localTimeMs, pixel }, output = { r: 0, g: 0, b: 0 }) => {
     const color = parseColor(String(params.color ?? "#18E8FF"));
     const background = parseColor(String(params.backgroundColor ?? "#00112E"));
     const white = parseColor("#E8FFFF");
@@ -44,6 +44,7 @@ export const spatialWaveEffect: EffectModule = {
     const spark = smoothstep(0.76, 1, fbm(primary * 10.0 - time * 2.0, secondary * 8.0 + time));
     const glow = clamp(main * 0.72 + harmonic * 0.22 + spark * main * 0.3, 0, 1);
     const core = smoothstep(0.74, 1, glow);
-    return mixColors(mixColors(background, color, glow), white, core * 0.34);
+    mixColors(background, color, glow, output);
+    return mixColors(output, white, core * 0.34, output);
   }
 };

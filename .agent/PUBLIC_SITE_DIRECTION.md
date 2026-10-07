@@ -44,6 +44,7 @@ Initial public information architecture:
 /projects/[slug]
 /templates
 /templates/[slug]
+/share/[slug]
 /learn
 /learn/designer
 /learn/animate
@@ -99,16 +100,26 @@ controllers, credentials, authorship/audit records or stale generated artifacts.
 
 - `lighting-core` remains the canonical owner of partitura types, effects,
   validation and frame semantics.
-- `services/simulator` should own the reusable read-only player/renderer as it
-  leaves the dashboard prototype.
-- The public site may consume published snapshots and use the reusable simulator.
+- The reusable read-only player lives under
+  `services/web/iluminate/components/lighting/player`; its frame loop runs in a
+  dedicated Worker and its persistent renderer uses WebGL2 directly.
+- Embedded and expanded presentation reuse the same mounted player, canvas and
+  WebGL context.
+- `/share/[slug]` is video-first and reads a short-lived public manifest from
+  the public media origin. It does not load the editor or connect to the
+  application database.
+- Optional interactive public playback may consume an immutable published
+  bundle in the future, but must use the same reusable player locally.
 - The public Next.js application must not connect directly to PostgreSQL.
 - The public container must not receive database credentials, R2 write
   credentials, session secrets or device tokens.
 - Prefer browser-side frame evaluation for interactive public previews instead
   of making one server request per animation frame.
-- Large public images and video belong in R2/CDN storage; do not grow the Docker
-  image into a media archive.
+- Large public images and video belong in the dedicated public R2 bucket behind
+  its media origin/CDN; private and review bundles/renders belong in a separate
+  non-public bucket and are delivered only through short-lived signed URLs.
+- YouTube is an explicit export destination, never the canonical store. Do not
+  upload a customer scene without an authorized publication action.
 
 ## Learning And YouTube
 
@@ -222,7 +233,9 @@ Do not require a custom video hosting or LMS platform for the first version.
 2. **Complete:** add an independent `iluminate-public-web` Docker/Compose service.
 3. **Complete:** establish public identity, navigation, SEO and the flagship home experience.
 4. **Initial version complete:** publish the first curated concept projects from local typed content.
-5. Extract a reusable read-only player into `services/simulator`.
+5. **Complete in the authenticated app:** consolidate the reusable read-only
+   player under `services/web/iluminate/components/lighting/player`; public
+   interactive playback may reuse that contract in a later delivery.
 6. Build project detail pages and the restricted public configurator.
 7. Add `/learn`, Designer and Animate YouTube collections.
 8. Add authenticated `Use this template` handoff and safe private cloning.

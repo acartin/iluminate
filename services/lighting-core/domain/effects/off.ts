@@ -8,5 +8,10 @@ export const offEffect: EffectModule = {
     family: "utility",
     parameters: {}
   },
-  render: () => ({ r: 0, g: 0, b: 0 })
+  render: (_context, output = { r: 0, g: 0, b: 0 }) => {
+    output.r = 0;
+    output.g = 0;
+    output.b = 0;
+    return output;
+  }
 };

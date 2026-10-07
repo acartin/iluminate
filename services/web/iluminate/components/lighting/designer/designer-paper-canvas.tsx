@@ -45,7 +45,7 @@ import {
   moveRouteWithSolderedTerminals,
   sameSnapPoint
 } from "./electrical/designer-electrical-engine";
-import { ELECTRICAL_TOOLS, geometryToolAllowedOnLayer, geometryToolPolicy } from "./canvas/designer-tool-policy";
+import { canvasInteractionSnapCm, channelWidthForRouterDiameter, ELECTRICAL_TOOLS, geometryToolAllowedOnLayer, geometryToolPolicy } from "./canvas/designer-tool-policy";
 import type { DesignerActiveLayer, DesignerDrag, DesignerMeasurement, DesignerPrimitiveDraft, DesignerRouteDraft, DesignerRouteTerminal, DesignerSelection, DesignerShapeDraft, DesignerTool, DesignerViewport, PaperApi, ResizeHandle } from "./types";
 import { DESIGNER_FONT_CATALOG, designerFontUrl } from "@/lib/lighting/designer-font-catalog";
 
@@ -59,9 +59,11 @@ export type DesignerAnimationDiffuser = "as_built" | "led_map";
 
 export function DesignerStudioCanvas({
   designer,
+  snapToGrid,
   activeLayer,
   tool,
   onToolChange,
+  channelRouterDiameterMm,
   viewport,
   artworkUrls,
   selectedBuildAreaId,
@@ -100,9 +102,11 @@ export function DesignerStudioCanvas({
   showRulers = designer.rulerVisible
 }: {
   designer: DesignerForm;
+  snapToGrid: boolean;
   activeLayer: DesignerActiveLayer | null;
   tool: DesignerTool;
   onToolChange: (tool: DesignerTool) => void;
+  channelRouterDiameterMm: number;
   viewport: DesignerViewport;
   artworkUrls: Record<string, string>;
   selectedArtworkId?: string;
@@ -122,7 +126,7 @@ export function DesignerStudioCanvas({
   selectedController?: boolean;
   selectedGeometryKeys?: string[];
   onViewportChange: (viewport: DesignerViewport) => void;
-  onChange: (designer: DesignerForm) => void;
+  onChange: (designer: DesignerForm, options?: { recordHistory?: boolean }) => void;
   onSelect: (selection: DesignerSelection, additive?: boolean) => void;
   onInsertBuildAreaPoint: (buildAreaId: string, insertIndex: number, point: DesignerPoint) => void;
   onInsertZonePoint: (zoneId: string, insertIndex: number, point: DesignerPoint) => void;
@@ -143,15 +147,30 @@ export function DesignerStudioCanvas({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const canvasHostRef = useRef<HTMLDivElement | null>(null);
   const paperRef = useRef<PaperApi | null>(null);
+  const paperSetupRef = useRef<{ canvas: HTMLCanvasElement; width: number; height: number } | null>(null);
+  const designerRef = useRef(designer);
+  const onChangeRef = useRef(onChange);
+  const pendingChannelHandleRef = useRef<{
+    channelId: string;
+    pointIndex: number;
+    handle?: "in" | "out";
+    point: DesignerPoint;
+  } | null>(null);
+  const channelHandleFrameRef = useRef<number | null>(null);
+  const channelDragPreviewRef = useRef<DesignerChannelForm | null>(null);
   const [paperReady, setPaperReady] = useState(false);
   const [drag, setDrag] = useState<DesignerDrag | null>(null);
+  const [channelDragPreview, setChannelDragPreview] = useState<DesignerChannelForm | null>(null);
   const [routeDraft, setRouteDraft] = useState<DesignerRouteDraft | null>(null);
   const [shapeDraft, setShapeDraft] = useState<DesignerShapeDraft | null>(null);
   const [primitiveDraft, setPrimitiveDraft] = useState<DesignerPrimitiveDraft | null>(null);
   const [measurement, setMeasurement] = useState<DesignerMeasurement | null>(null);
   const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
   const [colorMode, setColorMode] = useState<"day" | "night">("night");
+  const interactionSnapCm = canvasInteractionSnapCm(designer.snapCm, snapToGrid);
   const rulerGrid = showRulers ? "grid-cols-[48px_minmax(0,1fr)] grid-rows-[28px_minmax(0,1fr)]" : "grid-cols-[0_minmax(0,1fr)] grid-rows-[0_minmax(0,1fr)]";
+  designerRef.current = designer;
+  onChangeRef.current = onChange;
 
   useEffect(() => {
     const syncColorMode = () => setColorMode(window.document.documentElement.classList.contains("dark") ? "night" : "day");
@@ -159,6 +178,10 @@ export function DesignerStudioCanvas({
     const observer = new MutationObserver(syncColorMode);
     observer.observe(window.document.documentElement, { attributes: true, attributeFilter: ["class"] });
     return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => () => {
+    if (channelHandleFrameRef.current !== null) cancelAnimationFrame(channelHandleFrameRef.current);
   }, []);
 
   useEffect(() => {
@@ -236,11 +259,20 @@ export function DesignerStudioCanvas({
     canvas.style.width = `${canvasSize.width}px`;
     canvas.style.height = `${canvasSize.height}px`;
 
-    loadedPaper.setup(canvas);
-    loadedPaper.view.viewSize = new loadedPaper.Size(canvasSize.width, canvasSize.height);
+    const setup = paperSetupRef.current;
+    if (!setup || setup.canvas !== canvas) {
+      loadedPaper.setup(canvas);
+      paperSetupRef.current = { canvas, width: canvasSize.width, height: canvasSize.height };
+    } else if (setup.width !== canvasSize.width || setup.height !== canvasSize.height) {
+      loadedPaper.view.viewSize = new loadedPaper.Size(canvasSize.width, canvasSize.height);
+      paperSetupRef.current = { canvas, width: canvasSize.width, height: canvasSize.height };
+    }
     if (presentation === "animate" && compiledLayout) drawPaperAnimationMap({ designer, layout: compiledLayout, viewport, selectedZoneId, canvasSize, colorMode, animationPixels, animationDiffusers });
     else drawPaperDesigner({
-      designer,
+      designer: channelDragPreview ? {
+        ...designer,
+        channels: designer.channels.map((channel) => channel.id === channelDragPreview.id ? channelDragPreview : channel)
+      } : designer,
       activeLayer,
       viewport,
       selectedBuildAreaId,
@@ -254,6 +286,7 @@ export function DesignerStudioCanvas({
       selectedTextId,
       selectedChannelId,
       selectedChannelPointIndex,
+      interactiveChannelId: drag?.type === "channel-move" || drag?.type === "channel-point" || drag?.type === "channel-handle" ? drag.channelId : undefined,
       selectedRouteId,
       selectedRoutePointIndex,
       selectedController: Boolean(selectedController),
@@ -266,7 +299,7 @@ export function DesignerStudioCanvas({
       colorMode
     });
     loadedPaper.view.update();
-  }, [activeLayer, animationDiffusers, animationPixels, canvasSize, colorMode, compiledLayout, designer, measurement, paperReady, presentation, primitiveDraft, routeDraft, selectedBuildAreaId, selectedBuildAreaPointIndex, selectedChannelId, selectedChannelPointIndex, selectedController, selectedDerivedGeometryId, selectedFaceGraphicId, selectedFaceGraphicPointIndex, selectedGeometryKeys, selectedProjectionId, selectedRouteId, selectedRoutePointIndex, selectedTextId, selectedZoneId, selectedZonePointIndex, shapeDraft, viewport]);
+  }, [activeLayer, animationDiffusers, animationPixels, canvasSize, channelDragPreview, colorMode, compiledLayout, designer, drag, measurement, paperReady, presentation, primitiveDraft, routeDraft, selectedBuildAreaId, selectedBuildAreaPointIndex, selectedChannelId, selectedChannelPointIndex, selectedController, selectedDerivedGeometryId, selectedFaceGraphicId, selectedFaceGraphicPointIndex, selectedGeometryKeys, selectedProjectionId, selectedRouteId, selectedRoutePointIndex, selectedTextId, selectedZoneId, selectedZonePointIndex, shapeDraft, viewport]);
 
   useEffect(() => {
     if (activeLayer !== "strings" || !ELECTRICAL_TOOLS.has(tool) || tool === "cut") setRouteDraft(null);
@@ -280,6 +313,12 @@ export function DesignerStudioCanvas({
     const isPrimitiveTool = geometryToolPolicy(tool)?.construction === "primitive";
     if (!isPrimitiveTool) setPrimitiveDraft(null);
   }, [tool]);
+
+  useEffect(() => {
+    setShapeDraft((draft) => draft?.target === "channel"
+      ? { ...draft, widthMm: channelWidthForRouterDiameter(channelRouterDiameterMm) }
+      : draft);
+  }, [channelRouterDiameterMm]);
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -353,9 +392,9 @@ export function DesignerStudioCanvas({
       name: `Channel ${next}`,
       points,
       pathMode: shapeDraft.mode,
-      widthMm: 10,
+      widthMm: channelWidthForRouterDiameter(shapeDraft.widthMm ?? channelRouterDiameterMm),
       closed,
-      cap: "butt",
+      cap: "round",
       visible: true,
       locked: false,
       opacity: 1
@@ -375,33 +414,33 @@ export function DesignerStudioCanvas({
   }
 
   function resizeArtwork(artwork: DesignerArtworkForm, handle: ResizeHandle, deltaX: number, deltaY: number) {
-    const minSize = Math.max(2, designer.snapCm);
+    const minSize = Math.max(2, interactionSnapCm);
     let x = artwork.x;
     let y = artwork.y;
     let width = artwork.width;
     let height = artwork.height;
     if (handle.includes("w")) {
-      x = snapValue(artwork.x + deltaX, designer.snapCm);
+      x = snapValue(artwork.x + deltaX, interactionSnapCm);
       width = artwork.width + artwork.x - x;
     }
     if (handle.includes("e")) width = artwork.width + deltaX;
     if (handle.includes("n")) {
-      y = snapValue(artwork.y + deltaY, designer.snapCm);
+      y = snapValue(artwork.y + deltaY, interactionSnapCm);
       height = artwork.height + artwork.y - y;
     }
     if (handle.includes("s")) height = artwork.height + deltaY;
     return {
       x,
       y,
-      width: Math.max(minSize, snapValue(width, designer.snapCm)),
-      height: Math.max(minSize, snapValue(height, designer.snapCm))
+      width: Math.max(minSize, snapValue(width, interactionSnapCm)),
+      height: Math.max(minSize, snapValue(height, interactionSnapCm))
     };
   }
 
   function handleRouteDrawClick(event: React.PointerEvent<HTMLCanvasElement>, kind: DesignerRouteKind) {
     if (activeLayer !== "strings" || designer.layers.strings.locked || !designer.layers.strings.visible) return;
     const rawPoint = eventPoint(event);
-    const point = { x: snapValue(rawPoint.x, designer.snapCm), y: snapValue(rawPoint.y, designer.snapCm) };
+    const point = { x: snapValue(rawPoint.x, interactionSnapCm), y: snapValue(rawPoint.y, interactionSnapCm) };
     const activeDraft = routeDraft?.kind === kind ? routeDraft : null;
 
     if (!activeDraft) {
@@ -411,7 +450,7 @@ export function DesignerStudioCanvas({
     }
 
     if (activeDraft.points.length === 1) {
-      if (sameSnapPoint(activeDraft.points[0], point, designer.snapCm)) return;
+      if (sameSnapPoint(activeDraft.points[0], point, interactionSnapCm)) return;
       const route = createRouteFromDraft(kind, activeDraft.points[0], point, designer);
       onChange({ ...designer, routes: [...designer.routes, route] });
       setRouteDraft({ kind, routeId: route.id, points: route.points });
@@ -420,7 +459,7 @@ export function DesignerStudioCanvas({
     }
 
     const route = designer.routes.find((entry) => entry.id === activeDraft.routeId);
-    if (!route || sameSnapPoint(route.points[route.points.length - 1], point, designer.snapCm)) return;
+    if (!route || sameSnapPoint(route.points[route.points.length - 1], point, interactionSnapCm)) return;
     const points = [...route.points, point];
     onChange({
       ...designer,
@@ -439,11 +478,11 @@ export function DesignerStudioCanvas({
     if (target === "face_graphic" && (designer.layers.faceGraphic.locked || !designer.layers.faceGraphic.visible)) return;
 
     const rawPoint = eventPoint(event);
-    const point = { x: snapValue(rawPoint.x, designer.snapCm), y: snapValue(rawPoint.y, designer.snapCm) };
+    const point = { x: snapValue(rawPoint.x, interactionSnapCm), y: snapValue(rawPoint.y, interactionSnapCm) };
     const activeDraft = shapeDraft?.target === target ? shapeDraft : null;
     const points = activeDraft?.points ?? [];
     const draftMode = activeDraft?.mode ?? mode;
-    if (points.length && sameSnapPoint(points[points.length - 1], point, designer.snapCm)) return;
+    if (points.length && sameSnapPoint(points[points.length - 1], point, interactionSnapCm)) return;
     const closesAtVisibleStartNode = points.length >= 3
       && Math.hypot(rawPoint.x - points[0].x, rawPoint.y - points[0].y) <= worldHitTolerance(viewport, canvasSize);
 
@@ -519,7 +558,14 @@ export function DesignerStudioCanvas({
       return;
     }
 
-    setShapeDraft({ target, mode: draftMode, points: [...points, point] });
+    setShapeDraft({
+      target,
+      mode: draftMode,
+      points: [...points, point],
+      ...(target === "channel" ? {
+        widthMm: channelWidthForRouterDiameter(channelRouterDiameterMm)
+      } : {})
+    });
     onSelect(null);
   }
 
@@ -528,7 +574,7 @@ export function DesignerStudioCanvas({
       const point = eventPoint(event);
       setPrimitiveDraft({
         ...primitiveDraft,
-        bounds: primitiveShapeBounds(primitiveDraft.start, point, designer.snapCm, {
+        bounds: primitiveShapeBounds(primitiveDraft.start, point, interactionSnapCm, {
           preserveAspect: event.ctrlKey || event.metaKey,
           fromCenter: event.shiftKey
         })
@@ -537,7 +583,7 @@ export function DesignerStudioCanvas({
     }
     if (tool === "measure" && measurement?.start && !measurement.locked) {
       const point = eventPoint(event);
-      setMeasurement({ ...measurement, end: { x: snapValue(point.x, designer.snapCm), y: snapValue(point.y, designer.snapCm) } });
+      setMeasurement({ ...measurement, end: { x: snapValue(point.x, interactionSnapCm), y: snapValue(point.y, interactionSnapCm) } });
       return;
     }
     if (!drag) return;
@@ -553,7 +599,7 @@ export function DesignerStudioCanvas({
       return;
     }
     if (drag.type === "artwork-move") {
-      patchArtwork(drag.artworkId, movedShape(drag.original, point.x - drag.start.x, point.y - drag.start.y, designer.snapCm));
+      patchArtwork(drag.artworkId, movedShape(drag.original, point.x - drag.start.x, point.y - drag.start.y, interactionSnapCm));
       return;
     }
     if (drag.type === "artwork-resize") {
@@ -563,72 +609,72 @@ export function DesignerStudioCanvas({
     if (drag.type === "build-area-move") {
       onChange({
         ...designer,
-        buildAreas: designer.buildAreas.map((buildArea) => (buildArea.id === drag.buildAreaId ? movedShape(drag.original, point.x - drag.start.x, point.y - drag.start.y, designer.snapCm) : buildArea))
+        buildAreas: designer.buildAreas.map((buildArea) => (buildArea.id === drag.buildAreaId ? movedShape(drag.original, point.x - drag.start.x, point.y - drag.start.y, interactionSnapCm) : buildArea))
       });
       return;
     }
     if (drag.type === "build-area-resize") {
       onChange({
         ...designer,
-        buildAreas: designer.buildAreas.map((buildArea) => (buildArea.id === drag.buildAreaId ? resizedBuildArea(drag.original, drag.handle, point.x - drag.start.x, point.y - drag.start.y, designer.snapCm, { preserveAspect: event.ctrlKey || event.metaKey, fromCenter: event.shiftKey }) : buildArea))
+        buildAreas: designer.buildAreas.map((buildArea) => (buildArea.id === drag.buildAreaId ? resizedBuildArea(drag.original, drag.handle, point.x - drag.start.x, point.y - drag.start.y, interactionSnapCm, { preserveAspect: event.ctrlKey || event.metaKey, fromCenter: event.shiftKey }) : buildArea))
       });
       return;
     }
     if (drag.type === "build-area-point") {
       onChange({
         ...designer,
-        buildAreas: designer.buildAreas.map((buildArea) => (buildArea.id === drag.buildAreaId ? updatePolygonPoint(buildArea, drag.pointIndex, point, designer.snapCm) : buildArea))
+        buildAreas: designer.buildAreas.map((buildArea) => (buildArea.id === drag.buildAreaId ? updatePolygonPoint(buildArea, drag.pointIndex, point, interactionSnapCm) : buildArea))
       });
       return;
     }
     if (drag.type === "build-area-handle") {
       const buildArea = designer.buildAreas.find((entry) => entry.id === drag.buildAreaId);
-      if (buildArea) onChange({ ...designer, buildAreas: designer.buildAreas.map((entry) => (entry.id === drag.buildAreaId ? updateBezierHandle(buildArea, drag.pointIndex, drag.handle, point, designer.snapCm) : entry)) });
+      if (buildArea) onChange({ ...designer, buildAreas: designer.buildAreas.map((entry) => (entry.id === drag.buildAreaId ? updateBezierHandle(buildArea, drag.pointIndex, drag.handle, point, interactionSnapCm) : entry)) });
       return;
     }
     if (drag.type === "controller-move") {
       const nextController = {
         ...designer.controller,
-        x: snapValue(drag.original.x + point.x - drag.start.x, designer.snapCm),
-        y: snapValue(drag.original.y + point.y - drag.start.y, designer.snapCm)
+        x: snapValue(drag.original.x + point.x - drag.start.x, interactionSnapCm),
+        y: snapValue(drag.original.y + point.y - drag.start.y, interactionSnapCm)
       };
       onChange(moveControllerWithSolderedCables(designer, drag.original, nextController, drag.originalRoutes, designer.snapCm));
       return;
     }
     if (drag.type === "zone-move") {
-      patchZone(drag.zoneId, movedShape(drag.original, point.x - drag.start.x, point.y - drag.start.y, designer.snapCm));
+      patchZone(drag.zoneId, movedShape(drag.original, point.x - drag.start.x, point.y - drag.start.y, interactionSnapCm));
       return;
     }
     if (drag.type === "zone-resize") {
-      patchZone(drag.zoneId, resizedZone(drag.original, drag.handle, point.x - drag.start.x, point.y - drag.start.y, designer.snapCm, { preserveAspect: event.ctrlKey || event.metaKey, fromCenter: event.shiftKey }));
+      patchZone(drag.zoneId, resizedZone(drag.original, drag.handle, point.x - drag.start.x, point.y - drag.start.y, interactionSnapCm, { preserveAspect: event.ctrlKey || event.metaKey, fromCenter: event.shiftKey }));
       return;
     }
     if (drag.type === "zone-point") {
       const zone = designer.zones.find((entry) => entry.id === drag.zoneId);
-      if (zone) patchZone(drag.zoneId, updatePolygonPoint(zone, drag.pointIndex, point, designer.snapCm));
+      if (zone) patchZone(drag.zoneId, updatePolygonPoint(zone, drag.pointIndex, point, interactionSnapCm));
       return;
     }
     if (drag.type === "zone-handle") {
       const zone = designer.zones.find((entry) => entry.id === drag.zoneId);
-      if (zone) patchZone(drag.zoneId, updateBezierHandle(zone, drag.pointIndex, drag.handle, point, designer.snapCm));
+      if (zone) patchZone(drag.zoneId, updateBezierHandle(zone, drag.pointIndex, drag.handle, point, interactionSnapCm));
       return;
     }
     if (drag.type === "face-graphic-move") {
-      patchFaceGraphic(drag.elementId, movedShape(drag.original, point.x - drag.start.x, point.y - drag.start.y, designer.snapCm));
+      patchFaceGraphic(drag.elementId, movedShape(drag.original, point.x - drag.start.x, point.y - drag.start.y, interactionSnapCm));
       return;
     }
     if (drag.type === "face-graphic-resize") {
-      patchFaceGraphic(drag.elementId, resizedZone(drag.original, drag.handle, point.x - drag.start.x, point.y - drag.start.y, designer.snapCm, { preserveAspect: event.ctrlKey || event.metaKey, fromCenter: event.shiftKey }));
+      patchFaceGraphic(drag.elementId, resizedZone(drag.original, drag.handle, point.x - drag.start.x, point.y - drag.start.y, interactionSnapCm, { preserveAspect: event.ctrlKey || event.metaKey, fromCenter: event.shiftKey }));
       return;
     }
     if (drag.type === "face-graphic-point") {
       const element = designer.faceGraphics.find((entry) => entry.id === drag.elementId);
-      if (element) patchFaceGraphic(drag.elementId, updatePolygonPoint(element, drag.pointIndex, point, designer.snapCm));
+      if (element) patchFaceGraphic(drag.elementId, updatePolygonPoint(element, drag.pointIndex, point, interactionSnapCm));
       return;
     }
     if (drag.type === "face-graphic-handle") {
       const element = designer.faceGraphics.find((entry) => entry.id === drag.elementId);
-      if (element) patchFaceGraphic(drag.elementId, updateBezierHandle(element, drag.pointIndex, drag.handle, point, designer.snapCm));
+      if (element) patchFaceGraphic(drag.elementId, updateBezierHandle(element, drag.pointIndex, drag.handle, point, interactionSnapCm));
       return;
     }
     if (drag.type === "text-move") {
@@ -636,35 +682,38 @@ export function DesignerStudioCanvas({
         ...designer,
         texts: designer.texts.map((text) => text.id === drag.textId ? {
           ...text,
-          x: snapValue(drag.original.x + point.x - drag.start.x, designer.snapCm),
-          y: snapValue(drag.original.y + point.y - drag.start.y, designer.snapCm)
+          x: snapValue(drag.original.x + point.x - drag.start.x, interactionSnapCm),
+          y: snapValue(drag.original.y + point.y - drag.start.y, interactionSnapCm)
         } : text)
       });
       return;
     }
     if (drag.type === "channel-move") {
-      patchChannel(drag.channelId, movedChannel(drag.original, point.x - drag.start.x, point.y - drag.start.y, designer.snapCm));
+      patchChannel(drag.channelId, movedChannel(drag.original, point.x - drag.start.x, point.y - drag.start.y, interactionSnapCm));
       return;
     }
     if (drag.type === "channel-point") {
-      const channel = designer.channels.find((entry) => entry.id === drag.channelId);
-      if (channel) patchChannel(drag.channelId, updateChannelPoint(channel, drag.pointIndex, point, designer.snapCm));
+      pendingChannelHandleRef.current = { channelId: drag.channelId, pointIndex: drag.pointIndex, point };
+      if (channelHandleFrameRef.current === null) channelHandleFrameRef.current = requestAnimationFrame(flushChannelDragPreview);
       return;
     }
     if (drag.type === "channel-handle") {
-      const channel = designer.channels.find((entry) => entry.id === drag.channelId);
-      if (channel) patchChannel(drag.channelId, updateChannelBezierHandle(channel, drag.pointIndex, drag.handle, point, designer.snapCm));
+      pendingChannelHandleRef.current = { channelId: drag.channelId, pointIndex: drag.pointIndex, handle: drag.handle, point };
+      if (channelHandleFrameRef.current === null) channelHandleFrameRef.current = requestAnimationFrame(flushChannelDragPreview);
       return;
     }
     if (drag.type === "route-move") {
+      const routeMovementSnapCm = drag.original.points.some((routePoint) => routePoint.joint)
+        ? designer.snapCm
+        : interactionSnapCm;
       onChange({
         ...designer,
-        routes: moveRouteWithSolderedTerminals(designer, drag.routeId, drag.original, point.x - drag.start.x, point.y - drag.start.y, designer.snapCm)
+        routes: moveRouteWithSolderedTerminals(designer, drag.routeId, drag.original, point.x - drag.start.x, point.y - drag.start.y, routeMovementSnapCm)
       });
       return;
     }
     if (drag.type === "route-point") {
-      const rawPoint = { x: snapValue(point.x, designer.snapCm), y: snapValue(point.y, designer.snapCm) };
+      const rawPoint = { x: snapValue(point.x, interactionSnapCm), y: snapValue(point.y, interactionSnapCm) };
       const snappedPoint = drag.jointGroup.length > 1 ? rawPoint : snapTerminalPoint(drag.routeId, drag.pointIndex, rawPoint);
       const nextPoint = { ...snappedPoint, joint: drag.jointGroup.length > 1 };
       if (drag.jointGroup.length > 1) {
@@ -673,6 +722,41 @@ export function DesignerStudioCanvas({
       }
       onChange({ ...designer, routes: moveRoutePoint(designer.routes, drag.routeId, drag.pointIndex, nextPoint) });
     }
+  }
+
+  function flushChannelDragPreview() {
+    if (channelHandleFrameRef.current !== null) cancelAnimationFrame(channelHandleFrameRef.current);
+    channelHandleFrameRef.current = null;
+    const pending = pendingChannelHandleRef.current;
+    pendingChannelHandleRef.current = null;
+    if (!pending) return channelDragPreviewRef.current;
+    const current = designerRef.current;
+    const channel = channelDragPreviewRef.current?.id === pending.channelId
+      ? channelDragPreviewRef.current
+      : current.channels.find((entry) => entry.id === pending.channelId);
+    if (!channel) return channelDragPreviewRef.current;
+    const interactionSnapCm = canvasInteractionSnapCm(current.snapCm, snapToGrid);
+    const updated = pending.handle
+      ? updateChannelBezierHandle(channel, pending.pointIndex, pending.handle, pending.point, interactionSnapCm)
+      : updateChannelPoint(channel, pending.pointIndex, pending.point, interactionSnapCm);
+    channelDragPreviewRef.current = updated;
+    setChannelDragPreview(updated);
+    return updated;
+  }
+
+  function commitChannelDragPreview(flushPending = true) {
+    const updated = flushPending ? flushChannelDragPreview() : channelDragPreviewRef.current;
+    if (channelHandleFrameRef.current !== null) cancelAnimationFrame(channelHandleFrameRef.current);
+    channelHandleFrameRef.current = null;
+    pendingChannelHandleRef.current = null;
+    channelDragPreviewRef.current = null;
+    setChannelDragPreview(null);
+    if (!updated) return;
+    const current = designerRef.current;
+    onChangeRef.current({
+      ...current,
+      channels: current.channels.map((entry) => entry.id === updated.id ? updated : entry)
+    });
   }
 
   function startPanDrag(event: React.PointerEvent<HTMLCanvasElement>) {
@@ -704,7 +788,7 @@ export function DesignerStudioCanvas({
       const settings = designer.layers[targetLayer];
       if (settings.locked || !settings.visible) return;
       const rawPoint = eventPoint(event);
-      onCreateText({ x: snapValue(rawPoint.x, designer.snapCm), y: snapValue(rawPoint.y, designer.snapCm) });
+      onCreateText({ x: snapValue(rawPoint.x, interactionSnapCm), y: snapValue(rawPoint.y, interactionSnapCm) });
       onToolChange("select");
       return;
     }
@@ -718,7 +802,7 @@ export function DesignerStudioCanvas({
       if (target === "zone" && (designer.layers.zones.locked || !designer.layers.zones.visible)) return;
       if (target === "face_graphic" && (designer.layers.faceGraphic.locked || !designer.layers.faceGraphic.visible)) return;
       const rawPoint = eventPoint(event);
-      const start = { x: snapValue(rawPoint.x, designer.snapCm), y: snapValue(rawPoint.y, designer.snapCm) };
+      const start = { x: snapValue(rawPoint.x, interactionSnapCm), y: snapValue(rawPoint.y, interactionSnapCm) };
       event.stopPropagation();
       event.currentTarget.setPointerCapture(event.pointerId);
       onSelect(null);
@@ -734,12 +818,12 @@ export function DesignerStudioCanvas({
     if (tool === "image_place") {
       if (activeLayer !== "artwork" || designer.layers.artwork.locked || !designer.layers.artwork.visible) return;
       const rawPoint = eventPoint(event);
-      onPlaceImage({ x: snapValue(rawPoint.x, designer.snapCm), y: snapValue(rawPoint.y, designer.snapCm) });
+      onPlaceImage({ x: snapValue(rawPoint.x, interactionSnapCm), y: snapValue(rawPoint.y, interactionSnapCm) });
       return;
     }
     if (tool === "measure") {
       const point = eventPoint(event);
-      const measuredPoint = { x: snapValue(point.x, designer.snapCm), y: snapValue(point.y, designer.snapCm) };
+      const measuredPoint = { x: snapValue(point.x, interactionSnapCm), y: snapValue(point.y, interactionSnapCm) };
       if (!measurement || measurement.locked) setMeasurement({ start: measuredPoint });
       else setMeasurement({ ...measurement, end: measuredPoint, locked: true });
       onSelect(null);
@@ -756,7 +840,7 @@ export function DesignerStudioCanvas({
 
     const point = eventPoint(event);
     const tolerance = worldHitTolerance(viewport, canvasSize);
-    if ((activeLayer === "reference" || activeLayer === "artwork") && selectedBuildAreaId && typeof selectedBuildAreaPointIndex === "number") {
+    if (tool === "select" && (activeLayer === "reference" || activeLayer === "artwork") && selectedBuildAreaId && typeof selectedBuildAreaPointIndex === "number") {
       const buildArea = designer.buildAreas.find((entry) => entry.id === selectedBuildAreaId);
       const node = buildArea?.pathMode === "bezier" ? buildArea.points?.[selectedBuildAreaPointIndex] : null;
       const handle = node ? pickBezierHandle(node, point, tolerance) : null;
@@ -768,7 +852,7 @@ export function DesignerStudioCanvas({
         return;
       }
     }
-    if (activeLayer === "zones" && selectedZoneId && typeof selectedZonePointIndex === "number") {
+    if (tool === "select" && activeLayer === "zones" && selectedZoneId && typeof selectedZonePointIndex === "number") {
       const zone = designer.zones.find((entry) => entry.id === selectedZoneId);
       const node = zone?.pathMode === "bezier" ? zone.points?.[selectedZonePointIndex] : null;
       const handle = node ? pickBezierHandle(node, point, tolerance) : null;
@@ -780,7 +864,7 @@ export function DesignerStudioCanvas({
         return;
       }
     }
-    if (activeLayer === "zones" && selectedChannelId && typeof selectedChannelPointIndex === "number") {
+    if (tool === "select" && activeLayer === "zones" && selectedChannelId && typeof selectedChannelPointIndex === "number") {
       const channel = designer.channels.find((entry) => entry.id === selectedChannelId);
       const node = channel?.pathMode === "bezier" ? channel.points?.[selectedChannelPointIndex] : null;
       const handle = node ? pickBezierHandle(node, point, tolerance) : null;
@@ -792,7 +876,7 @@ export function DesignerStudioCanvas({
         return;
       }
     }
-    if (activeLayer === "faceGraphic" && selectedFaceGraphicId && typeof selectedFaceGraphicPointIndex === "number") {
+    if (tool === "select" && activeLayer === "faceGraphic" && selectedFaceGraphicId && typeof selectedFaceGraphicPointIndex === "number") {
       const element = designer.faceGraphics.find((entry) => entry.id === selectedFaceGraphicId);
       const node = element?.pathMode === "bezier" ? element.points?.[selectedFaceGraphicPointIndex] : null;
       const handle = node ? pickBezierHandle(node, point, tolerance) : null;
@@ -1011,9 +1095,10 @@ export function DesignerStudioCanvas({
           onWheel={handleCanvasWheel}
           onPointerUp={(event) => {
             const endedDrag = drag;
+            if (endedDrag?.type === "channel-point" || endedDrag?.type === "channel-handle") commitChannelDragPreview();
             const endedPrimitiveDraft = primitiveDraft;
             const point = eventPoint(event);
-            const rawFinalPoint = { x: snapValue(point.x, designer.snapCm), y: snapValue(point.y, designer.snapCm) };
+            const rawFinalPoint = { x: snapValue(point.x, interactionSnapCm), y: snapValue(point.y, interactionSnapCm) };
             const snappedFinalPoint = endedDrag?.type === "route-point" && endedDrag.jointGroup.length === 1
               ? snapTerminalPoint(endedDrag.routeId, endedDrag.pointIndex, rawFinalPoint)
               : rawFinalPoint;
@@ -1022,7 +1107,7 @@ export function DesignerStudioCanvas({
             setDrag(null);
             setPrimitiveDraft(null);
             if (endedPrimitiveDraft) {
-              const bounds = primitiveShapeBounds(endedPrimitiveDraft.start, point, designer.snapCm, {
+              const bounds = primitiveShapeBounds(endedPrimitiveDraft.start, point, interactionSnapCm, {
                 preserveAspect: event.ctrlKey || event.metaKey,
                 fromCenter: event.shiftKey
               });
@@ -1082,6 +1167,7 @@ export function DesignerStudioCanvas({
           }}
           onPointerCancel={(event) => {
             if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+            commitChannelDragPreview(false);
             setDrag(null);
             setPrimitiveDraft(null);
           }}

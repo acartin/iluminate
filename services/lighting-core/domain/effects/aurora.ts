@@ -18,7 +18,7 @@ export const auroraEffect: EffectModule = {
       scale: { type: "number", label: "Scale", default: 1, min: 0.2, max: 6 }
     }
   },
-  render: ({ params, localTimeMs, pixel }) => {
+  render: ({ params, localTimeMs, pixel }, output = { r: 0, g: 0, b: 0 }) => {
     const base = parseColor(String(params.color ?? "#12FF8C"));
     const cool = parseColor(String(params.secondaryColor ?? "#0A6CFF"));
     const accent = parseColor(String(params.accentColor ?? "#B14BFF"));
@@ -48,13 +48,14 @@ export const auroraEffect: EffectModule = {
     // Green core, blue body, violet crowns that bloom toward white.
     const mix1 = clamp((rays - 0.5) * 1.8, 0, 1);
     const mix2 = clamp((rays - 0.7) * 3.0 + envelope * 0.25, 0, 1);
-    const color = mixColors(mixColors(base, cool, mix1), accent, mix2 * 0.8);
-    const shaded = mixColors(color, parseColor("#E8FFF4"), crest * 0.3);
+    mixColors(base, cool, mix1, output);
+    mixColors(output, accent, mix2 * 0.8, output);
+    mixColors(output, parseColor("#E8FFF4"), crest * 0.3, output);
 
     // Bright stars high in the night sky.
     const shimmer = smoothstep(0.9, 1, fbm(x * 16 - time * 1.4, y * 11 + time * 0.7)) * (1 - y);
 
     const glow = clamp(body * intensity * 1.6 + lowerEdge * 0.5 + crest * 0.18 + shimmer * 0.5, 0, 1);
-    return mixColors(background, shaded, glow);
+    return mixColors(background, output, glow, output);
   }
 };

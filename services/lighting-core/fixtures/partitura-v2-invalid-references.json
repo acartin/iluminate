@@ -1,0 +1,12 @@
+{
+  "schemaVersion": "partitura.v2",
+  "projectId": "fixture",
+  "sourceChecksum": "sha256:117b959bbef22c8409c0356651999e0d3163066ad3b815de1ac3d6c82901f54c",
+  "requiredCoreVersion": "1.0.0",
+  "defaultScene": "normal",
+  "outputs": [{ "id": "output_1", "name": "Output 1", "output": 1, "pixelCount": 1 }],
+  "pixelMap": [{ "index": 0, "id": "px_1_0", "output": 1, "serialIndex": 0, "stringId": "route", "routeOffsetCm": 0, "x": 0, "y": 0, "tangentDeg": 0, "normalizedX": 0, "normalizedY": 0 }],
+  "zones": [{ "id": "face", "name": "Face", "pixelIndices": [0] }],
+  "groups": [],
+  "scenes": [{ "id": "normal", "name": "Normal", "loop": true, "durationMs": 1, "tracks": [{ "id": "track", "name": "Track", "target": { "type": "zone", "id": "missing" }, "clips": [] }] }]
+}

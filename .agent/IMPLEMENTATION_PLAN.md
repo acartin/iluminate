@@ -189,7 +189,8 @@ UX direction after starting the Designer branch:
 
 ### Exit Criteria
 
-- [x] An external ESP32 firmware build can load an embedded `partitura.v1` fixture derived from this repo.
+- [ ] The external ESP32 firmware build loads and validates the `partitura.v2`
+  fixture derived from this repo; v1 spike evidence is not acceptance.
 - [ ] Changing timing/colors/zones requires partitura update only, not firmware rebuild.
 - [x] This repo remains the producer/validator of partitura artifacts; organized firmware source lives in the external PlatformIO repo.
 
@@ -271,7 +272,7 @@ UX direction after starting the Designer branch:
 - [ ] Simulate LEDs over the uploaded SVG/image.
 - [x] Make clips target canonical zones/groups resolved from pixelMap.
 - [x] Formalize effect coordinate space: `serial`, `local`, and `global`.
-- [x] Consolidate Animate light rendering in Pixi/WebGL and add persisted
+- [x] Consolidate Animate light rendering in one Worker/WebGL2 player and add persisted
   per-zone/channel, combinable Front, Halo-Lit and directional Wall Washer
   mounts; Front selects LED Pixels, Milky White or Day/Night material.
 - [x] Promote those mounts to named Light Sources with independent LED-string
@@ -306,7 +307,9 @@ concept into a private editable project.
 - [x] Publish initial concept projects transparently as `Iluminate Originals`, not customer case studies.
 - [x] Add `/projects` and initial interactive project detail pages.
 - [ ] Add `/templates` with versioned reusable starting points.
-- [ ] Extract the reusable read-only player/renderer into `services/simulator`.
+- [x] Consolidate the reusable read-only player/renderer under
+  `services/web/iluminate/components/lighting/player`; public interactive
+  embedding remains a separate future delivery.
 - [ ] Evaluate public preview frames in the browser instead of requesting one server frame per animation frame.
 - [ ] Add a restricted configurator for scene, palette, supported effects, speed and intensity.
 - [ ] Add `/learn`, `/learn/designer` and `/learn/animate` with curated YouTube tutorials.

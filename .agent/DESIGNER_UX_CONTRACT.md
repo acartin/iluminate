@@ -32,7 +32,9 @@ Canonical contents:
 
 - Back and document identity.
 - Design/Animate mode switch.
-- Designer-wide setup: units, canvas width/height, snap, Pixels/m and LEDs/m.
+- Designer-wide setup: canvas units/size/snap, CNC cutter diameter/unit, Pixels/m
+  and LEDs/m. Cutter units are independent from canvas units; the physical
+  diameter persists canonically in millimeters.
   These settings stay grouped under `Setup`; do not expand all of them into the
   bar.
 - Global view commands: rulers and fit-to-view.
@@ -75,8 +77,25 @@ With an object selected it shows:
 
 Examples:
 
-- Zone: Lighting, shape, position/size, selected-node fields.
-- Channel: Lighting, width, open/closed path, ends, node and fillet fields.
+- Zone: shape, position/size and selected-node fields.
+- Channel: router-bit diameter, open/closed path, ends and node type. Channel
+  node coordinates stay off the contextual bar. When a corner node is selected,
+  one numeric `Fillet` field in millimeters edits that node directly and redraws
+  the center trace immediately. There is no separate activation mode, passive
+  Fillet badge, Setup Fillet setting or Channel-specific `Round corner` command.
+- Active Channel tool: one router-bit selector containing common metric and
+  fractional-inch diameters; every option shows both units. The diameter is the
+  live trace width and the width of the created channel. Millimeters remain the
+  canonical stored value.
+  New open channels use round ends with an implicit radius of half that
+  diameter; a flat end remains an explicit per-channel choice.
+  The allowed center-line radius is half the router-bit diameter. A tight curve
+  keeps its normal channel styling and receives a local red marker showing the
+  measured and required radii. Bezier handles remain freely draggable;
+  validation is guidance rather than a drag constraint and exposes no automatic
+  adjustment command. An intentional
+  corner/straight discontinuity is machinable and is excluded from continuous-
+  curve radius warnings; the designer may apply the shared `Fillet` explicitly.
 - Artwork/reference: position, size, shape and node fields.
 - Route: route type and editing actions.
 - Controller: position and port count.
@@ -128,11 +147,12 @@ exists. The layer/object eye and opacity remain Design presentation controls
 and must not change the physical preview. `LED map` is the explicit raw,
 unfiltered diagnostic view. Halo and Wall Wash are always outside this pass.
 
-Reference, Diffusors and Face Graphic each expose the same Text tool. Clicking
-places an editable text object in the active category. Text remains selectable
-and movable, and its contextual fields support single-line/basic multiline
-content, controlled Iluminate Sans regular/bold, size, tracking, line height and
-alignment. Never expose an arbitrary browser/OS font picker.
+Reference, Diffusors and Face Graphic do not expose a Text creation tool. The
+controlled text implementation remains available underneath for compatibility
+with existing documents: persisted text remains selectable and movable, and
+its contextual fields support single-line/basic multiline content, controlled
+Iluminate Sans regular/bold, size, tracking, line height and alignment. Never
+expose an arbitrary browser/OS font picker.
 
 `Convert to paths` is a contextual command. It verifies the controlled font
 resource and replaces the text with a native compound Bezier profile in one
@@ -160,12 +180,17 @@ remain visibly empty and must not receive canvas hits or zone pixels. The whole
 profile may be moved/resized; direct node editing across individual contours is
 not part of phase 5.
 
-`Offset Path` and `Fillet` are contextual object commands, not rail modes. They
-are available for native, projected or derived geometric profiles and create a
-new amber live result in the same target layer. Offset distance is signed and
-uses millimeters; joins are Round, Miter or Bevel, with a Miter Limit only when
-applicable. Fillet uses a millimeter radius and either `all` or a one-based,
-comma-separated corner list. Parameter edits recalculate immediately.
+`Offset Path` and whole-profile `Fillet` are contextual object commands, not
+permanent rail modes. Each creates a new amber live result in the same target
+layer. Offset distance is signed and uses millimeters, with Round, Miter or
+Bevel joins and a Miter Limit only when applicable. A live Fillet result exposes
+its radius and corner selection in the same contextual bar and recalculates
+immediately when either changes. Channels are the semantic center-line
+exception: select a canonical Channel corner node and edit its inline `Fillet`
+radius directly. The Channel redraws on every numeric change, preserves the
+original anchor and creates no derived profile. A zero radius removes the
+fillet. Neither workflow takes its radius from the cutter or router-bit
+diameter.
 
 The Layers panel shows derived profiles in their persisted target category.
 Broken, cyclic, collapsed and invalid-topology results remain selectable and
@@ -210,6 +235,10 @@ Category activation must be immediate and deterministic:
   geometry, property, delete or drawing mutation is allowed. The contextual
   bar must identify the selection as `Locked · inspect only`. Lock means
   immutable, not invisible and not uninspectable.
+- Zone and Channel rows are ordered front-to-back: the first row is the topmost
+  object and wins selection when objects of the same kind overlap. Channels
+  are foreground diffuser paths and therefore win over an overlapping Zone.
+  Dragging a row changes this persisted drawing and hit-test order.
 
 Canvas selection and Layers navigation are one synchronized state:
 
@@ -284,19 +313,8 @@ large `Lighting`/`Lighting Sources` modal button back into the contextual bar.
 Zone/channel rows omit duplicated geometry descriptions already available in
 the contextual bar.
 
-When a zone or channel is selected, the contextual bar uses compact status
-icons only:
-
-- mounting icons for configured Front, Halo-Lit and Wall Washer setups;
-- a material icon for the Front installation (`LED Pixels`, `Silicone Strip`,
-  `Milky White` or `Day/Night`);
-- an incomplete-warning icon when a setup is enabled but has no LED string;
-- `No lighting setup` when no enabled setup exists.
-
-A setup counts as configured only when it is enabled and has at least one LED
-string. Persisted placeholder/migration records must not appear as real
-installations merely because an array entry exists. Every icon requires an
-accessible label/tooltip; icon shape alone is not the domain contract.
+Lighting status and setup remain in the panel. The contextual bar does not
+repeat lighting modes, materials, incomplete states or an empty-state legend.
 
 ## Placement Test For New Controls
 

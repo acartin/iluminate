@@ -1,5 +1,6 @@
 FROM node:20-alpine AS deps
 WORKDIR /app/services/web/iluminate
+COPY services/lighting-core /app/services/lighting-core
 COPY services/web/iluminate/package.json services/web/iluminate/package-lock.json* ./
 RUN npm ci
 
@@ -9,6 +10,10 @@ ENV NEXT_TELEMETRY_DISABLED=1
 COPY --from=deps /app/services/web/iluminate/node_modules ./node_modules
 COPY services/lighting-core /app/services/lighting-core
 RUN cd /app/services/lighting-core && npm ci && npm run build
+RUN cd /app/services/lighting-core && npm pack --pack-destination /tmp \
+  && unlink /app/services/web/iluminate/node_modules/@iluminate/lighting-core \
+  && mkdir /app/services/web/iluminate/node_modules/@iluminate/lighting-core \
+  && tar -xzf /tmp/iluminate-lighting-core-1.0.0.tgz --strip-components=1 -C /app/services/web/iluminate/node_modules/@iluminate/lighting-core
 COPY services/web/iluminate .
 RUN npm test
 RUN npm run build

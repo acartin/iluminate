@@ -20,7 +20,8 @@ export type DesignerContour = {
   closed: true;
 };
 
-export const DESIGNER_SCHEMA_VERSION = 2 as const;
+export const DESIGNER_SCHEMA_VERSION = 9 as const;
+export const DEFAULT_CHANNEL_ROUTER_DIAMETER_MM = 10;
 
 /**
  * Canonical, layer-agnostic vector geometry. Semantic objects reference one of
@@ -272,7 +273,7 @@ export type DesignerBuildAreaForm = {
 };
 
 export type DesignerForm = {
-  /** Missing on legacy documents; normalization always writes version 2. */
+  /** Missing on legacy documents; normalization always writes the current version. */
   designerSchemaVersion?: typeof DESIGNER_SCHEMA_VERSION;
   /** Canonical vector source of truth from schema version 2 onward. */
   geometries?: DesignerGeometry[];
@@ -286,6 +287,14 @@ export type DesignerForm = {
   ledDensityPerMeter: number;
   snapCm: number;
   rulerUnit: "cm" | "in";
+  /** Nominal CNC cutter diameter retained as fabrication guidance. */
+  fabricationCutterDiameterMm: number;
+  /** Preferred display/input unit; the persisted physical value remains millimeters. */
+  fabricationCutterUnit: "mm" | "in" | "cm";
+  /** Transitional schema-9 Fillet value retained only for saved-document compatibility. */
+  filletRadiusMm: number;
+  /** Router-bit diameter used as the width of newly traced neon-flex channels. */
+  channelRouterDiameterMm: number;
   rulerVisible: boolean;
   sourceSvg: string | null;
   layers: DesignerLayersForm;
@@ -518,6 +527,10 @@ export function createDefaultDesigner(): DesignerForm {
     ledDensityPerMeter: 60,
     snapCm: 2,
     rulerUnit: "cm",
+    fabricationCutterDiameterMm: 3.175,
+    fabricationCutterUnit: "mm",
+    filletRadiusMm: 3.175,
+    channelRouterDiameterMm: DEFAULT_CHANNEL_ROUTER_DIAMETER_MM,
     rulerVisible: true,
     sourceSvg: null,
     layers: defaultDesignerLayers(),
@@ -621,6 +634,10 @@ function normalizeDesigner(designer?: DesignerForm, compiledLayout?: PartituraDo
     ledDensityPerMeter: positiveNumber(designer.addressablePixelsPerMeter ?? designer.ledDensityPerMeter, fallback.ledDensityPerMeter),
     snapCm: nonNegativeNumber(designer.snapCm, fallback.snapCm),
     rulerUnit: designer.rulerUnit === "in" ? "in" : "cm",
+    fabricationCutterDiameterMm: positiveNumber(designer.fabricationCutterDiameterMm, fallback.fabricationCutterDiameterMm),
+    fabricationCutterUnit: designer.fabricationCutterUnit === "in" || designer.fabricationCutterUnit === "cm" ? designer.fabricationCutterUnit : "mm",
+    filletRadiusMm: positiveNumber(designer.filletRadiusMm, positiveNumber(designer.fabricationCutterDiameterMm, fallback.fabricationCutterDiameterMm) / 2),
+    channelRouterDiameterMm: Math.max(3, Math.min(20, positiveNumber(designer.channelRouterDiameterMm, fallback.channelRouterDiameterMm))),
     rulerVisible: typeof designer.rulerVisible === "boolean" ? designer.rulerVisible : fallback.rulerVisible,
     sourceSvg: typeof designer.sourceSvg === "string" ? designer.sourceSvg : null,
     layers: normalizeDesignerLayers(designer.layers, fallback.layers),

@@ -607,9 +607,10 @@ El MVP no necesita un formato binario ni CBOR. Se comienza con JSON versionado.
 - Next.js.
 - React y TypeScript.
 - PostgreSQL como base de datos relacional objetivo.
-- React Konva para el canvas de autoría.
+- Paper.js sobre canvas para el Designer vectorial actual.
 - Timeline en React/HTML; se puede evaluar `@xzdarcy/react-timeline-editor` para prototipado o construir una capa propia con `interact.js`.
-- PixiJS para simulación acelerada cuando Konva deje de ser suficiente.
+- Worker dedicado más WebGL2 persistente para el player y render headless con
+  el mismo contrato `player-bundle.v1`.
 - Zustand o estado equivalente con patrón de comandos y `undo/redo`.
 - Zod como esquema y validación compartida de TypeScript/JSON.
 - Almacenamiento S3 compatible, por ejemplo MinIO, para fotografías, renders y otros activos.

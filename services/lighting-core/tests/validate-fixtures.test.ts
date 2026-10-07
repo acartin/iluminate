@@ -1,14 +1,14 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Partitura, renderSceneFrame, simulateWs2812bFrame, validatePartitura } from "../index.js";
+import { Partitura, createFrameBuffer, preparePartituraRuntime, renderFrameInto, renderSceneFrame, simulateWs2812bFrame, validatePartitura } from "../index.js";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const root = join(here, "..", "..");
 
-const valid = readFixture("partitura-v1-minimal.json");
-const invalidOutput = readFixture("partitura-v1-invalid-output.json");
-const invalidReferences = readFixture("partitura-v1-invalid-references.json");
+const valid = readFixture("partitura-v2-minimal.json");
+const invalidOutput = readFixture("partitura-v2-invalid-output.json");
+const invalidReferences = readFixture("partitura-v2-invalid-references.json");
 
 assert(validatePartitura(valid).ok, "minimal fixture should validate");
 assert(!validatePartitura(invalidOutput).ok, "invalid output fixture should fail");
@@ -44,12 +44,30 @@ assert(
 );
 
 const wsFrame = simulateWs2812bFrame(valid, "normal", 1000);
-assert(wsFrame.outputs.length === 1, "WS2812B simulator should produce declared outputs");
+assert(wsFrame.outputs.length === 3, "WS2812B simulator should produce all three declared logical outputs");
 assert(wsFrame.outputs[0].pixels.length === 3, "output 1 should include all pixels");
 assert(wsFrame.outputs[0].pixels[0].grb.length === 3, "WS2812B pixels should expose GRB transport order");
 assert(wsFrame.estimatedMaxRefreshRateFps > 0, "WS2812B simulator should estimate refresh rate");
 
-console.log("lighting-core fixtures validated");
+const runtime = preparePartituraRuntime(valid);
+const reusable = createFrameBuffer(runtime);
+const firstResult = renderFrameInto(runtime, "normal", 250, reusable);
+const firstBuffer = firstResult.colors;
+const secondResult = renderFrameInto(runtime, "normal", 500, reusable);
+const secondBuffer = secondResult.colors;
+assert(firstBuffer === reusable && secondBuffer === reusable, "compiled runtime must reuse the caller-owned RGB buffer");
+assert(firstResult === secondResult, "compiled runtime must reuse its frame result object");
+assert(secondBuffer.length === valid.pixelMap.length * 3, "compiled runtime must emit exactly three bytes per pixel");
+
+const stressStartedAt = performance.now();
+for (let frameIndex = 0; frameIndex < 10_000; frameIndex += 1) {
+  const stressResult = renderFrameInto(runtime, "normal", frameIndex, reusable);
+  assert(stressResult === firstResult && stressResult.colors === reusable, "stress playback must keep stable frame and buffer identities");
+}
+const stressElapsedMs = performance.now() - stressStartedAt;
+assert(stressElapsedMs < 5_000, `10,000-frame core stress loop exceeded 5 seconds (${Math.round(stressElapsedMs)} ms)`);
+
+console.log(`lighting-core fixtures validated; 10,000-frame stress=${Math.round(stressElapsedMs)}ms`);
 
 function readFixture(name: string): Partitura {
   return JSON.parse(readFileSync(join(root, "fixtures", name), "utf8")) as Partitura;

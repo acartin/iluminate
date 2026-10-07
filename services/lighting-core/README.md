@@ -13,7 +13,7 @@ This service owns:
 - clips
 - effects catalog contracts
 - partitura schemas and validation
-- single editable partitura per project
+- multiple independently editable partituras per project, with one active deployment target
 - controller-facing deployment payloads
 - deterministic simulator contracts
 
@@ -21,7 +21,9 @@ It may contain an API under `api/`, pure domain logic under `domain/`, schemas u
 
 Persistent records owned by lighting-core are multitenant by design. Projects, controllers, partituras, deployments, device commands and status records must be scoped by the trusted `client_id` context provided by auth or device identity.
 
-Each project owns one current partitura. Iluminate does not model partitura revisions or version history; duplicating a partitura creates a separate partitura record instead of another revision of the same one.
+Iluminate does not model partitura revisions or version history. Duplicating a
+partitura creates a separate record; a project selects one active partitura for
+deployment.
 
 ## Effect Targeting Boundary
 
@@ -47,21 +49,21 @@ Lighting-core validators should treat outputs outside `1`, `2` and `3` as invali
 
 ## Current Package Surface
 
-The initial TypeScript package exports:
+The TypeScript package exports:
 
-- `generatePartitura`: builds a normalized `partitura.v1` document from a configuration command.
+- `generatePartitura`: builds a normalized `partitura.v2` document from a configuration command.
 - `validatePartitura`: returns deterministic, human-readable validation issues.
 - `effectCatalog`: declares the first supported compiled-core effect identifiers.
-- `renderSceneFrame`: basic deterministic scene renderer for web simulation and firmware parity checks.
+- `preparePartituraRuntime`, `createFrameBuffer` and `renderFrameInto`: compile
+  lookup tables once and render deterministic RGB frames into caller-owned
+  typed arrays without steady-state allocations.
+- `renderSceneFrame`: compatibility convenience for non-realtime callers.
 - `simulateWs2812bFrame`: WS2812B-like output simulator with per-output buffers, GRB transport order and estimated refresh timing.
+- `VisualSceneV1` and `PlayerBundleManifestV1`: immutable browser/video render
+  contracts kept separate from firmware data.
 
-The first supported effect identifiers are:
-
-- `off`
-- `solid`
-- `fade`
-- `pulse`
-- `chase`
+Supported effect identifiers are declared by `effectCatalog`; fixture and
+runtime validation reject unknown effects.
 
 Fixtures live in `fixtures/` and are intended to be reused by the web simulator and the external firmware interpreter.
 

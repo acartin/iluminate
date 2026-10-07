@@ -51,18 +51,219 @@ export function filletDesignerGeometry(
   const radiusCm = Math.max(0, radiusMm) / 10;
   const contours = geometryContours(source);
   if (!contours.length || radiusCm < 1e-7) return { geometry: cloneGeometry(source, resultId), issue: null, warnings: [] };
+  if (source.kind === "ellipse") return { geometry: cloneGeometry(source, resultId), issue: null, warnings: ["Ellipses have no discrete corners to fillet."] };
   const warnings = new Set<string>();
   let flatCornerIndex = 0;
   const selected = cornerIndices?.length ? new Set(cornerIndices.map((index) => Math.max(0, Math.round(index)))) : null;
   const resultContours = contours.map((contour) => {
-    const points = flattenContour(contour, source.closed !== false);
-    const filleted = filletPolyline(points, source.closed !== false, radiusCm, selected, () => flatCornerIndex++, warnings);
-    return { points: filleted, pathMode: "straight" as const, closed: true as const };
+    const closed = source.closed !== false;
+    const contourStartIndex = flatCornerIndex;
+    flatCornerIndex += contour.points.length;
+    const selectedLocalIndices = selected
+      ? Array.from(selected).filter((index) => index >= contourStartIndex && index < flatCornerIndex).map((index) => index - contourStartIndex)
+      : [];
+    const curvedSelection = selectedLocalIndices.length === 1 && cornerHasCurvedSegment(contour.points, selectedLocalIndices[0], closed);
+    const filleted = curvedSelection
+      ? filletBezierCorner(contour.points, selectedLocalIndices[0], closed, radiusCm, contourStartIndex + selectedLocalIndices[0], warnings)
+      : filletContour(contour, closed, radiusCm, selected, (() => { let index = contourStartIndex; return () => index++; })(), warnings);
+    return {
+      points: filleted,
+      pathMode: filleted.some((point) => point.handleIn || point.handleOut) ? "bezier" as const : contour.pathMode,
+      closed: true as const
+    };
   });
-  if (resultContours.some((contour) => contour.points.length < 3 || polylineSelfIntersects(contour.points, source.closed !== false))) {
+  const closed = source.closed !== false;
+  if (resultContours.some((contour) => contour.points.length < (closed ? 3 : 2) || polylineSelfIntersects(flattenContour(contour, closed), closed))) {
     return { geometry: null, issue: "invalid-topology", warnings: [...Array.from(warnings), "Fillet produced invalid topology."] };
   }
   return { geometry: geometryFromContours(resultId, resultContours, source.closed !== false), issue: null, warnings: Array.from(warnings) };
+}
+
+/** Structural eligibility only; the configured radius is validated when the operator clicks. */
+export function designerFilletCornerIsEligible(source: DesignerGeometry, cornerIndex: number) {
+  if (source.kind === "ellipse" || source.contours && source.contours.length > 1) return false;
+  if (source.kind === "rect") return cornerIndex >= 0 && cornerIndex < 4;
+  const points = source.points ?? [];
+  const closed = source.closed !== false;
+  if (cornerIndex < 0 || cornerIndex >= points.length || !closed && (cornerIndex === 0 || cornerIndex === points.length - 1)) return false;
+  const previous = points[(cornerIndex - 1 + points.length) % points.length];
+  const point = points[cornerIndex];
+  const next = points[(cornerIndex + 1) % points.length];
+  const incoming = cornerHasCurvedSegment(points, cornerIndex, closed)
+    ? stableCubicTangent(cubicForSegment(previous, point), true)
+    : normalize(subtract(point, previous));
+  const outgoing = cornerHasCurvedSegment(points, cornerIndex, closed)
+    ? stableCubicTangent(cubicForSegment(point, next), false)
+    : normalize(subtract(next, point));
+  const turn = Math.acos(clamp(dot(incoming, outgoing), -1, 1));
+  return turn >= 1e-3 && Math.PI - turn >= 1e-3;
+}
+
+function cornerHasCurvedSegment(points: DesignerPoint[], index: number, closed: boolean) {
+  if (!closed && (index === 0 || index === points.length - 1)) return false;
+  const previous = points[(index - 1 + points.length) % points.length];
+  const point = points[index];
+  const next = points[(index + 1) % points.length];
+  return Boolean(previous.handleOut || point.handleIn || point.handleOut || next.handleIn);
+}
+
+function filletBezierCorner(points: DesignerPoint[], index: number, closed: boolean, radius: number, cornerIndex: number, warnings: Set<string>) {
+  if (!closed && (index === 0 || index === points.length - 1)) return points.map(clonePoint);
+  const previousIndex = (index - 1 + points.length) % points.length;
+  const nextIndex = (index + 1) % points.length;
+  const incoming = cubicForSegment(points[previousIndex], points[index]);
+  const outgoing = cubicForSegment(points[index], points[nextIndex]);
+  const incomingTangent = stableCubicTangent(incoming, true);
+  const outgoingTangent = stableCubicTangent(outgoing, false);
+  const turn = Math.acos(clamp(dot(incomingTangent, outgoingTangent), -1, 1));
+  if (turn < 1e-3 || Math.PI - turn < 1e-3) {
+    warnings.add(`Fillet ${cornerIndex + 1} was skipped because its Bezier tangents do not form a usable corner.`);
+    return points.map(clonePoint);
+  }
+  const cross = incomingTangent.x * outgoingTangent.y - incomingTangent.y * outgoingTangent.x;
+  let effectiveRadius = radius;
+  let solution = solveBezierFillet(incoming, outgoing, effectiveRadius, cross >= 0 ? 1 : -1, turn);
+  if (!solution) {
+    let lowerRadius = 0;
+    let upperRadius = radius;
+    for (let iteration = 0; iteration < 24; iteration += 1) {
+      const candidateRadius = (lowerRadius + upperRadius) / 2;
+      const candidate = solveBezierFillet(incoming, outgoing, candidateRadius, cross >= 0 ? 1 : -1, turn);
+      if (candidate) {
+        lowerRadius = candidateRadius;
+        effectiveRadius = candidateRadius;
+        solution = candidate;
+      } else {
+        upperRadius = candidateRadius;
+      }
+    }
+    if (!solution || effectiveRadius < 1e-5) {
+      warnings.add(`Fillet ${cornerIndex + 1} was skipped because no usable radius fits the adjacent Bezier segments.`);
+      return points.map(clonePoint);
+    }
+    warnings.add(`Fillet ${cornerIndex + 1} was clamped to fit its neighboring legs.`);
+  }
+
+  const incomingSplit = splitCubic(incoming, solution.incomingT);
+  const outgoingSplit = splitCubic(outgoing, solution.outgoingT);
+  const result = points.map(clonePoint);
+  result[previousIndex] = withHandle(result[previousIndex], "handleOut", subtract(incomingSplit.left[1], incomingSplit.left[0]));
+  result[nextIndex] = withHandle(result[nextIndex], "handleIn", subtract(outgoingSplit.right[2], outgoingSplit.right[3]));
+  const arc = bezierArcPoints(solution.center, incomingSplit.left[3], outgoingSplit.right[0], cross >= 0 ? 1 : -1);
+  arc[0] = withHandle(arc[0], "handleIn", subtract(incomingSplit.left[2], incomingSplit.left[3]));
+  arc[arc.length - 1] = withHandle(arc[arc.length - 1], "handleOut", subtract(outgoingSplit.right[1], outgoingSplit.right[0]));
+  result.splice(index, 1, ...arc);
+  return result;
+}
+
+type Cubic = [DesignerPoint, DesignerPoint, DesignerPoint, DesignerPoint];
+
+function cubicForSegment(start: DesignerPoint, end: DesignerPoint): Cubic {
+  return [
+    { x: start.x, y: start.y },
+    start.handleOut ? add(start, start.handleOut) : { x: start.x, y: start.y },
+    end.handleIn ? add(end, end.handleIn) : { x: end.x, y: end.y },
+    { x: end.x, y: end.y }
+  ];
+}
+
+function stableCubicTangent(cubic: Cubic, atEnd: boolean) {
+  const samples = atEnd ? [1, 0.999, 0.99, 0.9] : [0, 0.001, 0.01, 0.1];
+  for (const sample of samples) {
+    const tangent = cubicDerivative(cubic, sample);
+    if (Math.hypot(tangent.x, tangent.y) > 1e-8) return normalize(tangent);
+  }
+  return normalize(subtract(cubic[3], cubic[0]));
+}
+
+function solveBezierFillet(incoming: Cubic, outgoing: Cubic, radius: number, side: number, turn: number) {
+  const tangentDistance = radius * Math.tan(turn / 2);
+  let incomingT = parameterAtDistance(incoming, tangentDistance, true);
+  let outgoingT = parameterAtDistance(outgoing, tangentDistance, false);
+  const offsetPoint = (cubic: Cubic, t: number) => {
+    const point = cubicPointOnCubic(cubic, t);
+    const tangent = stableDerivativeAt(cubic, t);
+    const normal = { x: -tangent.y * side, y: tangent.x * side };
+    return add(point, scale(normal, radius));
+  };
+  for (let iteration = 0; iteration < 24; iteration += 1) {
+    const incomingCenter = offsetPoint(incoming, incomingT);
+    const outgoingCenter = offsetPoint(outgoing, outgoingT);
+    const error = subtract(incomingCenter, outgoingCenter);
+    if (Math.hypot(error.x, error.y) < 1e-6) {
+      return { incomingT, outgoingT, center: scale(add(incomingCenter, outgoingCenter), 0.5) };
+    }
+    const step = 1e-4;
+    const incomingNext = offsetPoint(incoming, clamp(incomingT + step, 0.0001, 0.9999));
+    const outgoingNext = offsetPoint(outgoing, clamp(outgoingT + step, 0.0001, 0.9999));
+    const a = scale(subtract(incomingNext, incomingCenter), 1 / step);
+    const b = scale(subtract(outgoingCenter, outgoingNext), 1 / step);
+    const determinant = a.x * b.y - a.y * b.x;
+    if (Math.abs(determinant) < 1e-10) break;
+    const incomingDelta = (-error.x * b.y + error.y * b.x) / determinant;
+    const outgoingDelta = (-a.x * error.y + a.y * error.x) / determinant;
+    incomingT = clamp(incomingT + incomingDelta, 0.0001, 0.9999);
+    outgoingT = clamp(outgoingT + outgoingDelta, 0.0001, 0.9999);
+  }
+  const incomingCenter = offsetPoint(incoming, incomingT);
+  const outgoingCenter = offsetPoint(outgoing, outgoingT);
+  if (Math.hypot(incomingCenter.x - outgoingCenter.x, incomingCenter.y - outgoingCenter.y) > 1e-4) return null;
+  return { incomingT, outgoingT, center: scale(add(incomingCenter, outgoingCenter), 0.5) };
+}
+
+function parameterAtDistance(cubic: Cubic, requestedDistance: number, fromEnd: boolean) {
+  const samples = Array.from({ length: 65 }, (_, index) => cubicPointOnCubic(cubic, index / 64));
+  let distance = 0;
+  for (let offset = 1; offset < samples.length; offset += 1) {
+    const currentIndex = fromEnd ? samples.length - 1 - offset : offset;
+    const previousIndex = fromEnd ? currentIndex + 1 : currentIndex - 1;
+    const segment = distanceBetween(samples[previousIndex], samples[currentIndex]);
+    if (distance + segment >= requestedDistance) {
+      const fraction = segment > 1e-9 ? (requestedDistance - distance) / segment : 0;
+      const sampleIndex = fromEnd ? previousIndex - fraction : previousIndex + fraction;
+      return clamp(sampleIndex / 64, 0.0001, 0.9999);
+    }
+    distance += segment;
+  }
+  return fromEnd ? 0.0001 : 0.9999;
+}
+
+function splitCubic(cubic: Cubic, t: number): { left: Cubic; right: Cubic } {
+  const p01 = lerp(cubic[0], cubic[1], t);
+  const p12 = lerp(cubic[1], cubic[2], t);
+  const p23 = lerp(cubic[2], cubic[3], t);
+  const p012 = lerp(p01, p12, t);
+  const p123 = lerp(p12, p23, t);
+  const point = lerp(p012, p123, t);
+  return { left: [cubic[0], p01, p012, point], right: [point, p123, p23, cubic[3]] };
+}
+
+function cubicPointOnCubic(cubic: Cubic, t: number) {
+  const inverse = 1 - t;
+  return {
+    x: inverse ** 3 * cubic[0].x + 3 * inverse ** 2 * t * cubic[1].x + 3 * inverse * t ** 2 * cubic[2].x + t ** 3 * cubic[3].x,
+    y: inverse ** 3 * cubic[0].y + 3 * inverse ** 2 * t * cubic[1].y + 3 * inverse * t ** 2 * cubic[2].y + t ** 3 * cubic[3].y
+  };
+}
+
+function cubicDerivative(cubic: Cubic, t: number) {
+  const inverse = 1 - t;
+  return {
+    x: 3 * inverse ** 2 * (cubic[1].x - cubic[0].x) + 6 * inverse * t * (cubic[2].x - cubic[1].x) + 3 * t ** 2 * (cubic[3].x - cubic[2].x),
+    y: 3 * inverse ** 2 * (cubic[1].y - cubic[0].y) + 6 * inverse * t * (cubic[2].y - cubic[1].y) + 3 * t ** 2 * (cubic[3].y - cubic[2].y)
+  };
+}
+
+function stableDerivativeAt(cubic: Cubic, t: number) {
+  const derivative = cubicDerivative(cubic, t);
+  if (Math.hypot(derivative.x, derivative.y) > 1e-8) return normalize(derivative);
+  return normalize(subtract(cubicPointOnCubic(cubic, clamp(t + (t < 0.5 ? 0.001 : -0.001), 0, 1)), cubicPointOnCubic(cubic, t)));
+}
+
+function bezierArcPoints(center: DesignerPoint, start: DesignerPoint, end: DesignerPoint, direction: number) {
+  const result: DesignerPoint[] = [];
+  appendBezierArc(result, center, start, end, direction);
+  return result;
 }
 
 function geometryContours(geometry: DesignerGeometry): DesignerContour[] {
@@ -137,21 +338,33 @@ function appendRoundJoin(result: DesignerPoint[], center: DesignerPoint, start: 
   }
 }
 
-function filletPolyline(points: DesignerPoint[], closed: boolean, radius: number, selected: Set<number> | null, nextIndex: () => number, warnings: Set<string>) {
+function filletContour(contour: DesignerContour, closed: boolean, radius: number, selected: Set<number> | null, nextIndex: () => number, warnings: Set<string>) {
+  const points = contour.points;
   const result: DesignerPoint[] = [];
   points.forEach((point, index) => {
     const cornerIndex = nextIndex();
     const endpoint = !closed && (index === 0 || index === points.length - 1);
-    if (endpoint || selected && !selected.has(cornerIndex)) { result.push(point); return; }
+    if (endpoint || selected && !selected.has(cornerIndex)) { result.push(clonePoint(point)); return; }
     const previous = points[(index - 1 + points.length) % points.length];
     const next = points[(index + 1) % points.length];
+    const curvedIncoming = Boolean(previous.handleOut || point.handleIn);
+    const curvedOutgoing = Boolean(point.handleOut || next.handleIn);
+    if (curvedIncoming || curvedOutgoing) {
+      warnings.add(`Fillet ${cornerIndex + 1} was skipped because an adjacent segment is already curved.`);
+      result.push(clonePoint(point));
+      return;
+    }
     const incomingLength = distanceBetween(previous, point);
     const outgoingLength = distanceBetween(point, next);
-    if (incomingLength < 1e-6 || outgoingLength < 1e-6) { result.push(point); return; }
+    if (incomingLength < 1e-6 || outgoingLength < 1e-6) { result.push(clonePoint(point)); return; }
     const incoming = { x: (point.x - previous.x) / incomingLength, y: (point.y - previous.y) / incomingLength };
     const outgoing = { x: (next.x - point.x) / outgoingLength, y: (next.y - point.y) / outgoingLength };
     const turn = Math.acos(clamp(incoming.x * outgoing.x + incoming.y * outgoing.y, -1, 1));
-    if (turn < 1e-4 || Math.PI - turn < 1e-4) { result.push(point); return; }
+    if (turn < 1e-4 || Math.PI - turn < 1e-4) {
+      warnings.add(`Fillet ${cornerIndex + 1} was skipped because it is not a usable corner.`);
+      result.push(clonePoint(point));
+      return;
+    }
     const requestedTangent = radius * Math.tan(turn / 2);
     const tangent = Math.min(requestedTangent, incomingLength * 0.499, outgoingLength * 0.499);
     if (tangent < requestedTangent - 1e-6) warnings.add(`Fillet ${cornerIndex + 1} was clamped to fit its neighboring legs.`);
@@ -161,41 +374,64 @@ function filletPolyline(points: DesignerPoint[], closed: boolean, radius: number
     const bisector = normalize({ x: -incoming.x + outgoing.x, y: -incoming.y + outgoing.y });
     const center = add(point, scale(bisector, effectiveRadius / Math.sin((Math.PI - turn) / 2)));
     const cross = incoming.x * outgoing.y - incoming.y * outgoing.x;
-    appendArc(result, center, start, end, cross >= 0 ? 1 : -1);
+    appendBezierArc(result, center, start, end, cross >= 0 ? 1 : -1);
   });
-  return dedupeSequentialPoints(result);
+  return result;
 }
 
-function appendArc(result: DesignerPoint[], center: DesignerPoint, start: DesignerPoint, end: DesignerPoint, direction: number) {
+function appendBezierArc(result: DesignerPoint[], center: DesignerPoint, start: DesignerPoint, end: DesignerPoint, direction: number) {
   const radius = distanceBetween(center, start);
   const startAngle = Math.atan2(start.y - center.y, start.x - center.x);
   let sweep = Math.atan2(end.y - center.y, end.x - center.x) - startAngle;
   if (direction >= 0) while (sweep < 0) sweep += Math.PI * 2;
   else while (sweep > 0) sweep -= Math.PI * 2;
   if (Math.abs(sweep) > Math.PI) sweep -= Math.sign(sweep) * Math.PI * 2;
-  const steps = Math.max(3, Math.ceil(Math.abs(sweep) / (Math.PI / 18)));
-  for (let step = 0; step <= steps; step += 1) {
-    const angle = startAngle + sweep * step / steps;
-    result.push({ x: center.x + Math.cos(angle) * radius, y: center.y + Math.sin(angle) * radius });
+  const segmentCount = Math.max(1, Math.ceil(Math.abs(sweep) / (Math.PI / 2)));
+  const segmentSweep = sweep / segmentCount;
+  for (let segment = 0; segment < segmentCount; segment += 1) {
+    const fromAngle = startAngle + segmentSweep * segment;
+    const toAngle = fromAngle + segmentSweep;
+    const handleLength = 4 / 3 * Math.tan(segmentSweep / 4) * radius;
+    const from = { x: center.x + Math.cos(fromAngle) * radius, y: center.y + Math.sin(fromAngle) * radius };
+    const to = { x: center.x + Math.cos(toAngle) * radius, y: center.y + Math.sin(toAngle) * radius };
+    const fromHandleOut = { x: -Math.sin(fromAngle) * handleLength, y: Math.cos(fromAngle) * handleLength };
+    const toHandleIn = { x: Math.sin(toAngle) * handleLength, y: -Math.cos(toAngle) * handleLength };
+    if (segment === 0) result.push({ ...from, handleOut: fromHandleOut, nodeType: "smooth" });
+    else result[result.length - 1] = { ...result[result.length - 1], handleOut: fromHandleOut, nodeType: "smooth" };
+    result.push({ ...to, handleIn: toHandleIn, nodeType: "smooth" });
   }
 }
 
 function geometryFromContours(id: string, contours: DesignerContour[], closed: boolean): DesignerGeometry {
-  const points = contours.flatMap((contour) => contour.points);
+  const points = contours.flatMap((contour) => contour.points.flatMap((point) => [
+    point,
+    ...(point.handleIn ? [{ x: point.x + point.handleIn.x, y: point.y + point.handleIn.y }] : []),
+    ...(point.handleOut ? [{ x: point.x + point.handleOut.x, y: point.y + point.handleOut.y }] : [])
+  ]));
   const xs = points.map((point) => point.x);
   const ys = points.map((point) => point.y);
   const x = Math.min(...xs);
   const y = Math.min(...ys);
-  return { id, kind: "path", x, y, width: Math.max(0.001, Math.max(...xs) - x), height: Math.max(0.001, Math.max(...ys) - y), points: contours[0].points, ...(contours.length > 1 ? { contours } : {}), pathMode: "straight", closed, fillRule: "evenodd" };
+  return { id, kind: "path", x, y, width: Math.max(0.001, Math.max(...xs) - x), height: Math.max(0.001, Math.max(...ys) - y), points: contours[0].points, ...(contours.length > 1 ? { contours } : {}), pathMode: contours.some((contour) => contour.pathMode === "bezier") ? "bezier" : "straight", closed, fillRule: "evenodd" };
 }
 
 function cloneGeometry(source: DesignerGeometry, id: string): DesignerGeometry {
   return { ...source, id, points: source.points?.map(clonePoint), contours: source.contours?.map((contour) => ({ ...contour, points: contour.points.map(clonePoint) })) };
 }
 
-function clonePoint(point: DesignerPoint) { return { ...point, handleIn: point.handleIn ? { ...point.handleIn } : undefined, handleOut: point.handleOut ? { ...point.handleOut } : undefined }; }
+function clonePoint(point: DesignerPoint) { return { ...point, ...(point.handleIn ? { handleIn: { ...point.handleIn } } : {}), ...(point.handleOut ? { handleOut: { ...point.handleOut } } : {}) }; }
 function add(a: DesignerPoint, b: DesignerPoint) { return { x: a.x + b.x, y: a.y + b.y }; }
+function subtract(a: DesignerPoint, b: DesignerPoint) { return { x: a.x - b.x, y: a.y - b.y }; }
 function scale(point: DesignerPoint, value: number) { return { x: point.x * value, y: point.y * value }; }
+function dot(a: DesignerPoint, b: DesignerPoint) { return a.x * b.x + a.y * b.y; }
+function lerp(a: DesignerPoint, b: DesignerPoint, t: number) { return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t }; }
+function withHandle(point: DesignerPoint, handle: "handleIn" | "handleOut", value: DesignerPoint): DesignerPoint {
+  if (Math.hypot(value.x, value.y) < 1e-9) {
+    const { [handle]: _removed, ...rest } = point;
+    return rest;
+  }
+  return { ...point, [handle]: value, nodeType: "smooth" };
+}
 function normalize(point: DesignerPoint) { const length = Math.hypot(point.x, point.y) || 1; return { x: point.x / length, y: point.y / length }; }
 function distanceBetween(a: DesignerPoint, b: DesignerPoint) { return Math.hypot(a.x - b.x, a.y - b.y); }
 function clamp(value: number, min: number, max: number) { return Math.max(min, Math.min(max, value)); }

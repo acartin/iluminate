@@ -10,7 +10,7 @@
     "lint": "eslint ."
   },
   "dependencies": {
-    "next": "16.3.5",
+    "next": "16.4.0",
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "three": "0.186.0"
@@ -21,7 +21,7 @@
     "@types/react-dom": "19.2.3",
     "@types/three": "0.186.0",
     "eslint": "9.39.2",
-    "eslint-config-next": "16.3.5",
+    "eslint-config-next": "16.4.0",
     "typescript": "5.7.2"
   }
 }

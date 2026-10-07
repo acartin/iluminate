@@ -1,8 +1,9 @@
-import { Group, LogicalOutput, Output, SpatialPixel, Zone } from "../domain/partituras/types.js";
+import { LogicalOutput } from "../domain/partituras/types.js";
+import type { GroupConfig, OutputConfig, PixelConfig, ZoneConfig } from "../generators/partitura-generator.js";
 
 export type MatrixWiring = "rows" | "serpentine_rows" | "columns" | "serpentine_columns";
 export type MatrixPixelMapInput = { id: string; name?: string; output: LogicalOutput; width: number; height: number; originX?: number; originY?: number; wiring?: MatrixWiring };
-export type PixelMapPreset = { outputs: Output[]; pixelMap: SpatialPixel[]; zones: Zone[]; groups: Group[] };
+export type PixelMapPreset = { outputs: OutputConfig[]; pixelMap: PixelConfig[]; zones: ZoneConfig[]; groups: GroupConfig[] };
 
 export function createLinearPixelMapPreset({ id, name, output, pixels, originX = 0, originY = 0 }: { id: string; name?: string; output: LogicalOutput; pixels: number; originX?: number; originY?: number }): PixelMapPreset {
   const pixelMap = Array.from({ length: pixels }, (_, serialIndex) => ({ id: `${id}_px_${serialIndex}`, output, serialIndex, stringId: id, routeOffsetCm: serialIndex, x: originX + serialIndex, y: originY, tangentDeg: 0 }));
