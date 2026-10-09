@@ -1,7 +1,7 @@
 import type { DesignerActiveLayer, DesignerTool } from "../types";
 import { DEFAULT_CHANNEL_ROUTER_DIAMETER_MM } from "@/lib/lighting/partitura-model";
 
-export type DesignerGeometryTarget = "build_area" | "zone" | "channel" | "face_graphic";
+export type DesignerGeometryTarget = "build_area" | "zone" | "channel" | "face_graphic" | "work_line";
 export type DesignerGeometryToolPolicy = {
   target: DesignerGeometryTarget;
   construction: "primitive" | "path";
@@ -11,6 +11,7 @@ export type DesignerGeometryToolPolicy = {
 };
 
 const GEOMETRY_TOOL_POLICIES: Partial<Record<DesignerTool, DesignerGeometryToolPolicy>> = {
+  work_line: { target: "work_line", construction: "path", shape: "path", mode: "straight", layers: ["artwork", "reference", "zones", "faceGraphic"] },
   build_area_rect: { target: "build_area", construction: "primitive", shape: "rect", mode: "straight", layers: ["artwork", "reference"] },
   build_area_ellipse: { target: "build_area", construction: "primitive", shape: "ellipse", mode: "straight", layers: ["artwork", "reference"] },
   build_area_polygon: { target: "build_area", construction: "path", shape: "path", mode: "straight", layers: ["artwork", "reference"] },
@@ -27,6 +28,10 @@ const GEOMETRY_TOOL_POLICIES: Partial<Record<DesignerTool, DesignerGeometryToolP
 };
 
 export const ELECTRICAL_TOOLS: ReadonlySet<DesignerTool> = new Set<DesignerTool>(["led_string", "data_cable", "cut"]);
+
+// Keep terminal attraction inside the visible node instead of pulling in nearby wiring.
+export const TERMINAL_SOLDER_CAPTURE_RADIUS_PX = 5;
+export const POINTER_DRAG_THRESHOLD_PX = 3;
 
 export const CHANNEL_ROUTER_BIT_PRESETS = [
   { label: "1/8 in · 3.175 mm", diameterMm: 3.175 },

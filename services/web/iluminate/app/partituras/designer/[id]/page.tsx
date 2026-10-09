@@ -1,7 +1,7 @@
 import { notFound, redirect } from "next/navigation";
 import { PartituraDesignerStudio } from "@/components/lighting/partitura-workspace";
 import { getMenu } from "@/lib/api";
-import { getPartitura } from "@/lib/server/partituras";
+import { getPartituraForClient } from "@/lib/server/partituras";
 
 const currentPath = "/partituras/designer";
 
@@ -18,7 +18,7 @@ export default async function DesignerStudioPage({
     notFound();
   }
 
-  const partitura = await getPartitura(id);
+  const partitura = await getPartituraForClient(id, menu.tenant.client_id);
   if (!partitura) notFound();
 
   return <PartituraDesignerStudio initialPartitura={partitura} />;

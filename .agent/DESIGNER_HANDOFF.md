@@ -101,6 +101,12 @@ object references canonical geometry and owns only `passMode` (`opaque`,
 properties. The Layers panel exposes `Face Graphic` as its own category and the
 left rail reuses rectangle, ellipse, polygon and Bezier authoring. Magenta
 shapes in Design are a fabrication preview, not the final optical calculation.
+Design also offers an ephemeral black/white vinyl preview from the Face Graphic
+Layers header. It resolves native and live-derived physical regions in layer
+order, maps opaque/uncovered material to black and clear/translucent openings to
+white, and preserves selection overlays. Linked projections remain construction
+references and are omitted from this mode. The toggle is component state only:
+it must not enter the document, compile signature, export or Animate renderer.
 
 Face Graphic is deliberately omitted from `designerCompileSignature`, compiled
 zones, pixelMap, groups and wiring. Editing it must not make a valid electrical
@@ -108,8 +114,9 @@ Compile stale. In `As built`, the renderer separates rear/external light from
 front light, generates a viewport-aligned RGB transmission texture from the
 vector Face Graphic, and filters only the front buffer. Outside the defined
 graphic is opaque; the topmost persisted object wins overlaps. Compound holes
-remain openings according to their enclosing region. Object/layer visibility
-and opacity are editor aids and never become optical transmission controls.
+remain openings according to their enclosing region. Object visibility controls
+membership in both the vinyl preview and the optical transmission mask; layer
+visibility and opacity remain editor aids.
 Direct-mounted Front pixels participate in this pass. `LED map` bypasses it and
 continues to show raw mapped output. Never replace this with a top-level
 multiply overlay: it would incorrectly affect Halo, Wall Wash and the workspace
@@ -140,10 +147,16 @@ feature guidance. Both download actions run the same validation pass; errors
 block the file while warnings remain downloadable.
 
 SVG is millimeter-based, path-only, preserves native Beziers and compound
-contours, and groups output by Designer category plus Face Graphic pass/color.
-DXF uses `$INSUNITS=4`, named operation/material layers and deterministic closed
-`LWPOLYLINE` flattening. Controlled editable text is outlined in memory and is
-not changed in the document. Live derived profiles are exported; linked
+contours, and produces separate files for Reference, Zones, Channels and Face
+Graphic; Face Graphic pass/color remains grouped inside its file. The Channels
+file contains only the canonical centerline as the router-bit toolpath, not its
+derived swept outline. DXF uses `$INSUNITS=4`, named operation/material layers
+and deterministic `LWPOLYLINE` flattening, preserving open or closed centerline
+topology. Controlled editable text is outlined in memory and is not changed in
+the document. When global alignment marks are included, the same orthogonal
+calibration set is repeated in every selected file under
+`ALIGNMENT_GUIDES_NO_CUT`, with its exact millimeter spacing in metadata. Live
+derived profiles are exported; linked
 projections, images, controller, routes, LEDs, selection visuals and other
 editor guides are excluded. Broken projections warn because they are
 construction-only; broken derived operations and unresolved fonts block.
@@ -153,9 +166,35 @@ source checksum. Export does not require or change electrical Compile and does
 not create firmware/toolpaths. PDF, EPS, STL and proprietary cutter formats
 remain outside the implemented contract.
 
+Alignment/calibration marks are configured in `Setup` as one Designer-global
+orthogonal set (enabled, locked, origin and exact spacing; 100 mm by default).
+They remain visible and movable as a group on every Design layer. Export can
+include or exclude them independently; they are three non-collinear crosshair
+targets (origin, +X and +Y), represented by six open no-cut lines. The
+external-software operator is responsible for removing them before machining.
+
 Projections are construction references: keep them out of electrical Compile,
 pixelMap and fabrication export unless the operator explicitly materializes or
 derives geometry from them.
+
+### Work lines
+
+`designer.workLines` stores persistent open construction polylines. Each line
+has a stable ID, editable name and points plus an optional organizational owner
+(`artwork`, `zones` or `faceGraphic`); omission means global. Ownership does not
+inherit visibility or lock state from a productive layer. One
+`designer.workLinesVisible` flag shows or hides the entire collection.
+
+Work lines render dashed in a distinct teal color over filled canvas objects
+so the reference and its selected-state nodes remain legible. They are tested
+only after productive geometry, so they cannot steal an initial overlapping
+click; selecting their row intentionally gives that line's path and nodes edit
+priority. A layer-owned line appears directly among that layer's objects rather
+than in a dedicated folder. Their nodes and complete path are movable and
+deletable. They use
+straight open segments, are excluded from canonical fabrication geometry,
+electrical Compile, pixelMap, Animate and SVG/DXF export, and never become a
+projection or derived-operation source.
 
 ### Compound paths and booleans
 
@@ -180,6 +219,22 @@ open profiles and empty results are rejected. Zone contour changes invalidate
 Compile because they change pixel membership; Reference and Face Graphic
 booleans remain electrically neutral.
 
+A selected native path exposes contextual `Trim`. Paper.js resolves its
+crossing graph into exact closed faces: hovering inside or along a face previews
+that face in red, the surviving profile in cyan and the source intersections in
+amber. Selection is deterministic (smallest containing face, then nearest
+stroke), not inferred from path traversal order. Clicking commits one closed
+result as one Undo transaction; remaining resolved faces stay selectable for
+subsequent Trim passes, including after the result becomes compound; `Esc`
+cancels. It is shared by Reference, Zones and Face Graphic and does not flatten
+Bezier curves.
+
+Compound paths remain directly node-editable after Trim. Designer draws nodes
+for every contour, maps selection to a stable flattened point index and reports
+the local contour/point in the contextual bar. Point, node-type and Bezier-
+handle edits mutate only the selected contour while keeping contour zero synced
+with the legacy `points` projection.
+
 ### Derived offset and fillet geometry
 
 `designer.derivedGeometries` persists non-destructive `offset` and `fillet`
@@ -191,8 +246,10 @@ snapshot source coordinates into the operation record.
 
 The shared calculation is in
 `lib/lighting/designer-derived-geometry.ts`. Offsets use signed millimeter
-distances and `round`, `miter` or `bevel` joins; miter joins also persist a
-limit. Whole-profile Fillets persist a millimeter radius and may persist a
+distances and `round`, `miter` or `bevel` joins. Miter joins retain the exact
+angular intersection; the legacy persisted miter limit remains readable for
+document compatibility but must not silently replace an acute corner with a
+bevel segment. Whole-profile Fillets persist a millimeter radius and may persist a
 canonical corner-index selection as a live derived profile. Their contextual
 radius field recalculates immediately. Channels instead keep an optional
 `radiusMm` on the selected canonical corner node; the contextual `Fillet` field
@@ -222,7 +279,8 @@ pixelMap until materialized.
 When a derived profile targets Face Graphic it also owns only `passMode` and
 `filterColor`, with translucent white defaults. Those values follow chained
 operations, survive normalization, drive the As built frontal-light filter and
-select the SVG/DXF material group. Editor visibility remains non-physical.
+select the SVG/DXF material group. Hidden derived profiles are excluded from
+both the vinyl preview and the physical mask.
 Breaking the link transfers the same mask values to the resulting native Face
 Graphic object. Linked projections themselves remain construction-only.
 
@@ -284,11 +342,12 @@ The duplicate `default_installation_2` was soft-deleted. Keep `partitura_key=def
 
 ## Designer Defaults
 
-New/default documents should start with:
+New persisted partituras should start with:
 
 - Controller card near upper-left: `x=4`, `y=4`.
 - A clear left strip for controller/cable work.
-- Default sign zones/routes shifted to the right, starting around `x=42`.
+- No default artwork, build areas, zones, channels, light sources, routes or clips.
+- One empty `Normal` scene so authoring can begin without demo content.
 - Canvas width `170 cm`, height `40 cm`.
 - Addressable density `60 Pixels/m`.
 - Physical emitter density `60 LEDs/m`.
@@ -296,7 +355,9 @@ New/default documents should start with:
 - Snap `2 cm`.
 - Three controller outputs by default.
 
-Do not put default zones/routes underneath the controller. If a screenshot shows the PCB overlapping Fondo or a route, the document is likely old/persisted or the defaults regressed.
+`createDefaultPartituraDocument()` remains the populated demo/test fixture. It is
+not used when persisting a new partitura. Existing persisted documents are not
+rewritten by this creation behavior.
 
 ## Visual Vocabulary
 
@@ -315,6 +376,10 @@ The Designer separates five persisted visual layers:
 
 - `Artwork`: imported client/project image assets placed on the canvas. It renders image references only, does not duplicate/upload assets, and does not generate LEDs. Each item persists `assetId`, name and rectangle. Older JSON may still contain item-level visibility/lock/opacity fields, but the UI/rendering policy is to control visibility, lock and opacity at the layer/category level only.
 - `Reference`: measured construction/reference geometry such as build areas. It does not generate LEDs. In the panel it is presented as a `Reference` folder inside the `Artwork` category. The folder has no header eye/lock/opacity; the `Artwork` category eye/lock governs the reference plane as its master, and each build area's own eye refines it. Rendered as a violet dashed guide.
+- Work lines are globally visible/hidden construction-only open polylines.
+  They may retain an organizational owner from Artwork, Diffusors or Face
+  Graphic and appear directly in that category, or remain global. They select
+  after productive objects unless the operator intentionally selected the line.
 - `Zones`: visual targets such as letters, logos, background and full sign.
 - `Channels`: neon-flex bands belonging to the Zones plane. A channel reuses the
   Bezier trajectory as an editable center line and derives two parallel borders
@@ -327,6 +392,12 @@ The Designer separates five persisted visual layers:
   cables, terminals and joints (no controller). It remains distinct from the
   persisted controller layer even though both appear under the `Hardware`
   category in Layers.
+  Routes also carry `designSurface: rear | front`, an editor-only mounting-face
+  classification normalized to `rear` for legacy documents. Hardware's shared
+  transient `Rear / Front / Both` filter applies that classification to route
+  rendering, hit testing, snapping and folder rows in Design. It never changes
+  the electrical graph or optical setup and is excluded from the compile
+  signature, Animate and fabrication output.
 
 `Light Sources` is deliberately absent from Layers. The persisted
 `designer.lightSources` collection currently stores what the product calls
@@ -416,8 +487,23 @@ derived and are never manipulated separately.
   place an **empty image container** at that point; the container is selected.
   Choose its image afterwards from the `Image source` dropdown in the `Images`
   folder (populated from the project assets). Asset-less containers render as a
-  dashed placeholder on the canvas. Upload lives in the folder (`Upload`
-  action). Shortcut `i`.
+  dashed placeholder on the canvas. Assigning a source replaces the placeholder
+  dimensions with the file's intrinsic 1:1 size: declared physical units for
+  SVG, embedded pixel density for raster formats, or the CSS standard 96 dpi
+  conversion when a raster file has no physical density. A source whose native
+  size cannot be determined is not assigned; Designer must never silently keep
+  the arbitrary placeholder size. The operator may resize the artwork after
+  this native-size import. A selected SVG Artwork exposes `Create Zones`, which
+  imports every independent closed region as an editable Zone while preserving
+  cubic handles, group transforms, the displayed `object-contain` placement and
+  nested counters as compound holes. A compound lettering path therefore
+  becomes separately selectable letter/stem/dot regions instead of one broad
+  hit target. Open paths and non-vector elements are skipped and reported. The
+  source Artwork and every layer/object visibility state remain completely
+  unchanged; only the operator controls their eyes. The operator may then hide
+  the reference or delete unwanted imported Zones. Upload lives in the folder
+  (`Upload` action).
+  Shortcut `i`.
 - `Reference`: the build-area tools (rectangle, ellipse, polygon, bezier), the
   same tools used for reference geometry. Shortcuts `p` (polygon) and `b`
   (bezier).
@@ -470,14 +556,26 @@ No hidden auto-moving terminals.
 Only exact same grid snap point solders.
 ```
 
-The canvas may use proximity only as an editing aid while dragging, so the
-moving terminal lands exactly on the target snap point. The compiler must never
+The canvas may use proximity only as an editing aid while dragging, with a
+screen-constant 5 px capture radius centered on the terminal, so the moving
+terminal lands exactly on the target snap point. Releasing outside that radius
+must not trigger a second physical-distance capture. The compiler must never
 infer electrical continuity from nearby points. Compilation reads only persisted
 coordinates plus `joint: true`.
+
+Clicking a terminal is selection only. Terminal movement and solder evaluation
+start only after a deliberate screen-space drag of at least 3 px; ordinary
+pointer jitter while selecting must not move or join terminals.
+
+The configured drawing grid never enlarges electrical coincidence. It may place
+a dragged terminal on a grid coordinate, but solder evaluation is authorized
+only when the unsnapped pointer enters the 5 px terminal capture circle. Two
+separated terminals inside the same grid cell remain electrically independent.
 
 Route-to-route soldering:
 
 - Green route terminal + red route terminal on the same snap point solders.
+- Green-to-green and red-to-red never solder.
 - It does not matter whether the route is `LED string` or `Data cable`.
 - Same-kind routes merge into one route and the duplicate terminal disappears.
 - Mixed `Data cable` + `LED string` remains two route types, but both terminal points are marked `joint: true`.
@@ -499,6 +597,9 @@ Confirmed solder:
 Deletion cleanup:
 
 - Deleting a route must clear orphaned/floating `joint: true` markers on remaining terminals.
+- The final remaining route is deletable. `routes: []` is valid persisted
+  authored state, and deletion also removes that route id from every light
+  source `stringIds` assignment.
 - A terminal remains cyan only if another compatible terminal is on the same snap point, or if a data-cable green terminal is on a controller red port.
 
 Drag behavior:
@@ -553,16 +654,22 @@ Polygon/Pen behavior:
 - Clicking the first snap point again closes the polygon.
 - Escape cancels the draft.
 - Selected polygons expose editable node handles.
-- Clicking a polygon node selects that node and shows `Point N` with `PX/PY` in the contextual toolbar.
+- Clicking a polygon node selects the nearest node and shows `Point N` with `PX/PY` in the contextual toolbar. Hit tolerance stays screen-sized under zoom, and nodes on the already selected object win before overlapping objects.
 - Dragging a selected node reshapes the polygon without moving the full object.
-- Double-clicking a polygon edge inserts a new node on that edge.
+- Double-clicking close to a polygon edge inserts a new node on that edge; double-clicking on an existing node never inserts one.
 - Delete/Backspace or the `Point` delete action removes the selected node, but polygons must keep at least 3 points.
 - Moving/resizing a polygon moves/scales its nodes.
 
 Bezier behavior:
 
 - The Bezier tools create the same persisted `polygon` geometry as the Pen, with `pathMode: "bezier"`; they do not create a parallel shape model.
-- Click anchors, then click the first anchor again to close. Initial smooth handles are generated automatically from neighboring anchors.
+- Activating any geometric path tool immediately exposes the shared contextual
+  `New node` picker for Build Area, Zone, Channel and Face Graphic. Its corner,
+  straight, smooth or symmetric choice applies to each subsequent click, so a
+  single path may mix node types without layer-specific creation state.
+- Click anchors, then click the first anchor again to close. Initial handles are
+  generated automatically from neighboring anchors only for smooth and
+  symmetric nodes; corner and straight nodes remain handle-free.
 - Select an anchor to show its two control handles. Drag either handle to reshape the curve; its opposing handle mirrors automatically, keeping the node smooth.
 - Curve hit testing, selecting and double-click node insertion follow the rendered Bezier curve, rather than the straight anchor chords.
 - Moving/resizing a Bezier path preserves and transforms its handle vectors.

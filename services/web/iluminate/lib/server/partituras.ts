@@ -1,5 +1,5 @@
 import { PoolClient } from "pg";
-import { createDefaultPartituraDocument, normalizeDefaultSignLayout, PartituraDocument, PersistedPartitura } from "@/lib/lighting/partitura-model";
+import { createNewPartituraDocument, normalizeDefaultSignLayout, PartituraDocument, PersistedPartitura } from "@/lib/lighting/partitura-model";
 import { getPool } from "@/lib/server/postgres";
 
 type PartituraRow = {
@@ -64,7 +64,7 @@ export async function getDefaultClient(client: PoolClient) {
   return { id: Number(row.id), name: row.name };
 }
 
-export async function listPartituras() {
+export async function listPartituras(trustedClientId: string) {
   const rows = await getPool().query<PartituraRow>(
     `select p.id,
             p.project_id,
@@ -80,9 +80,35 @@ export async function listPartituras() {
        from iluminate.partituras p
        join public.auth_clients c on c.id = p.client_id
       where p.deleted_at is null
-      order by p.updated_at desc, p.id desc`
+        and (c.id::text = $1 or c.client_key = $1)
+      order by p.updated_at desc, p.id desc`,
+    [trustedClientId]
   );
   return rows.rows.map(mapPartitura);
+}
+
+export async function getPartituraForClient(id: string, trustedClientId: string) {
+  const rows = await getPool().query<PartituraRow>(
+    `select p.id,
+            p.project_id,
+            p.partitura_key,
+            p.name,
+            c.name as client_name,
+            p.status,
+            p.document_json,
+            p.generated_json,
+            p.validation_report,
+            p.created_at,
+            p.updated_at
+       from iluminate.partituras p
+       join public.auth_clients c on c.id = p.client_id
+      where p.id = $1
+        and p.deleted_at is null
+        and (c.id::text = $2 or c.client_key = $2)
+      limit 1`,
+    [id, trustedClientId]
+  );
+  return rows.rows[0] ? mapPartitura(rows.rows[0]) : null;
 }
 
 export async function listProjectPartituras(projectId: string) {
@@ -165,28 +191,37 @@ async function uniquePartituraKey(client: PoolClient, clientId: number, baseKey:
 export async function createPartitura({
   projectId,
   name,
-  duplicateOf
+  duplicateOf,
+  trustedClientId
 }: {
   projectId: string;
   name?: string;
   duplicateOf?: string;
+  trustedClientId: string;
 }) {
   const pool = getPool();
   const client = await pool.connect();
   try {
     await client.query("begin");
     const projectResult = await client.query<{ id: string | number; client_id: string | number }>(
-      "select id, client_id from iluminate.projects where id = $1 and deleted_at is null limit 1", [projectId]
+      `select project.id, project.client_id
+         from iluminate.projects project
+         join public.auth_clients auth_client on auth_client.id = project.client_id
+        where project.id = $1
+          and project.deleted_at is null
+          and (auth_client.id::text = $2 or auth_client.client_key = $2)
+        limit 1`,
+      [projectId, trustedClientId]
     );
     const project = projectResult.rows[0];
     if (!project) throw new Error("Project not found.");
-    const source = duplicateOf ? await getPartitura(duplicateOf) : null;
+    const source = duplicateOf ? await getPartituraForClient(duplicateOf, trustedClientId) : null;
     if (source && source.projectId !== String(project.id)) throw new Error("Partitura belongs to a different project.");
     const partituraName = name?.trim() || (source ? `${source.name} copy` : "Default installation");
     const partituraKey = await uniquePartituraKey(client, Number(project.client_id), slugify(partituraName));
     const document = source
       ? normalizeDefaultSignLayout({ ...source.document, projectId: String(project.id) })
-      : createDefaultPartituraDocument(String(project.id));
+      : createNewPartituraDocument(String(project.id));
 
     const created = await client.query<PartituraRow>(
       `insert into iluminate.partituras (client_id, project_id, partitura_key, name, status, document_json)
@@ -222,9 +257,10 @@ export async function updatePartitura(
     document?: PartituraDocument;
     generatedPartitura?: unknown;
     validationReport?: unknown;
-  }
+  },
+  trustedClientId: string
 ) {
-  const current = await getPartitura(id);
+  const current = await getPartituraForClient(id, trustedClientId);
   if (!current) return null;
 
   const name = patch.name?.trim() || current.name;
@@ -243,6 +279,9 @@ export async function updatePartitura(
             updated_at = now()
       where id = $1
         and deleted_at is null
+        and client_id in (
+          select id from public.auth_clients where id::text = $7 or client_key = $7
+        )
       returning id,
                 project_id,
                 partitura_key,
@@ -254,17 +293,25 @@ export async function updatePartitura(
                 validation_report,
                 created_at,
                 updated_at`,
-    [id, name, status, JSON.stringify(document), generated === null ? null : JSON.stringify(generated), JSON.stringify(validation)]
+    [id, name, status, JSON.stringify(document), generated === null ? null : JSON.stringify(generated), JSON.stringify(validation), trustedClientId]
   );
   return rows.rows[0] ? mapPartitura(rows.rows[0]) : null;
 }
 
-export async function deletePartitura(id: string) {
+export async function deletePartitura(id: string, trustedClientId: string) {
   const client = await getPool().connect();
   try {
     await client.query("begin");
     const result = await client.query<{ project_id: string | number }>(
-      "update iluminate.partituras set deleted_at = now(), updated_at = now() where id = $1 and deleted_at is null returning project_id", [id]
+      `update iluminate.partituras
+          set deleted_at = now(), updated_at = now()
+        where id = $1
+          and deleted_at is null
+          and client_id in (
+            select id from public.auth_clients where id::text = $2 or client_key = $2
+          )
+        returning project_id`,
+      [id, trustedClientId]
     );
     if (!result.rows[0]) { await client.query("rollback"); return false; }
     await client.query("update iluminate.projects set active_partitura_id = null, updated_at = now() where id = $1 and active_partitura_id = $2", [result.rows[0].project_id, id]);

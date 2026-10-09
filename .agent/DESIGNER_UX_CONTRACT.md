@@ -32,8 +32,9 @@ Canonical contents:
 
 - Back and document identity.
 - Design/Animate mode switch.
-- Designer-wide setup: canvas units/size/snap, CNC cutter diameter/unit, Pixels/m
-  and LEDs/m. Cutter units are independent from canvas units; the physical
+- Designer-wide setup: canvas units/size/snap, global alignment/calibration
+  marks (enabled, locked, origin and measured spacing), CNC cutter
+  diameter/unit, Pixels/m and LEDs/m. Cutter units are independent from canvas units; the physical
   diameter persists canonically in millimeters.
   These settings stay grouped under `Setup`; do not expand all of them into the
   bar.
@@ -68,6 +69,15 @@ With no object selected it shows:
 - a short instruction for using that tool;
 - active layer or a prompt to choose one.
 
+When a geometric node/path tool is active, this tool context takes precedence
+over the previous object selection and immediately exposes the shared `New
+node` type picker. The chosen type applies to each subsequently placed node and
+may change between clicks. Build Area, Zone, Channel and Face Graphic path
+tools use this same control and the same canonical node types (`corner`,
+`straight`, `smooth`, `symmetric`); they must not implement layer-specific node
+creation state. Electrical route points are terminals/cuts and are not part of
+this geometric node-type contract.
+
 With an object selected it shows:
 
 - object name/identity;
@@ -96,19 +106,33 @@ Examples:
   adjustment command. An intentional
   corner/straight discontinuity is machinable and is excluded from continuous-
   curve radius warnings; the designer may apply the shared `Fillet` explicitly.
-- Artwork/reference: position, size, shape and node fields.
-- Route: route type and editing actions.
+- Artwork/reference: position, size, shape and node fields. A selected SVG
+  Artwork exposes `Create Zones`; it creates one editable Zone per closed SVG
+  filled region at the Artwork's displayed position and scale, separates
+  disconnected subpaths into independently selectable Zones, preserves nested
+  counters as compound holes and skips open/non-vector content with a notice.
+  It never consumes, hides, moves or otherwise mutates the Artwork source or
+  any existing layer/object visibility; visibility remains operator-controlled.
+- Route: route type and editing actions. Delete removes the selected route even
+  when it is the final route in the document; an empty Strings collection is a
+  valid authored state.
 - Controller: position and port count.
 - Light source: source type and Configure source.
 - Face Graphic: pass mode, translucent filter color, shape, geometry/node
   fields and object lock.
 - Projected geometry: linked/broken status, source selector, `Break Link` and
   Delete. It has no editable shape or node fields while linked.
-- Derived offset/fillet geometry: operation status, source selector, signed
-  offset distance plus join/miter controls or fillet radius plus corner list,
-  warnings, `Break Link` and Delete. It remains read-only on canvas while live.
+- Derived offset/fillet geometry: a fixed-width status indicator, source
+  selector, signed offset distance plus join control or fillet radius plus
+  corner list, `Break Link` and Delete. Warnings use the same status slot and
+  must not insert text capsules that shift numeric controls while editing. It
+  remains read-only on canvas while live.
 - Editable text: content, controlled font, size/tracking in millimeters, line
   height, alignment, X/Y and `Convert to paths`.
+- Work line: optional organizational owner (`Global`, `Artwork`, `Diffusors` or
+  `Face Graphic`) and selected-node X/Y. Nodes and the complete open polyline
+  remain directly movable; Delete removes a selected node when at least two
+  nodes remain, or removes the selected line.
 
 The contextual bar may scroll horizontally when an object genuinely has many
 properties. It must not absorb document-wide configuration merely because
@@ -134,18 +158,32 @@ Always-available tools:
 - Select.
 - Pan.
 - Measure.
+- Work line. It creates a straight, open, dashed construction polyline and
+  finishes with Enter or double-click. It appears only with an active Artwork,
+  Reference, Diffusors or Face Graphic layer and assigns the new line to that
+  layer. Setup owns the single global visibility toggle; individual
+  work lines do not expose separate eye controls or a separate Layers folder.
+  A layer-owned line appears directly among that layer's objects.
 
 The remaining tools depend on the active layer, for example image placement,
 reference/zone/channel drawing, LED string, data cable and route cutting.
 Face Graphic uses the same rectangle, ellipse, polygon and Bezier interaction
 as the other geometric layers; only its semantic properties differ.
+Its Layers category header owns a transient black/white vinyl-preview toggle:
+opaque and uncovered face material render black, while clear and translucent
+regions render white. The mode remains local to Design, does not persist or
+affect Compile/export/Animate, and keeps selected geometry and nodes visible.
 
 In Animate `As built`, the first Face Graphic object in layer order is the
 frontmost physical filter. Defined `clear`, `opaque` and `translucent` regions
 control only frontal light; uncovered face area is opaque once any Face Graphic
-exists. The layer/object eye and opacity remain Design presentation controls
-and must not change the physical preview. `LED map` is the explicit raw,
+exists. An object's eye state controls its membership in both this preview and
+the physical mask; layer visibility and opacity remain Design presentation
+controls. `LED map` is the explicit raw,
 unfiltered diagnostic view. Halo and Wall Wash are always outside this pass.
+Animate also exposes a transient `Face mask` checkbox in `As built`, enabled by
+default, so the operator can compare filtered and unfiltered Front output. It
+never persists or changes fabrication/export semantics.
 
 Reference, Diffusors and Face Graphic do not expose a Text creation tool. The
 controlled text implementation remains available underneath for compatibility
@@ -177,8 +215,25 @@ a construction operand without being consumed.
 
 Compound results display `Compound · N contours · even-odd`. Their holes must
 remain visibly empty and must not receive canvas hits or zone pixels. The whole
-profile may be moved/resized; direct node editing across individual contours is
-not part of phase 5.
+profile may be moved/resized. When selected, every contour exposes its native
+nodes; node selection uses one stable flattened index internally while the UI
+identifies the local contour and point. Moving a node or Bezier handle updates
+only that contour and preserves the other contours and the compound fill.
+Node hit-testing is screen-sized and always chooses the nearest visible node,
+with the currently selected object's nodes taking precedence over overlapping
+objects. A double-click on or near a node selects it; it must not insert another
+node. Insertion occurs only when the double-click is close to an edge.
+
+A selected native polygon exposes contextual `Trim`. While active, Paper.js
+resolves its crossing graph into exact closed faces. Hovering inside or along a
+face previews that face in red, the retained profile in cyan and the source
+crossings in amber. The smallest face containing the pointer wins before
+nearest-stroke fallback, so selection never depends on traversal order. Click
+commits; `Esc` cancels; Undo restores the original path. Remaining resolved
+faces stay selectable in subsequent Trim passes, including after the object
+becomes compound. Invalid/open outcomes must not be committed. The same
+interaction applies to Reference, Zones and Face Graphic and preserves native
+Bezier segments.
 
 `Offset Path` and whole-profile `Fillet` are contextual object commands, not
 permanent rail modes. Each creates a new amber live result in the same target
@@ -210,7 +265,8 @@ the rail. Mouse wheel/trackpad handles zoom; Fit belongs to the global bar;
 Delete belongs to the contextual bar and keyboard shortcut.
 
 Fabrication `Export` belongs to the Design global bar. It opens a modal rather
-than becoming a rail mode. The modal exposes output-category checkboxes,
+than becoming a rail mode. The modal exposes output-category checkboxes, an
+independent checkbox for repeating enabled alignment marks in every file,
 millimeter DXF curve tolerance, minimum-feature guidance, validation results
 and separate SVG/DXF downloads. Blocking errors must prevent download and stay
 visible; warnings must remain visible but allow export. Never imply that this
@@ -257,6 +313,12 @@ Canvas selection and Layers navigation are one synchronized state:
   `Diffusors / Zones` or `Face Graphic`);
   data cable -> `Hardware / Data cables`; LED string -> `Hardware / Strings`;
   controller -> `Hardware / Controller`.
+- Hardware owns one transient `Rear / Front / Both` display filter shared by
+  Strings and Data cables. Every route persists only its Designer mounting-face
+  classification (`rear` or `front`); newly drawn routes inherit the last
+  single-surface view. Filtering removes the other surface from canvas drawing,
+  hit testing, snapping and both route folders without changing route eyes,
+  joints, outputs, serial order, lighting setup, Compile, export or Animate.
 - The same mapping must be used by canvas selection and panel selection; do not
   maintain competing ad-hoc mappings in separate components.
 

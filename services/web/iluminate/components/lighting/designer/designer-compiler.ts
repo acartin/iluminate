@@ -1,6 +1,6 @@
-import type { DesignerForm, DesignerPoint, DesignerRouteForm, PartituraDocument } from "@/lib/lighting/partitura-model";
+import { DESIGNER_GLOBAL_LIGHT_SOURCE_TARGETS, type DesignerForm, type DesignerPoint, type DesignerRouteForm, type PartituraDocument } from "@/lib/lighting/partitura-model";
 import { channelContainsPoint, channelWidthCm, pointInsideDesignerShape, pointNearShapeStroke, validateDesignerGeometryTopology } from "./geometry/designer-geometry-engine";
-import { controllerPortPoint, sameSnapPoint, sampleRouteLedDots } from "./electrical/designer-electrical-engine";
+import { controllerPortPoint, sameTerminalPoint, sampleRouteLedDots } from "./electrical/designer-electrical-engine";
 
 export type CompiledDesignerLayout = {
   outputs: Array<{ id: string; name: string; output: 1 | 2 | 3; pixelCount: number }>;
@@ -14,10 +14,10 @@ export type CompiledDesignerLayout = {
 export function designerCompileSignature(designer: DesignerForm) {
   return JSON.stringify({
     controller: designer.controller,
-    routes: designer.routes,
+    routes: designer.routes.map(({ id, name, kind, points }) => ({ id, name, kind, points })),
     zones: designer.zones.map(({ id, name, shape, x, y, width, height, points, contours, pathMode, fillRule }) => ({ id, name, shape, x, y, width, height, points, contours, pathMode, fillRule })),
     channels: designer.channels.map(({ id, name, points, pathMode, widthMm, closed, cap }) => ({ id, name, points, pathMode, widthMm, closed, cap })),
-    lightSources: designer.lightSources.map(({ id, name, targetType, targetId, stringIds }) => ({ id, name, targetType, targetId, stringIds })),
+    lightSources: designer.lightSources.map(({ id, name, targetType, targetId, stringIds, mode, enabled }) => ({ id, name, targetType, targetId, stringIds, mode, enabled })),
     groups: designer.groups,
     addressablePixelsPerMeter: designer.addressablePixelsPerMeter,
     snapCm: designer.snapCm
@@ -114,7 +114,13 @@ export function compileDesignerLayout(designer: DesignerForm): CompiledDesignerL
       }
     });
   });
-  const groups = [...designer.groups];
+  const globalLightSourceGroups = DESIGNER_GLOBAL_LIGHT_SOURCE_TARGETS.flatMap((target) => {
+    const members = designer.lightSources
+      .filter((source) => source.enabled && source.stringIds.length > 0 && source.mode === target.mode)
+      .map((source) => ({ type: "zone" as const, id: source.id }));
+    return members.length ? [{ id: target.id, name: target.name, members }] : [];
+  });
+  const groups = [...designer.groups, ...globalLightSourceGroups];
   if (allZones.length) groups.push({ id: "full_sign", name: "Full sign", members: allZones.map((zone) => ({ type: "zone" as const, id: zone.id })) });
   validateGroups(designer, groups, errors, warnings);
   const outputs: CompiledDesignerLayout["outputs"] = ([1, 2, 3] as const).map((output) => ({ id: `output_${output}`, name: `Output ${output}`, output, pixelCount: serialStarts[output] }));
@@ -195,7 +201,7 @@ function orderedRoutesByOutput(designer: DesignerForm, errors: string[], warning
   for (let portIndex = 0; portIndex < designer.controller.dataOutputs; portIndex += 1) {
     const output = (portIndex + 1) as 1 | 2 | 3;
     const port = controllerPortPoint(designer.controller, portIndex, designer.snapCm);
-    const roots = designer.routes.filter((route) => route.kind === "data_cable" && terminalMatches(route.points[0], port, designer.snapCm));
+    const roots = designer.routes.filter((route) => route.kind === "data_cable" && terminalMatches(route.points[0], port));
     if (roots.length > 1) errors.push(`Output ${output} has multiple data-cable starts.`);
     if (roots.length) rootedOutputs += 1;
     roots.forEach((route) => walk(route, output));
@@ -211,12 +217,12 @@ function orderedRoutesByOutput(designer: DesignerForm, errors: string[], warning
     result.push({ output, route });
     const end = route.points.at(-1);
     if (!end?.joint) return;
-    const next = designer.routes.filter((candidate) => candidate.id !== route.id && !visited.has(candidate.id) && terminalMatches(candidate.points[0], end, designer.snapCm));
+    const next = designer.routes.filter((candidate) => candidate.id !== route.id && !visited.has(candidate.id) && terminalMatches(candidate.points[0], end));
     if (next.length > 1) errors.push(`${route.name} branches into ${next.length} routes; an output must be serial.`);
     next.sort((left, right) => left.id.localeCompare(right.id)).forEach((candidate) => walk(candidate, output));
   }
 }
 
-function terminalMatches(left: DesignerPoint | undefined, right: DesignerPoint | undefined, snapCm: number) {
-  return Boolean(left?.joint && right) && sameSnapPoint(left!, right!, snapCm);
+function terminalMatches(left: DesignerPoint | undefined, right: DesignerPoint | undefined) {
+  return Boolean(left?.joint && right) && sameTerminalPoint(left!, right!);
 }

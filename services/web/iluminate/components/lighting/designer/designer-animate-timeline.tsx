@@ -4,8 +4,8 @@ import * as React from "react";
 import { ChevronDown, ChevronUp, Eye, EyeOff, GripVertical, Pause, Play, Plus, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { EffectDefinition, EffectParameterDefinition } from "@/lib/lighting/effect-catalog";
-import { createClipIdentity, nextEmptyClipLayer, type ClipForm, type ClipParams, type PartituraDocument, type SceneForm } from "@/lib/lighting/partitura-model";
-import { clipIdForSelectedTargets } from "./designer-animation-selection";
+import { DESIGNER_GLOBAL_LIGHT_SOURCE_TARGETS, createClipIdentity, designerGlobalLightSourceMode, nextEmptyClipLayer, type ClipForm, type ClipParams, type PartituraDocument, type SceneForm } from "@/lib/lighting/partitura-model";
+import { clipIdForSelectedTargets, clipScopeTargets, clipTargetsForSelection, explicitClipTargetSelectionSettled } from "./designer-animation-selection";
 
 type Props = {
   document: PartituraDocument;
@@ -23,6 +23,7 @@ type Props = {
   collapsed?: boolean;
   onToggleCollapsed?: () => void;
   onClipTargetSelect?: (targetId: string | null) => void;
+  onSelectedClipTargetChange?: (targetId: string | null) => void;
 };
 
 type TimelineDrag =
@@ -49,24 +50,30 @@ export function DesignerAnimateTimeline({
   onTogglePlayback,
   collapsed = false,
   onToggleCollapsed,
-  onClipTargetSelect
+  onClipTargetSelect,
+  onSelectedClipTargetChange
 }: Props) {
   const activeScene = document.scenes.find((scene) => scene.id === document.activeSceneId) ?? document.scenes[0];
-  const sourceTargetIds = new Set((document.designer?.lightSources ?? []).map((source) => source.targetId));
+  const lightSources = document.designer?.lightSources ?? [];
+  const sourceTargetIds = new Set(lightSources.map((source) => source.targetId));
+  const availableGlobalModes = new Set(lightSources.filter((source) => source.enabled && source.stringIds.length > 0).map((source) => source.mode));
   const targets = [
-    { id: "full_sign", name: "Full sign" },
-    ...(document.designer?.lightSources ?? []).map((source) => ({ id: source.id, name: source.name || source.id })),
+    ...lightSources.map((source) => ({ id: source.id, name: source.name || source.id })),
+    ...DESIGNER_GLOBAL_LIGHT_SOURCE_TARGETS.filter((target) => availableGlobalModes.has(target.mode)).map(({ id, name }) => ({ id, name })),
     ...(document.designer?.zones ?? []).filter((zone) => !sourceTargetIds.has(zone.id)).map((zone) => ({ id: zone.id, name: zone.name || zone.id })),
     ...(document.designer?.channels ?? []).filter((channel) => !sourceTargetIds.has(channel.id)).map((channel) => ({ id: channel.id, name: channel.name || channel.id })),
     ...(document.designer?.groups ?? []).map((group) => ({ id: group.id, name: group.name || group.id }))
   ];
+  const creatableSourceIds = new Set(lightSources.filter((source) => source.enabled && source.stringIds.length > 0).map((source) => source.id));
+  const clipCreationTargets = clipTargetsForSelection(targets, selectedTargetIds).filter((target) => creatableSourceIds.has(target.id));
   const [selectedClipId, setSelectedClipId] = useStatefulClip(activeScene?.clips ?? []);
+  const pendingExplicitClipIdRef = React.useRef<string | undefined>(undefined);
   const [timelineDrag, setTimelineDrag] = React.useState<TimelineDrag | null>(null);
   const [zoomFactor, setZoomFactor] = React.useState(1);
   const [timelineViewportWidth, setTimelineViewportWidth] = React.useState(0);
   const timelineViewportRef = React.useRef<HTMLDivElement | null>(null);
   const timelineRef = React.useRef<HTMLDivElement | null>(null);
-  const selectedClip = activeScene?.clips.find((clip) => clip.id === selectedClipId) ?? activeScene?.clips[0];
+  const selectedClip = activeScene?.clips.find((clip) => clip.id === selectedClipId);
   const zoneTargetIds = React.useMemo(
     () => new Set([...(document.designer?.lightSources ?? []).map((source) => source.id), ...(document.designer?.zones ?? []).map((zone) => zone.id), ...(document.designer?.channels ?? []).map((channel) => channel.id)]),
     [document.designer?.lightSources, document.designer?.zones, document.designer?.channels]
@@ -91,10 +98,21 @@ export function DesignerAnimateTimeline({
   }, []);
 
   React.useEffect(() => {
-    if (!activeScene || !selectedTargetIds.length) return;
+    if (!activeScene) return;
+    const pendingClipId = pendingExplicitClipIdRef.current;
+    if (pendingClipId) {
+      if (!explicitClipTargetSelectionSettled(activeScene.clips, pendingClipId, selectedTargetIds)) return;
+      pendingExplicitClipIdRef.current = undefined;
+      return;
+    }
+    if (!selectedTargetIds.length) return;
     const nextClipId = clipIdForSelectedTargets(activeScene.clips, selectedClipId, selectedTargetIds);
     if (nextClipId !== selectedClipId) setSelectedClipId(nextClipId);
   }, [activeScene, selectedClipId, selectedTargetIdsKey, setSelectedClipId]);
+
+  React.useEffect(() => {
+    onSelectedClipTargetChange?.(selectedClip?.target ?? null);
+  }, [selectedClip?.target]);
 
   function changeScene(sceneId: string) {
     onChange({ ...document, activeSceneId: sceneId, previewTimeMs: 0 });
@@ -138,6 +156,7 @@ export function DesignerAnimateTimeline({
   }
 
   function selectClip(clip: ClipForm) {
+    if (onClipTargetSelect) pendingExplicitClipIdRef.current = clip.id;
     setSelectedClipId(clip.id);
     onClipTargetSelect?.(zoneTargetIds.has(clip.target) ? clip.target : null);
   }
@@ -159,8 +178,8 @@ export function DesignerAnimateTimeline({
     if (selectedClip?.layer === layer) setSelectedClipId(undefined);
   }
 
-  function addClip() {
-    if (!activeScene) return;
+  function addClip(targetId: string) {
+    if (!activeScene || !creatableSourceIds.has(targetId)) return;
     const layer = nextEmptyClipLayer(activeScene);
     const identity = createClipIdentity(activeScene.clips);
     const effect = effects.solid ?? Object.values(effects)[0];
@@ -170,7 +189,7 @@ export function DesignerAnimateTimeline({
       id: identity.id,
       name: identity.name,
       enabled: true,
-      target: selectedTargetIds.find((targetId) => targets.some((target) => target.id === targetId)) ?? "full_sign",
+      target: targetId,
       coordinateSpace: "local",
       effect: effect?.id ?? "solid",
       blend: "replace",
@@ -190,6 +209,7 @@ export function DesignerAnimateTimeline({
     if (!activeScene || !clipId) return;
     onChange({ ...document, scenes: document.scenes.map((scene) => scene.id === activeScene.id ? { ...scene, clips: scene.clips.filter((clip) => clip.id !== clipId) } : scene) });
     setSelectedClipId(undefined);
+    onSelectedClipTargetChange?.(null);
   }
 
   function beginClipDrag(event: React.PointerEvent<HTMLElement>, clip: ClipForm, mode: "move" | "start" | "end") {
@@ -271,7 +291,12 @@ export function DesignerAnimateTimeline({
           </div>
           <Button type="button" variant="outline" density="compact" title="New scene" onClick={addScene}><Plus className="h-4 w-4" />Scene</Button>
           <Button type="button" variant="outline" density="compact" onClick={addLane}><Plus className="h-4 w-4" />Track</Button>
-          <Button type="button" variant="outline" density="compact" onClick={() => addClip()}><Plus className="h-4 w-4" />Clip</Button>
+          {clipCreationTargets.map((target) => (
+            <Button key={target.id} type="button" variant="outline" density="compact" title={`Add clip for ${target.name}`} onClick={() => addClip(target.id)}>
+              <Plus className="h-4 w-4" />{clipSourceLabel(document, target.id)} clip
+            </Button>
+          ))}
+          {!clipCreationTargets.length ? <span className="shrink-0 text-xs text-muted-foreground">Select a zone with an assigned light strip</span> : null}
           <div className="h-6 w-px shrink-0 bg-border" />
           <Button type="button" density="compact" disabled={previewing} onClick={hasPreview ? onTogglePlayback : onPreview}>{playing ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}{previewing ? "Rendering" : playing ? "Pause" : "Play"}</Button>
           <div className="shrink-0 font-mono text-body-sm text-muted-foreground">{Math.round(previewTimeMs)} ms</div>
@@ -315,10 +340,12 @@ export function DesignerAnimateTimeline({
                   const left = TRACK_GUTTER_WIDTH + timeToPx(clip.startMs, pxPerSecond);
                   const width = Math.max(34, timeToPx(clip.durationMs, pxPerSecond));
                   const targetName = targets.find((target) => target.id === clip.target)?.name ?? clip.target;
+                  const targetPresentation = clipTargetPresentation(document, clip.target);
                   return <ClipBlock
                     key={clip.id}
                     clip={clip}
                     targetName={targetName}
+                    targetPresentation={targetPresentation}
                     left={left}
                     width={width}
                     top={HEADER_HEIGHT + Math.max(0, clip.layer) * ROW_HEIGHT + 1}
@@ -344,12 +371,15 @@ export function DesignerAnimateTimeline({
             <div className="mb-3 text-body-sm font-semibold">{selectedClip ? selectedClip.name : "Select a clip"}</div>
             {selectedClip ? <ClipInspector
               clip={selectedClip}
-              targets={targets}
+              scopeTargets={clipScopeTargets(lightSources, selectedClip.target)}
               effect={effects[selectedClip.effect]}
               effects={effects}
               onChange={(patch) => {
                 updateClip(selectedClip.id, patch);
-                if (patch.target !== undefined) onClipTargetSelect?.(zoneTargetIds.has(patch.target) ? patch.target : null);
+                if (patch.target !== undefined) {
+                  onSelectedClipTargetChange?.(patch.target);
+                  onClipTargetSelect?.(zoneTargetIds.has(patch.target) ? patch.target : null);
+                }
               }}
               onDelete={() => removeClip(selectedClip.id)}
             /> : <div className="rounded-md border border-dashed p-4 text-body-sm text-muted-foreground">Select a zone, add a clip, then Play.</div>}
@@ -360,9 +390,10 @@ export function DesignerAnimateTimeline({
   );
 }
 
-function ClipBlock({ clip, targetName, left, width, top, selected, dragging, onSelect, onDrag, onToggleEnabled, onDelete }: {
+function ClipBlock({ clip, targetName, targetPresentation, left, width, top, selected, dragging, onSelect, onDrag, onToggleEnabled, onDelete }: {
   clip: ClipForm;
   targetName: string;
+  targetPresentation: ReturnType<typeof clipTargetPresentation>;
   left: number;
   width: number;
   top: number;
@@ -382,21 +413,22 @@ function ClipBlock({ clip, targetName, left, width, top, selected, dragging, onS
         event.stopPropagation();
         onSelect();
       }}
-      className={`absolute z-10 flex h-8 min-w-8 cursor-grab items-center overflow-hidden rounded border text-left text-meta shadow-sm ${clip.enabled === false ? "opacity-50" : ""} ${dragging ? "cursor-grabbing" : ""} ${selected ? "border-primary bg-primary text-primary-foreground" : "border-border-strong bg-card hover:bg-surface-hover"}`}
+      className={`absolute z-10 flex h-8 min-w-8 cursor-grab items-center overflow-hidden rounded border-2 px-3.5 text-left text-meta shadow-sm ${clip.enabled === false ? "opacity-50" : ""} ${dragging ? "cursor-grabbing" : ""} ${targetPresentation.borderClass} ${selected ? "bg-primary text-primary-foreground ring-1 ring-primary" : "bg-card hover:bg-surface-hover"}`}
       style={{ left, top, width }}
       title={`${clip.name} → ${targetName}: drag to move`}
     >
-      <span className="flex h-full w-3 shrink-0 cursor-ew-resize items-center justify-center bg-black/10 hover:bg-black/20" onPointerDown={(event) => onDrag(event, "start")} title="Resize start">
+      <span className="absolute bottom-0 left-0 top-0 z-40 flex w-3.5 cursor-ew-resize items-center justify-center border-r border-slate-400 bg-white/90 text-slate-800 shadow-sm hover:bg-white" onPointerDown={(event) => onDrag(event, "start")} title="Resize clip start" aria-label="Resize clip start">
         <GripVertical className="h-3 w-3" />
       </span>
       <button type="button" className="flex h-full w-6 shrink-0 items-center justify-center bg-black/10 text-current opacity-75 hover:bg-black/20 hover:opacity-100" title={clip.enabled === false ? "Enable clip" : "Disable clip"} aria-label={clip.enabled === false ? "Enable clip" : "Disable clip"} onPointerDown={stopTimelinePointer} onClick={(event) => { event.stopPropagation(); onToggleEnabled(); }}>
         {clip.enabled === false ? <EyeOff className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
       </button>
+      <span className={`ml-1 shrink-0 rounded px-1 py-0.5 text-[8px] font-bold uppercase leading-none ${selected ? "bg-white/20 text-white" : targetPresentation.badgeClass}`}>{targetPresentation.label}</span>
       <span className="block min-w-0 flex-1 truncate px-2">{clip.name}</span>
       <button type="button" className="flex h-full w-6 shrink-0 items-center justify-center bg-black/10 text-current opacity-75 hover:bg-black/20 hover:opacity-100" title="Delete clip" onPointerDown={onDelete} onClick={(event) => event.stopPropagation()}>
         <Trash2 className="h-3.5 w-3.5" />
       </button>
-      <span className="flex h-full w-3 shrink-0 cursor-ew-resize items-center justify-center bg-black/10 hover:bg-black/20" onPointerDown={(event) => onDrag(event, "end")} title="Resize end">
+      <span className="absolute bottom-0 right-0 top-0 z-40 flex w-3.5 cursor-ew-resize items-center justify-center border-l border-slate-400 bg-white/90 text-slate-800 shadow-sm hover:bg-white" onPointerDown={(event) => onDrag(event, "end")} title="Resize clip end" aria-label="Resize clip end">
         <GripVertical className="h-3 w-3" />
       </span>
     </div>
@@ -415,14 +447,49 @@ function TimelineGrid({ durationMs, laneCount, pxPerSecond }: { durationMs: numb
   </>;
 }
 
-function ClipInspector({ clip, targets, effect, effects, onChange, onDelete }: { clip: ClipForm; targets: Array<{ id: string; name: string }>; effect?: EffectDefinition; effects: Record<string, EffectDefinition>; onChange: (patch: Partial<ClipForm>) => void; onDelete: () => void }) {
+function ClipInspector({ clip, scopeTargets, effect, effects, onChange, onDelete }: { clip: ClipForm; scopeTargets: Array<{ id: string; name: string }>; effect?: EffectDefinition; effects: Record<string, EffectDefinition>; onChange: (patch: Partial<ClipForm>) => void; onDelete: () => void }) {
   const definition = effect ?? effects.solid;
   return <div className="space-y-2">
-    <Select label="Target" value={clip.target} options={targets.map((target) => [target.id, target.name])} onChange={(target) => onChange({ target })} />
+    <label className="block text-meta font-medium text-muted-foreground">
+      Name
+      <input
+        className="mt-1 h-9 w-full rounded-md border border-input bg-card px-3 text-body-sm text-foreground outline-none focus:ring-2 focus:ring-ring"
+        value={clip.name}
+        maxLength={80}
+        placeholder="Letter or effect name"
+        onChange={(event) => onChange({ name: event.target.value })}
+        onBlur={(event) => {
+          const name = event.target.value.trim();
+          if (name !== clip.name) onChange({ name: name || "Clip" });
+        }}
+      />
+    </label>
+    {scopeTargets.length ? <Select label="Scope" value={clip.target} options={scopeTargets.map((target) => [target.id, target.name])} onChange={(target) => onChange({ target })} /> : <div className="rounded-md border border-amber-400/60 bg-amber-50 p-3 text-xs text-amber-950">Legacy Full sign clip. Replace it with a clip created from a zone light source.</div>}
     <Select label="Effect" value={clip.effect} options={Object.values(effects).map((item) => [item.id, item.label])} onChange={(effectId) => onChange({ effect: effectId, params: defaultParams(effects[effectId]) })} />
     {definition ? <div className="space-y-2 border-t border-border-2 pt-3">{Object.entries(definition.parameters).map(([key, parameter]) => <ParameterInput key={key} name={key} definition={parameter} value={clip.params[key]} onChange={(value) => onChange({ params: { ...clip.params, [key]: value } })} />)}</div> : null}
     <Button type="button" variant="ghost" density="compact" className="w-full text-destructive" onPointerDown={stopTimelinePointer} onClick={onDelete}><Trash2 className="h-4 w-4" />Delete clip</Button>
   </div>;
+}
+
+function clipSourceLabel(document: PartituraDocument, targetId: string) {
+  const mode = document.designer?.lightSources.find((source) => source.id === targetId)?.mode;
+  if (mode === "front") return "Front";
+  if (mode === "halo") return "Halo";
+  if (mode === "wall_wash") return "Wall Wash";
+  return "Target";
+}
+
+function clipTargetPresentation(document: PartituraDocument, targetId: string) {
+  const globalMode = designerGlobalLightSourceMode(targetId);
+  const mode = document.designer?.lightSources.find((source) => source.id === targetId)?.mode ?? globalMode;
+  const scope = globalMode ? "All " : "";
+  if (mode === "front") return { label: `${scope}Front`, borderClass: "border-sky-500", badgeClass: "bg-sky-100 text-sky-800" };
+  if (mode === "halo") return { label: `${scope}Halo`, borderClass: "border-violet-500", badgeClass: "bg-violet-100 text-violet-800" };
+  if (mode === "wall_wash") return { label: `${scope}Wall`, borderClass: "border-amber-500", badgeClass: "bg-amber-100 text-amber-900" };
+  if (targetId === "full_sign") return { label: "Full", borderClass: "border-slate-500", badgeClass: "bg-slate-200 text-slate-900" };
+  if (document.designer?.groups.some((group) => group.id === targetId)) return { label: "Group", borderClass: "border-emerald-500", badgeClass: "bg-emerald-100 text-emerald-900" };
+  if (document.designer?.channels.some((channel) => channel.id === targetId)) return { label: "Channel", borderClass: "border-amber-500", badgeClass: "bg-amber-100 text-amber-900" };
+  return { label: "Zone", borderClass: "border-blue-500", badgeClass: "bg-blue-100 text-blue-900" };
 }
 
 function stopTimelinePointer(event: React.PointerEvent<HTMLElement>) {
@@ -509,7 +576,10 @@ function ParameterInput({ name, definition, value, onChange }: { name: string; d
 
 function useStatefulClip(clips: ClipForm[]) {
   const [selectedClipId, setSelectedClipId] = React.useState<string | undefined>(clips[0]?.id);
-  React.useEffect(() => { if (selectedClipId && clips.some((clip) => clip.id === selectedClipId)) return; setSelectedClipId(clips[0]?.id); }, [clips, selectedClipId]);
+  React.useEffect(() => {
+    if (!selectedClipId || clips.some((clip) => clip.id === selectedClipId)) return;
+    setSelectedClipId(undefined);
+  }, [clips, selectedClipId]);
   return [selectedClipId, setSelectedClipId] as const;
 }
 

@@ -1,4 +1,4 @@
-import type { DesignerBuildAreaForm, DesignerChannelForm, DesignerContour, DesignerControllerForm, DesignerForm, DesignerGeometry, DesignerPoint, DesignerPointNodeType, DesignerRouteForm, DesignerRouteKind, DesignerZoneForm } from "@/lib/lighting/partitura-model";
+import type { DesignerBuildAreaForm, DesignerChannelForm, DesignerContour, DesignerControllerForm, DesignerForm, DesignerGeometry, DesignerPoint, DesignerPointNodeType, DesignerRouteForm, DesignerRouteKind, DesignerRouteSurface, DesignerWorkLineForm, DesignerZoneForm } from "@/lib/lighting/partitura-model";
 import { designerGeometryAsShape, resolveDesignerDerivedGeometry, resolveDesignerProjectionGeometry } from "@/lib/lighting/partitura-model";
 import { filletDesignerGeometry } from "@/lib/lighting/designer-derived-geometry";
 import { estimateDesignerTextBounds } from "@/lib/lighting/designer-text-geometry";
@@ -132,30 +132,63 @@ export function movedShape<T extends { x: number; y: number; points?: DesignerPo
   };
 }
 
-export function updatePolygonPoint<T extends { x: number; y: number; width: number; height: number; points?: DesignerPoint[]; contours?: DesignerContour[] }>(shape: T, pointIndex: number, point: DesignerPoint, snapCm: number): T {
-  if (!shape.points?.[pointIndex]) return shape;
-  const points = shape.points.map((entry, index) => (index === pointIndex ? { ...entry, x: snapValue(point.x, snapCm), y: snapValue(point.y, snapCm) } : entry));
-  const bounds = pointsBounds(points);
-  if (!bounds) return { ...shape, points };
-  return { ...shape, ...bounds, points, ...(shape.contours ? { contours: shape.contours.map((contour, index) => index === 0 ? { ...contour, points } : contour) } : {}) };
+type PolygonPointShape = { x: number; y: number; width: number; height: number; points?: DesignerPoint[]; contours?: DesignerContour[] };
+
+export function designerShapePointLocation(shape: Pick<PolygonPointShape, "points" | "contours">, flatIndex: number) {
+  const contours = shape.contours?.length ? shape.contours : shape.points ? [{ points: shape.points, pathMode: "straight" as const, closed: true as const }] : [];
+  let offset = 0;
+  for (let contourIndex = 0; contourIndex < contours.length; contourIndex += 1) {
+    const points = contours[contourIndex].points;
+    if (flatIndex >= offset && flatIndex < offset + points.length) {
+      return { contourIndex, pointIndex: flatIndex - offset, flatIndex, points, point: points[flatIndex - offset] };
+    }
+    offset += points.length;
+  }
+  return null;
 }
 
-export function insertPolygonPoint<T extends { x: number; y: number; width: number; height: number; points?: DesignerPoint[] }>(shape: T, insertIndex: number, point: DesignerPoint, snapCm: number): T {
-  if (!shape.points || shape.points.length < 3) return shape;
+export function designerShapePointCount(shape: Pick<PolygonPointShape, "points" | "contours">) {
+  return shape.contours?.length ? shape.contours.reduce((count, contour) => count + contour.points.length, 0) : (shape.points?.length ?? 0);
+}
+
+function polygonShapeBounds(shape: Pick<PolygonPointShape, "points" | "contours">) {
+  return pointsBounds(shape.contours?.length ? shape.contours.flatMap((contour) => contour.points) : (shape.points ?? []));
+}
+
+function replaceContourPoints<T extends PolygonPointShape>(shape: T, contourIndex: number, points: DesignerPoint[]): T {
+  if (!shape.contours?.length) return { ...shape, points };
+  const contours = shape.contours.map((contour, index) => index === contourIndex ? { ...contour, points } : contour);
+  return { ...shape, points: contours[0].points, contours };
+}
+
+export function updatePolygonPoint<T extends PolygonPointShape>(shape: T, pointIndex: number, point: DesignerPoint, snapCm: number): T {
+  const location = designerShapePointLocation(shape, pointIndex);
+  if (!location) return shape;
+  const points = location.points.map((entry, index) => (index === location.pointIndex ? { ...entry, x: snapValue(point.x, snapCm), y: snapValue(point.y, snapCm) } : entry));
+  const updated = replaceContourPoints(shape, location.contourIndex, points);
+  const bounds = polygonShapeBounds(updated);
+  return bounds ? { ...updated, ...bounds } : updated;
+}
+
+export function insertPolygonPoint<T extends PolygonPointShape>(shape: T, insertIndex: number, point: DesignerPoint, snapCm: number): T {
+  const location = designerShapePointLocation(shape, Math.min(Math.max(0, insertIndex - 1), Math.max(0, designerShapePointCount(shape) - 1)));
+  if (!location || location.points.length < 3) return shape;
   const nextPoint = { x: snapValue(point.x, snapCm), y: snapValue(point.y, snapCm) };
-  const clampedIndex = clamp(Math.round(insertIndex), 0, shape.points.length);
-  const points = [...shape.points.slice(0, clampedIndex), nextPoint, ...shape.points.slice(clampedIndex)];
-  const bounds = pointsBounds(points);
-  if (!bounds) return { ...shape, points };
-  return { ...shape, ...bounds, points };
+  const contourOffset = location.flatIndex - location.pointIndex;
+  const localInsertIndex = clamp(Math.round(insertIndex - contourOffset), 0, location.points.length);
+  const points = [...location.points.slice(0, localInsertIndex), nextPoint, ...location.points.slice(localInsertIndex)];
+  const updated = replaceContourPoints(shape, location.contourIndex, points);
+  const bounds = polygonShapeBounds(updated);
+  return bounds ? { ...updated, ...bounds } : updated;
 }
 
-export function deletePolygonPoint<T extends { x: number; y: number; width: number; height: number; points?: DesignerPoint[] }>(shape: T, pointIndex: number): T {
-  if (!shape.points || shape.points.length <= 3 || !shape.points[pointIndex]) return shape;
-  const points = shape.points.filter((_, index) => index !== pointIndex);
-  const bounds = pointsBounds(points);
-  if (!bounds) return { ...shape, points };
-  return { ...shape, ...bounds, points };
+export function deletePolygonPoint<T extends PolygonPointShape>(shape: T, pointIndex: number): T {
+  const location = designerShapePointLocation(shape, pointIndex);
+  if (!location || location.points.length <= 3) return shape;
+  const points = location.points.filter((_, index) => index !== location.pointIndex);
+  const updated = replaceContourPoints(shape, location.contourIndex, points);
+  const bounds = polygonShapeBounds(updated);
+  return bounds ? { ...updated, ...bounds } : updated;
 }
 
 export function scaleShapePoints(shape: { x: number; y: number; width: number; height: number; points?: DesignerPoint[] }, next: { x: number; y: number; width: number; height: number }) {
@@ -195,7 +228,12 @@ export function smoothBezierPoints(points: DesignerPoint[]): DesignerPoint[] {
     const next = points[(index + 1) % points.length];
     const factor = 0.22;
     const handle = { x: (next.x - previous.x) * factor, y: (next.y - previous.y) * factor };
-    return { ...point, nodeType: "smooth" as const, handleIn: { x: -handle.x, y: -handle.y }, handleOut: handle };
+    const nodeType = point.nodeType ?? "smooth";
+    if (nodeType === "corner" || nodeType === "straight") {
+      const { handleIn: _handleIn, handleOut: _handleOut, ...plainPoint } = point;
+      return { ...plainPoint, nodeType };
+    }
+    return { ...point, nodeType, handleIn: { x: -handle.x, y: -handle.y }, handleOut: handle };
   });
 }
 
@@ -206,18 +244,24 @@ export function smoothOpenBezierPoints(points: DesignerPoint[]): DesignerPoint[]
     const next = points[index + 1] ?? point;
     const factor = index === 0 || index === points.length - 1 ? 0.18 : 0.22;
     const handle = { x: (next.x - previous.x) * factor, y: (next.y - previous.y) * factor };
-    return { ...point, nodeType: "smooth" as const, handleIn: { x: -handle.x, y: -handle.y }, handleOut: handle };
+    const nodeType = point.nodeType ?? "smooth";
+    if (nodeType === "corner" || nodeType === "straight") {
+      const { handleIn: _handleIn, handleOut: _handleOut, ...plainPoint } = point;
+      return { ...plainPoint, nodeType };
+    }
+    return { ...point, nodeType, handleIn: { x: -handle.x, y: -handle.y }, handleOut: handle };
   });
 }
 
-export function setPolygonNodeType<T extends { x: number; y: number; width: number; height: number; points?: DesignerPoint[]; pathMode?: "straight" | "bezier" }>(shape: T, pointIndex: number, nodeType: DesignerPointNodeType): T {
-  const anchor = shape.points?.[pointIndex];
-  if (!anchor || !shape.points) return shape;
-  const previous = shape.points[(pointIndex - 1 + shape.points.length) % shape.points.length];
-  const next = shape.points[(pointIndex + 1) % shape.points.length];
+export function setPolygonNodeType<T extends PolygonPointShape & { pathMode?: "straight" | "bezier" }>(shape: T, pointIndex: number, nodeType: DesignerPointNodeType): T {
+  const location = designerShapePointLocation(shape, pointIndex);
+  if (!location) return shape;
+  const anchor = location.point;
+  const previous = location.points[(location.pointIndex - 1 + location.points.length) % location.points.length];
+  const next = location.points[(location.pointIndex + 1) % location.points.length];
   const tangent = { x: (next.x - previous.x) * 0.22, y: (next.y - previous.y) * 0.22 };
-  const points = shape.points.map((point, index) => {
-    if (index !== pointIndex) return point;
+  const points = location.points.map((point, index) => {
+    if (index !== location.pointIndex) return point;
     if (nodeType === "corner" || nodeType === "straight") {
       const { handleIn: _handleIn, handleOut: _handleOut, ...plainPoint } = point;
       return { ...plainPoint, nodeType };
@@ -225,13 +269,15 @@ export function setPolygonNodeType<T extends { x: number; y: number; width: numb
     const { radiusMm: _radiusMm, ...smoothPoint } = point;
     return { ...smoothPoint, nodeType, handleIn: { x: -tangent.x, y: -tangent.y }, handleOut: tangent };
   });
-  const bounds = pointsBounds(points);
-  return { ...shape, pathMode: "bezier", ...(bounds ?? {}), points };
+  const updated = replaceContourPoints(shape, location.contourIndex, points);
+  const bounds = polygonShapeBounds(updated);
+  return { ...updated, pathMode: "bezier", ...(bounds ?? {}) };
 }
 
-export function updateBezierHandle<T extends { x: number; y: number; width: number; height: number; points?: DesignerPoint[] }>(shape: T, pointIndex: number, handle: "in" | "out", absolutePoint: DesignerPoint, snapCm: number): T {
-  const anchor = shape.points?.[pointIndex];
-  if (!anchor || !shape.points) return shape;
+export function updateBezierHandle<T extends PolygonPointShape>(shape: T, pointIndex: number, handle: "in" | "out", absolutePoint: DesignerPoint, snapCm: number): T {
+  const location = designerShapePointLocation(shape, pointIndex);
+  if (!location) return shape;
+  const anchor = location.point;
   const vector = { x: snapValue(absolutePoint.x, snapCm) - anchor.x, y: snapValue(absolutePoint.y, snapCm) - anchor.y };
   const primary = handle === "in" ? "handleIn" : "handleOut";
   const opposite = handle === "in" ? "handleOut" : "handleIn";
@@ -244,9 +290,10 @@ export function updateBezierHandle<T extends { x: number; y: number; width: numb
     ? { x: (-vector.x / vectorLength) * oppositeLength, y: (-vector.y / vectorLength) * oppositeLength }
     : { x: 0, y: 0 };
   const nodeType: DesignerPointNodeType = anchor.nodeType === "smooth" ? "smooth" : "symmetric";
-  const points: DesignerPoint[] = shape.points.map((point, index) => index === pointIndex ? { ...point, nodeType, [primary]: vector, [opposite]: oppositeVector } : point);
-  const bounds = pointsBounds(points);
-  return bounds ? { ...shape, ...bounds, points } : { ...shape, points };
+  const points: DesignerPoint[] = location.points.map((point, index) => index === location.pointIndex ? { ...point, nodeType, [primary]: vector, [opposite]: oppositeVector } : point);
+  const updated = replaceContourPoints(shape, location.contourIndex, points);
+  const bounds = polygonShapeBounds(updated);
+  return bounds ? { ...updated, ...bounds } : updated;
 }
 
 export function bezierHandlePoint(point: DesignerPoint, handle: "in" | "out") {
@@ -358,12 +405,13 @@ export function routeSelectedColor(kind: DesignerRouteKind) {
   return kind === "data_cable" ? "#bef264" : "#ec4899";
 }
 
-export function createRouteFromDraft(kind: DesignerRouteKind, start: DesignerPoint, end: DesignerPoint, designer: DesignerForm): DesignerRouteForm {
+export function createRouteFromDraft(kind: DesignerRouteKind, start: DesignerPoint, end: DesignerPoint, designer: DesignerForm, designSurface: DesignerRouteSurface = "rear"): DesignerRouteForm {
   const next = nextRouteNumber(designer.routes);
   return {
     id: `route_${next}`,
     name: kind === "data_cable" ? `Data cable ${next}` : `LED string ${next}`,
     kind,
+    designSurface,
     points: [start, end]
   };
 }
@@ -444,7 +492,7 @@ export function pickDesignerHit(designer: DesignerForm, activeLayer: DesignerAct
     }
     for (const zone of designer.zones) {
       if (zone.visible === false) continue;
-      const pointHit = zone.shape === "polygon" && zone.points && !zone.contours ? pickPolygonPointHit(zone.id, zone.points, point, tolerance, "zone_point") : null;
+      const pointHit = zone.shape === "polygon" && zone.points ? pickShapePointHit(zone.id, zone, point, tolerance, "zone_point") : null;
       if (pointHit) return pointHit;
       const resizeHit = pickResizeHandleHit(zone, point, tolerance, "zone_resize");
       if (resizeHit) return resizeHit;
@@ -454,7 +502,7 @@ export function pickDesignerHit(designer: DesignerForm, activeLayer: DesignerAct
   if (activeLayer === "faceGraphic" && designer.layers.faceGraphic.visible) {
     for (const element of designer.faceGraphics) {
       if (element.visible === false) continue;
-      const pointHit = element.shape === "polygon" && element.points && !element.contours ? pickPolygonPointHit(element.id, element.points, point, tolerance, "face_graphic_point") : null;
+      const pointHit = element.shape === "polygon" && element.points ? pickShapePointHit(element.id, element, point, tolerance, "face_graphic_point") : null;
       if (pointHit) return pointHit;
       const resizeHit = pickResizeHandleHit(element, point, tolerance, "face_graphic_resize");
       if (resizeHit) return resizeHit;
@@ -464,11 +512,20 @@ export function pickDesignerHit(designer: DesignerForm, activeLayer: DesignerAct
   if ((activeLayer === "reference" || activeLayer === "artwork") && designer.layers.artwork.visible) {
     for (const buildArea of [...designer.buildAreas].reverse()) {
       if (buildArea.visible === false) continue;
-      const pointHit = buildArea.shape === "polygon" && buildArea.points && !buildArea.contours ? pickPolygonPointHit(buildArea.id, buildArea.points, point, tolerance, "build_area_point") : null;
+      const pointHit = buildArea.shape === "polygon" && buildArea.points ? pickShapePointHit(buildArea.id, buildArea, point, tolerance, "build_area_point") : null;
       if (pointHit) return pointHit;
       const resizeHit = pickResizeHandleHit(buildArea, point, tolerance, "build_area_resize");
       if (resizeHit) return resizeHit;
       if (pointInsideDesignerShape(buildArea, point) || pointNearShapeStroke(buildArea, point, tolerance * 2)) return { type: "build_area", id: buildArea.id };
+    }
+  }
+  // Construction lines are deliberately last in hit priority so they never
+  // steal a click from authored geometry drawn above them.
+  if (designer.workLinesVisible) {
+    for (const line of [...designer.workLines].reverse()) {
+      const pointHit = pickPolygonPointHit(line.id, line.points, point, tolerance, "work_line_point");
+      if (pointHit) return pointHit;
+      if (distanceToPolyline(line.points, point) <= tolerance) return { type: "work_line", id: line.id };
     }
   }
   return null;
@@ -528,17 +585,48 @@ export function pickControllerHit(controller: DesignerControllerForm, point: Des
 }
 
 export function pickRoutePointHit(route: DesignerRouteForm, point: DesignerPoint, tolerance: number): DesignerCanvasHit {
-  for (let index = route.points.length - 1; index >= 0; index -= 1) {
-    if (distanceBetweenPoints(route.points[index], point) <= tolerance) return { type: "route_point", id: route.id, pointIndex: index };
-  }
-  return null;
+  return nearestPointHit(route.id, route.points, point, tolerance, "route_point");
 }
 
-export function pickPolygonPointHit(id: string, points: DesignerPoint[], point: DesignerPoint, tolerance: number, type: "build_area_point" | "zone_point" | "channel_point" | "face_graphic_point"): DesignerCanvasHit {
-  for (let index = points.length - 1; index >= 0; index -= 1) {
-    if (distanceBetweenPoints(points[index], point) <= tolerance) return { type, id, pointIndex: index };
+export function pickPolygonPointHit(id: string, points: DesignerPoint[], point: DesignerPoint, tolerance: number, type: "build_area_point" | "zone_point" | "channel_point" | "face_graphic_point" | "work_line_point"): DesignerCanvasHit {
+  return nearestPointHit(id, points, point, tolerance, type);
+}
+
+export function pickShapePointHit(id: string, shape: Pick<PolygonPointShape, "points" | "contours">, point: DesignerPoint, tolerance: number, type: "build_area_point" | "zone_point" | "face_graphic_point"): DesignerCanvasHit {
+  const contours = shape.contours?.length ? shape.contours : shape.points ? [{ points: shape.points }] : [];
+  let nearest: { distance: number; pointIndex: number } | null = null;
+  let offset = 0;
+  for (const contour of contours) {
+    for (let index = 0; index < contour.points.length; index += 1) {
+      const distance = distanceBetweenPoints(contour.points[index], point);
+      if (distance <= tolerance && (!nearest || distance < nearest.distance)) nearest = { distance, pointIndex: offset + index };
+    }
+    offset += contour.points.length;
   }
-  return null;
+  return nearest ? { type, id, pointIndex: nearest.pointIndex } : null;
+}
+
+function nearestPointHit(id: string, points: DesignerPoint[], point: DesignerPoint, tolerance: number, type: "route_point" | "build_area_point" | "zone_point" | "channel_point" | "face_graphic_point" | "work_line_point"): DesignerCanvasHit {
+  let nearest: { distance: number; pointIndex: number } | null = null;
+  for (let pointIndex = 0; pointIndex < points.length; pointIndex += 1) {
+    const candidate = points[pointIndex];
+    const distance = distanceBetweenPoints(candidate, point);
+    if (distance <= tolerance && (!nearest || distance < nearest.distance)) nearest = { distance, pointIndex };
+  }
+  return nearest ? { type, id, pointIndex: nearest.pointIndex } : null;
+}
+
+export function movedWorkLine(line: DesignerWorkLineForm, deltaX: number, deltaY: number, snapCm: number): DesignerWorkLineForm {
+  const anchor = line.points[0];
+  if (!anchor) return line;
+  const snappedDeltaX = snapValue(anchor.x + deltaX, snapCm) - anchor.x;
+  const snappedDeltaY = snapValue(anchor.y + deltaY, snapCm) - anchor.y;
+  return { ...line, points: line.points.map((point) => ({ ...point, x: point.x + snappedDeltaX, y: point.y + snappedDeltaY })) };
+}
+
+export function updateWorkLinePoint(line: DesignerWorkLineForm, pointIndex: number, point: DesignerPoint, snapCm: number): DesignerWorkLineForm {
+  if (!line.points[pointIndex]) return line;
+  return { ...line, points: line.points.map((entry, index) => index === pointIndex ? { x: snapValue(point.x, snapCm), y: snapValue(point.y, snapCm) } : entry) };
 }
 
 export function pickResizeHandleHit(shape: { id: string; x: number; y: number; width: number; height: number }, point: DesignerPoint, tolerance: number, type: "artwork_resize" | "build_area_resize" | "zone_resize" | "face_graphic_resize"): DesignerCanvasHit {
@@ -656,21 +744,45 @@ export function nearestPolygonInsertIndex(points: DesignerPoint[], point: Design
   return nearest.insertIndex;
 }
 
-export function nearestShapeInsertIndex(shape: Pick<DesignerZoneForm, "shape" | "pathMode" | "points"> | Pick<DesignerBuildAreaForm, "shape" | "pathMode" | "points">, point: DesignerPoint) {
+export function nearestShapeInsertIndex(shape: Pick<DesignerZoneForm, "shape" | "pathMode" | "points" | "contours"> | Pick<DesignerBuildAreaForm, "shape" | "pathMode" | "points" | "contours">, point: DesignerPoint) {
   if (shape.shape !== "polygon" || !shape.points || shape.points.length < 3) return null;
-  if (shape.pathMode !== "bezier") return nearestPolygonInsertIndex(shape.points, point);
+  const contours = shape.contours?.length ? shape.contours : [{ points: shape.points, pathMode: shape.pathMode ?? "straight", closed: true as const }];
   let nearest = { distance: Number.POSITIVE_INFINITY, insertIndex: 1 };
-  shape.points.forEach((start, index) => {
-    const end = shape.points![(index + 1) % shape.points!.length];
-    let previous = cubicBezierPoint(start, end, 0);
-    for (let step = 1; step <= 16; step += 1) {
-      const current = cubicBezierPoint(start, end, step / 16);
-      const distance = pointToSegmentDistance(point, previous, current);
-      if (distance < nearest.distance) nearest = { distance, insertIndex: index + 1 };
-      previous = current;
+  let offset = 0;
+  contours.forEach((contour) => {
+    if (contour.pathMode !== "bezier") {
+      const localIndex = nearestPolygonInsertIndex(contour.points, point);
+      if (localIndex === null) {
+        offset += contour.points.length;
+        return;
+      }
+      const start = contour.points[(localIndex - 1 + contour.points.length) % contour.points.length];
+      const end = contour.points[localIndex % contour.points.length];
+      const distance = pointToSegmentDistance(point, start, end);
+      if (distance < nearest.distance) nearest = { distance, insertIndex: offset + localIndex };
+      offset += contour.points.length;
+      return;
     }
+    contour.points.forEach((start, index) => {
+      const end = contour.points[(index + 1) % contour.points.length];
+      let previous = cubicBezierPoint(start, end, 0);
+      for (let step = 1; step <= 16; step += 1) {
+        const current = cubicBezierPoint(start, end, step / 16);
+        const distance = pointToSegmentDistance(point, previous, current);
+        if (distance < nearest.distance) nearest = { distance, insertIndex: offset + index + 1 };
+        previous = current;
+      }
+    });
+    offset += contour.points.length;
   });
   return nearest.insertIndex;
+}
+
+export function shapeInsertIndexAtPoint(shape: Pick<DesignerZoneForm, "shape" | "pathMode" | "points" | "contours" | "x" | "y" | "width" | "height"> | Pick<DesignerBuildAreaForm, "shape" | "pathMode" | "points" | "contours" | "x" | "y" | "width" | "height">, point: DesignerPoint, tolerance: number) {
+  if (shape.shape !== "polygon" || !shape.points) return null;
+  if (pickShapePointHit("candidate", shape, point, tolerance, "zone_point")) return null;
+  if (!pointNearShapeStroke(shape, point, tolerance * 1.5)) return null;
+  return nearestShapeInsertIndex(shape, point);
 }
 
 export function channelWidthCm(channel: DesignerChannelForm) {
@@ -1057,7 +1169,7 @@ function capArcPoints(center: DesignerPoint, tangent: DesignerPoint, radius: num
 
 export function worldHitTolerance(viewport: DesignerViewport, canvasSize: { width: number; height: number }) {
   const cmPerPixel = Math.max(viewport.width / Math.max(1, canvasSize.width), viewport.height / Math.max(1, canvasSize.height));
-  return Math.max(0.6, cmPerPixel * 9);
+  return Math.max(0.08, cmPerPixel * 9);
 }
 
 export function summarizeRoute(route: DesignerRouteForm, designer: DesignerForm) {
@@ -1161,7 +1273,7 @@ export function moveRouteWithSolderedTerminals(designer: DesignerForm, routeId: 
 
 export function canSolderRoutes(sourceRoute: DesignerRouteForm, sourcePointIndex: number, targetRoute: DesignerRouteForm, targetPointIndex: number, snapCm: number) {
   if (!isRouteTerminal(sourceRoute, sourcePointIndex) || !isRouteTerminal(targetRoute, targetPointIndex)) return false;
-  if (!sameSnapPoint(sourceRoute.points[sourcePointIndex], targetRoute.points[targetPointIndex], snapCm)) return false;
+  if (!sameTerminalPoint(sourceRoute.points[sourcePointIndex], targetRoute.points[targetPointIndex])) return false;
   const sourceRole = routeTerminalRole(sourcePointIndex);
   const targetRole = routeTerminalRole(targetPointIndex);
   return sourceRole !== targetRole;
@@ -1178,12 +1290,30 @@ export function clearFloatingTerminalJoints(routes: DesignerRouteForm[], control
         return [0, candidateRoute.points.length - 1].some((candidateIndex) => {
           const candidatePoint = candidateRoute.points[candidateIndex];
           if (!candidatePoint?.joint) return false;
-          return routeTerminalRole(pointIndex) !== routeTerminalRole(candidateIndex) && sameSnapPoint(point, candidatePoint, snapCm);
+          return routeTerminalRole(pointIndex) !== routeTerminalRole(candidateIndex) && sameTerminalPoint(point, candidatePoint);
         });
       });
       return connectedToRoute ? point : { ...point, joint: false };
     })
   }));
+}
+
+/** Removes one authored electrical route, including every light-source assignment to it. */
+export function deleteDesignerRoute(designer: DesignerForm, routeId: string): DesignerForm {
+  const routes = clearFloatingTerminalJoints(
+    designer.routes.filter((route) => route.id !== routeId),
+    designer.controller,
+    designer.snapCm
+  );
+  if (routes.length === designer.routes.length) return designer;
+  return {
+    ...designer,
+    routes,
+    lightSources: designer.lightSources.map((source) => ({
+      ...source,
+      stringIds: source.stringIds.filter((id) => id !== routeId)
+    }))
+  };
 }
 
 /**
@@ -1261,7 +1391,7 @@ export function controllerConnectedPorts(controller: DesignerControllerForm, rou
     const terminal = route.points[0];
     if (!terminal?.joint) return;
     for (let portIndex = 0; portIndex < controller.dataOutputs; portIndex += 1) {
-      if (sameSnapPoint(terminal, controllerPortPoint(controller, portIndex, snapCm), snapCm)) {
+      if (sameTerminalPoint(terminal, controllerPortPoint(controller, portIndex, snapCm))) {
         connectedPorts.add(portIndex);
       }
     }
@@ -1289,7 +1419,7 @@ export function resolveRouteOutputs(controller: DesignerControllerForm, routes: 
     routes.forEach((candidate) => {
       if (candidate.id === route.id || resolved.has(candidate.id)) return;
       const start = candidate.points[0];
-      if (start?.joint && sameSnapPoint(end, start, snapCm)) queue.push({ routeId: candidate.id, output: current.output });
+      if (start?.joint && sameTerminalPoint(end, start)) queue.push({ routeId: candidate.id, output: current.output });
     });
   }
 
@@ -1304,7 +1434,7 @@ export function findMatchingControllerPort(controller: DesignerControllerForm, r
 
 export function findControllerPortAtPoint(controller: DesignerControllerForm, point: DesignerPoint, snapCm: number) {
   for (let portIndex = 0; portIndex < controller.dataOutputs; portIndex += 1) {
-    if (sameSnapPoint(point, controllerPortPoint(controller, portIndex, snapCm), snapCm)) return portIndex;
+    if (sameTerminalPoint(point, controllerPortPoint(controller, portIndex, snapCm))) return portIndex;
   }
   return null;
 }
@@ -1318,7 +1448,7 @@ export function moveControllerWithSolderedCables(designer: DesignerForm, origina
     if (route.kind !== "data_cable") return [];
     const terminal = route.points[0];
     if (!terminal?.joint) return [];
-    const matchingPortMove = portMoves.find((portMove) => sameSnapPoint(terminal, portMove.from, snapCm));
+    const matchingPortMove = portMoves.find((portMove) => sameTerminalPoint(terminal, portMove.from));
     return matchingPortMove ? [{ routeId: route.id, point: matchingPortMove.to }] : [];
   });
 
@@ -1346,10 +1476,11 @@ export function findJointGroup(routes: DesignerRouteForm[], routeId: string, poi
   const terminals: DesignerRouteTerminal[] = [];
 
   routes.forEach((route) => {
+    if (!sameRouteDesignSurface(sourceRoute, route)) return;
     [0, route.points.length - 1].forEach((candidateIndex) => {
       const candidatePoint = route.points[candidateIndex];
       if (!candidatePoint?.joint) return;
-      if (sameSnapPoint(sourcePoint, candidatePoint, snapCm)) {
+      if (sameTerminalPoint(sourcePoint, candidatePoint)) {
         terminals.push({ routeId: route.id, pointIndex: candidateIndex });
       }
     });
@@ -1365,7 +1496,7 @@ export function findMatchingSolderTerminal(routes: DesignerRouteForm[], routeId:
   if (!sourceRoute) return null;
 
   for (const route of routes) {
-    if (route.id === routeId) continue;
+    if (route.id === routeId || !sameRouteDesignSurface(sourceRoute, route)) continue;
     for (const candidateIndex of [0, route.points.length - 1]) {
       if (canSolderRoutes(sourceRoute, pointIndex, route, candidateIndex, snapCm)) {
         return { routeId: route.id, pointIndex: candidateIndex };
@@ -1383,7 +1514,7 @@ export function findNearbySolderTerminal(routes: DesignerRouteForm[], routeId: s
   let nearest: { routeId: string; pointIndex: number; point: DesignerPoint; distance: number } | null = null;
 
   routes.forEach((route) => {
-    if (route.id === routeId) return;
+    if (route.id === routeId || !sameRouteDesignSurface(sourceRoute, route)) return;
     [0, route.points.length - 1].forEach((candidateIndex) => {
       if (sourceRole === routeTerminalRole(candidateIndex)) return;
       const candidatePoint = route.points[candidateIndex];
@@ -1394,6 +1525,10 @@ export function findNearbySolderTerminal(routes: DesignerRouteForm[], routeId: s
   });
 
   return nearest;
+}
+
+function sameRouteDesignSurface(sourceRoute: DesignerRouteForm, targetRoute: DesignerRouteForm) {
+  return (sourceRoute.designSurface ?? "rear") === (targetRoute.designSurface ?? "rear");
 }
 
 export function findNearbyControllerPort(controller: DesignerControllerForm, route: DesignerRouteForm, pointIndex: number, point: DesignerPoint, captureRadiusCm: number, snapCm: number): { portIndex: number; point: DesignerPoint; distance: number } | null {
@@ -1413,6 +1548,11 @@ export function sameSnapPoint(a: DesignerPoint, b: DesignerPoint, snapCm: number
     return distanceBetweenPoints(a, b) <= 0.01;
   }
   return snapValue(a.x, snapCm) === snapValue(b.x, snapCm) && snapValue(a.y, snapCm) === snapValue(b.y, snapCm);
+}
+
+/** Electrical coincidence is physical and must never expand with the drawing grid. */
+export function sameTerminalPoint(a: DesignerPoint, b: DesignerPoint) {
+  return distanceBetweenPoints(a, b) <= 0.01;
 }
 
 export function distanceBetweenPoints(a: DesignerPoint, b: DesignerPoint) {

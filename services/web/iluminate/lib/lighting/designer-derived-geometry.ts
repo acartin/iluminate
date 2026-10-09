@@ -16,7 +16,7 @@ export function offsetDesignerGeometry(
   source: DesignerGeometry,
   distanceMm: number,
   join: "round" | "miter" | "bevel",
-  miterLimit: number,
+  _miterLimit: number,
   resultId = `${source.id}_offset`
 ): DesignerDerivedOperationResult {
   const distanceCm = distanceMm / 10;
@@ -29,8 +29,14 @@ export function offsetDesignerGeometry(
     if (points.length < (source.closed === false ? 2 : 3)) return [];
     const nestingDepth = source.closed === false ? 0 : sourceContours.filter((candidate, candidateIndex) => candidateIndex !== contourIndex && pointInPolygon(points[0], flattenContour(candidate, true))).length;
     const contourDistance = distanceCm * (nestingDepth % 2 === 0 ? 1 : -1);
-    const offset = offsetPolyline(points, source.closed !== false, contourDistance, join, Math.max(1, miterLimit), warnings);
-    return offset.length >= (source.closed === false ? 2 : 3) ? [{ points: offset, pathMode: "straight" as const, closed: true as const }] : [];
+    const offset = offsetPolyline(points, source.closed !== false, contourDistance, join);
+    const offsetHadSelfIntersections = source.closed !== false && polylineSelfIntersects(offset, true);
+    const resolvedOffsets = source.closed === false ? [offset] : resolveOffsetLoops(offset, Math.sign(signedArea(points)) || 1)
+      .map((resolved) => simplifyClosedPolyline(resolved, 0.01));
+    if (offsetHadSelfIntersections) warnings.add("Offset self-intersection loops were trimmed.");
+    return resolvedOffsets
+      .filter((resolved) => resolved.length >= (source.closed === false ? 2 : 3))
+      .map((resolved) => ({ points: resolved, pathMode: "straight" as const, closed: true as const }));
   });
   if (!contours.length) return { geometry: null, issue: "collapsed", warnings: Array.from(warnings) };
   if (source.closed !== false) {
@@ -290,7 +296,7 @@ function flattenContour(contour: DesignerContour, closed = true) {
   return result;
 }
 
-function offsetPolyline(points: DesignerPoint[], closed: boolean, distance: number, join: "round" | "miter" | "bevel", miterLimit: number, warnings: Set<string>) {
+function offsetPolyline(points: DesignerPoint[], closed: boolean, distance: number, join: "round" | "miter" | "bevel") {
   if (points.length < 2) return [];
   const orientation = closed && signedArea(points) < 0 ? -1 : 1;
   const segmentCount = closed ? points.length : points.length - 1;
@@ -311,12 +317,20 @@ function offsetPolyline(points: DesignerPoint[], closed: boolean, distance: numb
     const previousStart = add(points[(index - 1 + points.length) % points.length], scale(previousNormal, distance));
     const nextEnd = add(points[(index + 1) % points.length], scale(nextNormal, distance));
     const intersection = lineIntersection(previousStart, previousPoint, nextPoint, nextEnd);
-    if (join === "miter" && intersection && distance !== 0 && distanceBetween(point, intersection) <= Math.abs(distance) * miterLimit) {
+    const incoming = subtract(point, points[(index - 1 + points.length) % points.length]);
+    const outgoing = subtract(points[(index + 1) % points.length], point);
+    const turn = incoming.x * outgoing.y - incoming.y * outgoing.x;
+    const outerJoin = turn * orientation * Math.sign(distance || 1) > 1e-10;
+    if (!outerJoin && intersection) {
+      // A concave corner joins where its two offset legs meet. Applying the
+      // selected outer join here wraps a round/bevel segment around the source
+      // node and creates a local loop in letterforms such as a lowercase m.
+      result.push(intersection);
+    } else if (join === "miter" && intersection) {
       result.push(intersection);
     } else if (join === "round") {
       appendRoundJoin(result, point, previousPoint, nextPoint, orientation * Math.sign(distance || 1));
     } else {
-      if (join === "miter") warnings.add("Miter limit reached; bevel join used.");
       result.push(previousPoint, nextPoint);
     }
   });
@@ -336,6 +350,93 @@ function appendRoundJoin(result: DesignerPoint[], center: DesignerPoint, start: 
     const angle = startAngle + sweep * step / steps;
     result.push({ x: center.x + Math.cos(angle) * radius, y: center.y + Math.sin(angle) * radius });
   }
+}
+
+function resolveOffsetLoops(points: DesignerPoint[], expectedOrientation: number) {
+  if (!polylineSelfIntersects(points, true)) return [points];
+  const pending = [points];
+  const resolved: DesignerPoint[][] = [];
+  const minimumLoopArea = Math.max(1e-8, Math.abs(signedArea(points)) * 1e-6);
+  let splits = 0;
+  while (pending.length && splits <= points.length * 2) {
+    const candidate = pending.pop()!;
+    const crossing = firstProperIntersection(candidate);
+    if (!crossing) {
+      if (candidate.length >= 3 && Math.abs(signedArea(candidate)) > minimumLoopArea && Math.sign(signedArea(candidate)) === expectedOrientation) resolved.push(candidate);
+      continue;
+    }
+    splits += 1;
+    const firstLoop = dedupeSequentialPoints([crossing.point, ...candidate.slice(crossing.first + 1, crossing.second + 1)]);
+    const secondLoop = dedupeSequentialPoints([crossing.point, ...candidate.slice(crossing.second + 1), ...candidate.slice(0, crossing.first + 1)]);
+    if (firstLoop.length >= 3) pending.push(firstLoop);
+    if (secondLoop.length >= 3) pending.push(secondLoop);
+  }
+  return pending.length ? [] : resolved;
+}
+
+function firstProperIntersection(points: DesignerPoint[]) {
+  for (let first = 0; first < points.length; first += 1) {
+    const firstNext = (first + 1) % points.length;
+    for (let second = first + 1; second < points.length; second += 1) {
+      const secondNext = (second + 1) % points.length;
+      if (firstNext === second || secondNext === first || first === 0 && secondNext === 0) continue;
+      const point = properSegmentIntersection(points[first], points[firstNext], points[second], points[secondNext]);
+      if (point) return { first, second, point };
+    }
+  }
+  return null;
+}
+
+function properSegmentIntersection(a: DesignerPoint, b: DesignerPoint, c: DesignerPoint, d: DesignerPoint) {
+  const ab = subtract(b, a);
+  const cd = subtract(d, c);
+  const ac = subtract(c, a);
+  const denominator = ab.x * cd.y - ab.y * cd.x;
+  if (Math.abs(denominator) < 1e-12) return null;
+  const firstRatio = (ac.x * cd.y - ac.y * cd.x) / denominator;
+  const secondRatio = (ac.x * ab.y - ac.y * ab.x) / denominator;
+  if (firstRatio <= 1e-9 || firstRatio >= 1 - 1e-9 || secondRatio <= 1e-9 || secondRatio >= 1 - 1e-9) return null;
+  return { x: a.x + ab.x * firstRatio, y: a.y + ab.y * firstRatio };
+}
+
+function simplifyClosedPolyline(points: DesignerPoint[], toleranceCm: number) {
+  if (points.length <= 4) return points;
+  let first = 0;
+  for (let index = 1; index < points.length; index += 1) {
+    if (distanceBetween(points[0], points[index]) > distanceBetween(points[0], points[first])) first = index;
+  }
+  let second = first;
+  for (let index = 0; index < points.length; index += 1) {
+    if (distanceBetween(points[first], points[index]) > distanceBetween(points[first], points[second])) second = index;
+  }
+  if (first > second) [first, second] = [second, first];
+  const firstHalf = simplifyPolyline(points.slice(first, second + 1), toleranceCm);
+  const secondHalf = simplifyPolyline([...points.slice(second), ...points.slice(0, first + 1)], toleranceCm);
+  return dedupeSequentialPoints([...firstHalf.slice(0, -1), ...secondHalf.slice(0, -1)]);
+}
+
+function simplifyPolyline(points: DesignerPoint[], toleranceCm: number): DesignerPoint[] {
+  if (points.length <= 2) return points;
+  let furthestIndex = 0;
+  let furthestDistance = 0;
+  for (let index = 1; index < points.length - 1; index += 1) {
+    const distance = distanceToSegment(points[index], points[0], points[points.length - 1]);
+    if (distance > furthestDistance) {
+      furthestDistance = distance;
+      furthestIndex = index;
+    }
+  }
+  if (furthestDistance <= toleranceCm) return [points[0], points[points.length - 1]];
+  const left = simplifyPolyline(points.slice(0, furthestIndex + 1), toleranceCm);
+  const right = simplifyPolyline(points.slice(furthestIndex), toleranceCm);
+  return [...left.slice(0, -1), ...right];
+}
+
+function distanceToSegment(point: DesignerPoint, start: DesignerPoint, end: DesignerPoint) {
+  const segment = subtract(end, start);
+  const lengthSquared = segment.x * segment.x + segment.y * segment.y;
+  const ratio = lengthSquared > 1e-12 ? clamp(dot(subtract(point, start), segment) / lengthSquared, 0, 1) : 0;
+  return distanceBetween(point, add(start, scale(segment, ratio)));
 }
 
 function filletContour(contour: DesignerContour, closed: boolean, radius: number, selected: Set<number> | null, nextIndex: () => number, warnings: Set<string>) {
@@ -440,5 +541,11 @@ function lineIntersection(a: DesignerPoint, b: DesignerPoint, c: DesignerPoint, 
 function dedupeSequentialPoints(points: DesignerPoint[]) { return points.filter((point, index) => index === 0 || distanceBetween(points[index - 1], point) > 1e-7); }
 function pointInPolygon(point: DesignerPoint, polygon: DesignerPoint[]) { let inside = false; for (let index = 0, previous = polygon.length - 1; index < polygon.length; previous = index, index += 1) { const current = polygon[index]; const prior = polygon[previous]; if (current.y > point.y !== prior.y > point.y && point.x < (prior.x - current.x) * (point.y - current.y) / (prior.y - current.y) + current.x) inside = !inside; } return inside; }
 function polylineSelfIntersects(points: DesignerPoint[], closed: boolean) { const count = closed ? points.length : points.length - 1; for (let first = 0; first < count; first += 1) for (let second = first + 1; second < count; second += 1) { const firstNext = (first + 1) % points.length; const secondNext = (second + 1) % points.length; if (first === second || firstNext === second || secondNext === first || closed && first === 0 && secondNext === 0) continue; if (segmentsCross(points[first], points[firstNext], points[second], points[secondNext])) return true; } return false; }
-function segmentsCross(a: DesignerPoint, b: DesignerPoint, c: DesignerPoint, d: DesignerPoint) { const orientation = (p: DesignerPoint, q: DesignerPoint, r: DesignerPoint) => Math.sign((q.y - p.y) * (r.x - q.x) - (q.x - p.x) * (r.y - q.y)); return orientation(a, b, c) !== orientation(a, b, d) && orientation(c, d, a) !== orientation(c, d, b); }
+function segmentsCross(a: DesignerPoint, b: DesignerPoint, c: DesignerPoint, d: DesignerPoint) {
+  const cross = (p: DesignerPoint, q: DesignerPoint, r: DesignerPoint) => (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x);
+  // Offset curves commonly produce tangent contacts after Bezier flattening.
+  // A contact is not a topological crossing unless both segments pass from
+  // one side of the other to the opposite side.
+  return cross(a, b, c) * cross(a, b, d) < -1e-10 && cross(c, d, a) * cross(c, d, b) < -1e-10;
+}
 function cubicPoint(start: DesignerPoint, end: DesignerPoint, t: number) { const a = start.handleOut ? { x: start.x + start.handleOut.x, y: start.y + start.handleOut.y } : start; const b = end.handleIn ? { x: end.x + end.handleIn.x, y: end.y + end.handleIn.y } : end; const inverse = 1 - t; return { x: inverse ** 3 * start.x + 3 * inverse ** 2 * t * a.x + 3 * inverse * t ** 2 * b.x + t ** 3 * end.x, y: inverse ** 3 * start.y + 3 * inverse ** 2 * t * a.y + 3 * inverse * t ** 2 * b.y + t ** 3 * end.y }; }

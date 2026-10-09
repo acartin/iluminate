@@ -110,6 +110,14 @@ export async function createTenantAssetReadUrl(clientId: number, key: string): P
   });
 }
 
+export async function readTenantArtwork(clientId: number, key: string): Promise<Uint8Array> {
+  if (!key.startsWith(tenantAssetPrefix(clientId))) throw new Error("Asset key belongs to a different client.");
+  const config = r2Config();
+  const result = await r2Client(config).send(new GetObjectCommand({ Bucket: config.bucket, Key: key }));
+  if (!result.Body) throw new Error("Artwork body is missing.");
+  return result.Body.transformToByteArray();
+}
+
 export function keyFromTenantStorageUri(clientId: number, storageUri: string): string {
   const config = r2Config();
   const prefix = `r2://${config.bucket}/`;

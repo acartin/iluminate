@@ -4,12 +4,15 @@ import { useEffect, useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { CrudResourcePage } from "@/components/crud/crud-resource-page";
 import { CrudResourceConfig } from "@/components/crud/types";
-import { PersistedPartitura } from "@/lib/lighting/partitura-model";
+import type { PersistedPartitura } from "@/lib/lighting/partitura-model";
+import type { PersistedProject } from "@/lib/server/projects";
 
 type DesignerRecord = Record<string, unknown> & {
   id: string;
   name: string;
   client: string;
+  projectId: string;
+  project: string;
   status: string;
   canvas: string;
   pixelsPerMeter: number;
@@ -63,6 +66,7 @@ const designerCrudConfig: CrudResourceConfig<DesignerRecord> = {
       )
     },
     { id: "client", header: "Client" },
+    { id: "project", header: "Project" },
     { id: "canvas", header: "Canvas", className: "font-mono" },
     { id: "pixelsPerMeter", header: "Pixels/m", className: "text-right font-mono", headerClassName: "text-right" },
     { id: "ledsPerMeter", header: "LEDs/m", className: "text-right font-mono", headerClassName: "text-right" },
@@ -81,12 +85,14 @@ const designerCrudConfig: CrudResourceConfig<DesignerRecord> = {
   editFields: []
 };
 
-function recordFromPartitura(partitura: PersistedPartitura): DesignerRecord {
+function recordFromPartitura(partitura: PersistedPartitura, projectName: string): DesignerRecord {
   const designer = partitura.document.designer;
   return {
     id: partitura.id,
     name: partitura.name,
     client: partitura.clientName,
+    projectId: partitura.projectId,
+    project: projectName,
     status: partitura.status,
     canvas: designer ? `${designer.canvasWidthCm}x${designer.canvasHeightCm} cm` : "Not configured",
     pixelsPerMeter: designer?.addressablePixelsPerMeter ?? designer?.ledDensityPerMeter ?? 0,
@@ -100,6 +106,7 @@ function recordFromPartitura(partitura: PersistedPartitura): DesignerRecord {
 
 export function PartituraDesignerWorkbench() {
   const [records, setRecords] = useState<PersistedPartitura[]>([]);
+  const [projects, setProjects] = useState<PersistedProject[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -108,9 +115,18 @@ export function PartituraDesignerWorkbench() {
     async function loadRecords() {
       setLoading(true);
       try {
-        const response = await fetch("/api/lighting/partituras", { cache: "no-store" });
-        const payload = (await response.json()) as { records?: PersistedPartitura[] };
-        if (!cancelled) setRecords(payload.records ?? []);
+        const [partiturasResponse, projectsResponse] = await Promise.all([
+          fetch("/api/lighting/partituras", { cache: "no-store" }),
+          fetch("/api/lighting/projects", { cache: "no-store" })
+        ]);
+        const [partiturasPayload, projectsPayload] = await Promise.all([
+          partiturasResponse.json() as Promise<{ records?: PersistedPartitura[] }>,
+          projectsResponse.json() as Promise<{ records?: PersistedProject[] }>
+        ]);
+        if (!cancelled) {
+          setRecords(partiturasPayload.records ?? []);
+          setProjects(projectsPayload.records ?? []);
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -122,7 +138,23 @@ export function PartituraDesignerWorkbench() {
     };
   }, []);
 
-  const gridRecords = useMemo(() => records.map(recordFromPartitura), [records]);
+  const projectNames = useMemo(() => new Map(projects.map((project) => [project.id, project.name])), [projects]);
+  const gridRecords = useMemo(
+    () => records.map((partitura) => recordFromPartitura(partitura, projectNames.get(partitura.projectId) ?? "Unknown project")),
+    [projectNames, records]
+  );
+  const effectiveConfig = useMemo<CrudResourceConfig<DesignerRecord>>(() => ({
+    ...designerCrudConfig,
+    filters: [
+      ...(designerCrudConfig.filters ?? []),
+      {
+        key: "projectId",
+        label: "Project",
+        allLabel: "All projects",
+        options: projects.map((project) => ({ value: project.id, label: project.name }))
+      }
+    ]
+  }), [projects]);
 
   return (
     <div className="space-y-6">
@@ -137,7 +169,7 @@ export function PartituraDesignerWorkbench() {
         </p>
       </div>
 
-      <CrudResourcePage config={designerCrudConfig} records={gridRecords} />
+      <CrudResourcePage config={effectiveConfig} records={gridRecords} />
     </div>
   );
 }

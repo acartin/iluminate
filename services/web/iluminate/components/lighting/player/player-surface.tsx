@@ -28,6 +28,7 @@ type PlayerSurfaceProps = {
   activeSceneId: string;
   playing: boolean;
   presentation: DesignerAnimationDiffuser;
+  faceMaskEnabled?: boolean;
   settings: DiffuserRenderSettings;
   selection?: DesignerSelection;
   onViewportChange: (viewport: DesignerViewport) => void;
@@ -44,6 +45,7 @@ export const PlayerSurface = forwardRef<PlayerSurfaceHandle, PlayerSurfaceProps>
   activeSceneId,
   playing,
   presentation,
+  faceMaskEnabled = true,
   settings,
   selection = null,
   onViewportChange,
@@ -58,6 +60,7 @@ export const PlayerSurface = forwardRef<PlayerSurfaceHandle, PlayerSurfaceProps>
   const visualScene = useMemo(() => buildVisualScene(partitura, designer, layout), [partitura, designer, layout]);
   const sceneRef = useRef({ partitura, visualScene });
   const presentationRef = useRef(presentation);
+  const faceMaskEnabledRef = useRef(faceMaskEnabled);
   const settingsRef = useRef(settings);
   const selectionRef = useRef(selection);
   const colorModeRef = useRef<"day" | "night">("night");
@@ -76,6 +79,7 @@ export const PlayerSurface = forwardRef<PlayerSurfaceHandle, PlayerSurfaceProps>
   viewportRef.current = normalizePlayerViewport(viewport, sizeRef.current);
   desiredPlayingRef.current = playing;
   presentationRef.current = presentation;
+  faceMaskEnabledRef.current = faceMaskEnabled;
   settingsRef.current = settings;
   selectionRef.current = selection;
   colorModeRef.current = colorMode;
@@ -115,6 +119,7 @@ export const PlayerSurface = forwardRef<PlayerSurfaceHandle, PlayerSurfaceProps>
       loadedRendererSceneRef.current = scene;
       renderer.updateViewport(viewportRef.current);
       renderer.updatePresentation(presentationRef.current);
+      renderer.updateFaceMaskEnabled(faceMaskEnabledRef.current);
       renderer.updateOpticalSettings(settingsRef.current);
       renderer.updateSelection(playerOutlineSelection(selectionRef.current));
       renderer.updateColorMode(colorModeRef.current);
@@ -191,6 +196,7 @@ export const PlayerSurface = forwardRef<PlayerSurfaceHandle, PlayerSurfaceProps>
     loadedRendererSceneRef.current = { partitura, visualScene };
     renderer.updateViewport(viewportRef.current);
     renderer.updatePresentation(presentation);
+    renderer.updateFaceMaskEnabled(faceMaskEnabled);
     renderer.updateOpticalSettings(settings);
     renderer.updateSelection(playerOutlineSelection(selection));
     renderer.updateColorMode(colorMode);
@@ -217,6 +223,7 @@ export const PlayerSurface = forwardRef<PlayerSurfaceHandle, PlayerSurfaceProps>
     loadedRendererSceneRef.current = nextScene;
     renderer.updateViewport(viewportRef.current);
     renderer.updatePresentation(presentation);
+    renderer.updateFaceMaskEnabled(faceMaskEnabled);
     renderer.updateOpticalSettings(settings);
     renderer.updateSelection(playerOutlineSelection(selection));
     renderer.updateColorMode(colorMode);
@@ -244,7 +251,7 @@ export const PlayerSurface = forwardRef<PlayerSurfaceHandle, PlayerSurfaceProps>
     renderer.updateOpticalSettings(settings);
     renderer.updateColorMode(colorMode);
     renderer.render();
-  }, [colorMode, presentation, settings]);
+  }, [colorMode, faceMaskEnabled, presentation, settings]);
 
   useEffect(() => {
     const renderer = rendererRef.current;

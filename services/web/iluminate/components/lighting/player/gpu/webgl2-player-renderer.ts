@@ -21,14 +21,21 @@ type OutlineBatch = {
 };
 
 type PlayerOutlineSelection = { type: "zone" | "channel"; id: string } | null;
+type TargetMaskMode = -1 | 0 | 1;
 
 type PreparedTreatment = {
   source: VisualOpticalTreatment;
   batch: DrawBatch;
+  direct: boolean;
   useFaceMask: boolean;
+  targetMaskTexture: WebGLTexture | null;
+  targetMaskBounds: MaskBounds | null;
+  targetMaskMode: TargetMaskMode;
 };
 
-type PlayerUniforms = Record<"colors" | "faceMask" | "colorCount" | "viewport" | "canvasPx" | "worldSize" | "radiusPx" | "intensity" | "mode" | "useFaceMask", WebGLUniformLocation | null>;
+type MaskBounds = { x: number; y: number; width: number; height: number };
+
+type PlayerUniforms = Record<"colors" | "faceMask" | "targetMask" | "colorCount" | "viewport" | "canvasPx" | "worldSize" | "targetMaskBounds" | "radiusPx" | "intensity" | "mode" | "useFaceMask" | "targetMaskMode", WebGLUniformLocation | null>;
 type OutlineUniforms = Record<"viewport" | "canvasPx" | "color" | "widthPx", WebGLUniformLocation | null>;
 
 const QUAD_VERTICES = new Float32Array([
@@ -48,7 +55,6 @@ export class Webgl2PlayerRenderer {
   private faceMaskTexture: WebGLTexture | null = null;
   private allPixels: DrawBatch | null = null;
   private directPixels: DrawBatch | null = null;
-  private frontDirectPixels: DrawBatch | null = null;
   private zoneOutlines: OutlineBatch | null = null;
   private channelOutlines: OutlineBatch | null = null;
   private selectedOutline: OutlineBatch | null = null;
@@ -69,6 +75,7 @@ export class Webgl2PlayerRenderer {
   private pixelRatio = 1;
   private colorMode: "day" | "night" = "night";
   private hasFaceMask = false;
+  private faceMaskEnabled = true;
 
   initialize(canvas: HTMLCanvasElement, options: { capture?: boolean } = {}) {
     if (this.gl) throw new Error("WebGL2 player renderer is already initialized.");
@@ -88,14 +95,17 @@ export class Webgl2PlayerRenderer {
     this.uniforms = {
       colors: gl.getUniformLocation(this.program, "uColors"),
       faceMask: gl.getUniformLocation(this.program, "uFaceMask"),
+      targetMask: gl.getUniformLocation(this.program, "uTargetMask"),
       colorCount: gl.getUniformLocation(this.program, "uColorCount"),
       viewport: gl.getUniformLocation(this.program, "uViewport"),
       canvasPx: gl.getUniformLocation(this.program, "uCanvasPx"),
       worldSize: gl.getUniformLocation(this.program, "uWorldSize"),
+      targetMaskBounds: gl.getUniformLocation(this.program, "uTargetMaskBounds"),
       radiusPx: gl.getUniformLocation(this.program, "uRadiusPx"),
       intensity: gl.getUniformLocation(this.program, "uIntensity"),
       mode: gl.getUniformLocation(this.program, "uMode"),
-      useFaceMask: gl.getUniformLocation(this.program, "uUseFaceMask")
+      useFaceMask: gl.getUniformLocation(this.program, "uUseFaceMask"),
+      targetMaskMode: gl.getUniformLocation(this.program, "uTargetMaskMode")
     };
     this.outlineProgram = createProgram(gl, OUTLINE_VERTEX_SHADER, OUTLINE_FRAGMENT_SHADER);
     this.outlineUniforms = {
@@ -140,19 +150,24 @@ export class Webgl2PlayerRenderer {
     const allIndices = scene.partitura.pixelMap.map((pixel) => pixel.index);
     this.allPixels = this.createBatch(allIndices);
     const opticalIndices = new Set<number>();
-    const frontDirectIndices = new Set<number>();
     this.treatments = scene.visualScene.treatments
       .flatMap((source) => {
         const indices = source.pixelIndices.filter((index) => Number.isInteger(index) && index >= 0 && index < scene.partitura.pixelMap.length);
-        if (source.mode === "front" && source.material === "none") {
-          indices.forEach((index) => frontDirectIndices.add(index));
-          return [];
-        }
+        if (!indices.length) return [];
         indices.forEach((index) => opticalIndices.add(index));
-        return indices.length ? [{ source, batch: this.createBatch(indices), useFaceMask: source.mode === "front" }] : [];
+        const targetMaskMode = opticalTargetMaskMode(source.mode);
+        const targetMask = targetMaskMode === 0 ? null : this.createTargetMaskTexture(scene.visualScene, source);
+        return [{
+          source,
+          batch: this.createBatch(indices),
+          direct: source.mode === "front" && source.material === "none",
+          useFaceMask: source.mode === "front",
+          targetMaskTexture: targetMask?.texture ?? null,
+          targetMaskBounds: targetMask?.bounds ?? null,
+          targetMaskMode: targetMask ? targetMaskMode : 0
+        }];
       });
-    this.frontDirectPixels = this.createBatch(Array.from(frontDirectIndices));
-    this.directPixels = this.createBatch(allIndices.filter((index) => !opticalIndices.has(index) && !frontDirectIndices.has(index)));
+    this.directPixels = this.createBatch(allIndices.filter((index) => !opticalIndices.has(index)));
     this.zoneOutlines = this.createOutlineBatch(buildOutlineSegments(scene.visualScene.shapes.filter((shape) => shape.kind === "zone")));
     this.channelOutlines = this.createOutlineBatch(buildOutlineSegments(scene.visualScene.shapes.filter((shape) => shape.kind === "channel")));
     this.prepareSelectedOutline();
@@ -184,6 +199,10 @@ export class Webgl2PlayerRenderer {
 
   updateColorMode(colorMode: "day" | "night") {
     this.colorMode = colorMode;
+  }
+
+  updateFaceMaskEnabled(enabled: boolean) {
+    this.faceMaskEnabled = enabled;
   }
 
   updateSelection(selection: PlayerOutlineSelection) {
@@ -220,6 +239,7 @@ export class Webgl2PlayerRenderer {
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, this.faceMaskTexture);
     gl.uniform1i(this.uniforms.faceMask, 1);
+    gl.uniform1i(this.uniforms.targetMask, 2);
     gl.uniform1f(this.uniforms.colorCount, Math.max(1, this.scene.partitura.pixelMap.length));
     gl.uniform4f(this.uniforms.viewport, this.viewport.x, this.viewport.y, Math.max(0.0001, this.viewport.width), Math.max(0.0001, this.viewport.height));
     gl.uniform2f(this.uniforms.canvasPx, this.width * this.pixelRatio, this.height * this.pixelRatio);
@@ -237,16 +257,26 @@ export class Webgl2PlayerRenderer {
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE);
     for (const treatment of this.treatments) {
+      if (treatment.direct) continue;
+      gl.activeTexture(gl.TEXTURE2);
+      gl.bindTexture(gl.TEXTURE_2D, treatment.targetMaskTexture);
       this.drawBatch(
         treatment.batch,
         this.treatmentRadiusPx(treatment.source),
         Math.max(0, treatment.source.intensity * this.settings.intensity),
         1,
-        treatment.useFaceMask
+        treatment.useFaceMask,
+        treatment.targetMaskMode,
+        treatment.targetMaskBounds
       );
     }
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-    this.drawBatch(this.frontDirectPixels, this.directPixelRadius(), 1, 0, true);
+    for (const treatment of this.treatments) {
+      if (!treatment.direct) continue;
+      gl.activeTexture(gl.TEXTURE2);
+      gl.bindTexture(gl.TEXTURE_2D, treatment.targetMaskTexture);
+      this.drawBatch(treatment.batch, this.directPixelRadius(), 1, 0, treatment.useFaceMask, treatment.targetMaskMode, treatment.targetMaskBounds);
+    }
     this.drawBatch(this.directPixels, this.directPixelRadius(), 1, 0, false);
     this.drawOutlines();
     gl.disable(gl.BLEND);
@@ -321,13 +351,21 @@ export class Webgl2PlayerRenderer {
     return { vao, instanceBuffer, count: segments.length / 4 };
   }
 
-  private drawBatch(batch: DrawBatch | null, radiusPx: number, intensity: number, mode: number, useFaceMask: boolean) {
+  private drawBatch(batch: DrawBatch | null, radiusPx: number, intensity: number, mode: number, useFaceMask: boolean, targetMaskMode: TargetMaskMode = 0, targetMaskBounds: MaskBounds | null = null) {
     if (!batch?.count || !this.program || !this.uniforms) return;
     const gl = this.requireGl();
     gl.uniform1f(this.uniforms.radiusPx, Math.max(1, radiusPx) * this.pixelRatio);
     gl.uniform1f(this.uniforms.intensity, intensity);
     gl.uniform1f(this.uniforms.mode, mode);
-    gl.uniform1f(this.uniforms.useFaceMask, useFaceMask && this.hasFaceMask ? 1 : 0);
+    gl.uniform1f(this.uniforms.useFaceMask, useFaceMask && this.hasFaceMask && this.faceMaskEnabled ? 1 : 0);
+    gl.uniform1f(this.uniforms.targetMaskMode, targetMaskMode);
+    gl.uniform4f(
+      this.uniforms.targetMaskBounds,
+      targetMaskBounds?.x ?? 0,
+      targetMaskBounds?.y ?? 0,
+      Math.max(0.0001, targetMaskBounds?.width ?? 1),
+      Math.max(0.0001, targetMaskBounds?.height ?? 1)
+    );
     gl.bindVertexArray(batch.vao);
     gl.drawArraysInstanced(gl.TRIANGLES, 0, 6, batch.count);
     gl.bindVertexArray(null);
@@ -385,10 +423,43 @@ export class Webgl2PlayerRenderer {
     return lengthCm * Math.sqrt(Math.max(0.0001, xScale * yScale));
   }
 
+  private createTargetMaskTexture(visualScene: VisualSceneV1, source: VisualOpticalTreatment) {
+    const gl = this.requireGl();
+    const texture = requireResource(gl.createTexture(), "optical target mask texture");
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    const occluders = opticalOccluderShapes(visualScene.shapes, source);
+    if (!occluders.length) {
+      gl.deleteTexture(texture);
+      return null;
+    }
+    const bounds = opticalOccluderMaskBounds(occluders, visualScene.bounds);
+    const { width, height } = targetMaskTextureSize(bounds);
+    const surface = document.createElement("canvas");
+    surface.width = width;
+    surface.height = height;
+    const context = surface.getContext("2d", { alpha: false });
+    if (!context) throw new Error("Unable to prepare the optical target mask.");
+    context.fillStyle = "#000000";
+    context.fillRect(0, 0, width, height);
+    context.setTransform(width / bounds.width, 0, 0, height / bounds.height, -bounds.x * width / bounds.width, -bounds.y * height / bounds.height);
+    context.fillStyle = "#FFFFFF";
+    for (const occluder of occluders) {
+      context.fill(visualShapePath(occluder), occluder.fillRule === "nonzero" ? "nonzero" : "evenodd");
+    }
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB8, gl.RGB, gl.UNSIGNED_BYTE, surface);
+    return { texture, bounds };
+  }
+
   private releaseSceneResources() {
     const gl = this.gl;
     if (!gl) return;
-    const batches = [this.allPixels, this.directPixels, this.frontDirectPixels, ...this.treatments.map((treatment) => treatment.batch)];
+    const batches = [this.allPixels, this.directPixels, ...this.treatments.map((treatment) => treatment.batch)];
     const released = new Set<WebGLVertexArrayObject>();
     for (const batch of batches) {
       if (!batch || released.has(batch.vao)) continue;
@@ -396,9 +467,11 @@ export class Webgl2PlayerRenderer {
       gl.deleteVertexArray(batch.vao);
       gl.deleteBuffer(batch.instanceBuffer);
     }
+    for (const treatment of this.treatments) {
+      if (treatment.targetMaskTexture) gl.deleteTexture(treatment.targetMaskTexture);
+    }
     this.allPixels = null;
     this.directPixels = null;
-    this.frontDirectPixels = null;
     this.treatments = [];
     for (const outline of [this.zoneOutlines, this.channelOutlines, this.selectedOutline]) this.releaseOutlineBatch(outline);
     this.zoneOutlines = null;
@@ -427,9 +500,7 @@ export class Webgl2PlayerRenderer {
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB8, 1, 1, 0, gl.RGB, gl.UNSIGNED_BYTE, new Uint8Array([255, 255, 255]));
       return;
     }
-    const longest = Math.max(visualScene.bounds.widthCm, visualScene.bounds.heightCm, 1);
-    const width = Math.max(1, Math.round(1024 * visualScene.bounds.widthCm / longest));
-    const height = Math.max(1, Math.round(1024 * visualScene.bounds.heightCm / longest));
+    const { width, height } = faceMaskTextureSize(visualScene);
     const surface = document.createElement("canvas");
     surface.width = width;
     surface.height = height;
@@ -440,7 +511,7 @@ export class Webgl2PlayerRenderer {
     context.scale(width / Math.max(0.0001, visualScene.bounds.widthCm), height / Math.max(0.0001, visualScene.bounds.heightCm));
     for (const graphic of [...physicalGraphics].reverse()) {
       context.fillStyle = graphic.passMode === "opaque" ? "#000000" : graphic.passMode === "clear" ? "#FFFFFF" : graphic.filterColor ?? "#FFFFFF";
-      const path = faceGraphicPath(graphic);
+      const path = visualShapePath(graphic);
       context.fill(path, graphic.fillRule === "nonzero" ? "nonzero" : "evenodd");
     }
     gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
@@ -491,10 +562,13 @@ precision highp float;
 
 uniform sampler2D uColors;
 uniform sampler2D uFaceMask;
+uniform sampler2D uTargetMask;
 uniform float uIntensity;
 uniform float uMode;
 uniform float uUseFaceMask;
+uniform float uTargetMaskMode;
 uniform vec2 uWorldSize;
+uniform vec4 uTargetMaskBounds;
 
 in vec2 vLocal;
 in vec2 vWorld;
@@ -508,7 +582,15 @@ void main() {
   float directAlpha = 1.0 - smoothstep(0.58, 1.0, distanceFromCenter);
   float opticalAlpha = exp(-distanceFromCenter * distanceFromCenter * 3.2);
   float alpha = mix(directAlpha, opticalAlpha, step(0.5, uMode));
-  vec3 transmission = texture(uFaceMask, clamp(vWorld / uWorldSize, vec2(0.0), vec2(1.0))).rgb;
+  vec2 targetUv = (vWorld - uTargetMaskBounds.xy) / uTargetMaskBounds.zw;
+  vec2 targetInsideMin = step(vec2(0.0), targetUv);
+  vec2 targetInsideMax = step(targetUv, vec2(1.0));
+  float targetAlpha = texture(uTargetMask, clamp(targetUv, vec2(0.0), vec2(1.0))).r
+    * targetInsideMin.x * targetInsideMin.y * targetInsideMax.x * targetInsideMax.y;
+  float maskedTargetAlpha = uTargetMaskMode < -0.5 ? 1.0 - targetAlpha : targetAlpha;
+  alpha *= mix(1.0, maskedTargetAlpha, step(0.5, abs(uTargetMaskMode)));
+  vec2 maskUv = clamp(vWorld / uWorldSize, vec2(0.0), vec2(1.0));
+  vec3 transmission = texture(uFaceMask, maskUv).rgb;
   vec3 transmitted = mix(color, color * transmission, step(0.5, uUseFaceMask));
   float peak = max(color.r, max(color.g, color.b));
   float transmittedPeak = max(transmitted.r, max(transmitted.g, transmitted.b));
@@ -623,7 +705,61 @@ function flattenContour(points: VisualPoint[], pathMode: "straight" | "bezier", 
   return flattened;
 }
 
-function faceGraphicPath(graphic: VisualShape) {
+export function opticalTargetShape(shapes: VisualShape[], source: Pick<VisualOpticalTreatment, "targetType" | "targetId">) {
+  return shapes.find((shape) => shape.kind === source.targetType && shape.id === source.targetId) ?? null;
+}
+
+/** Front light stays on its face; reflected/rear light stays off every physical face. */
+export function opticalTargetMaskMode(mode: VisualOpticalTreatment["mode"]): TargetMaskMode {
+  if (mode === "front") return 1;
+  return -1;
+}
+
+export function opticalOccluderShapes(shapes: VisualShape[], source: Pick<VisualOpticalTreatment, "mode" | "targetType" | "targetId">) {
+  if (source.mode === "front") {
+    const target = opticalTargetShape(shapes, source);
+    return target ? [target] : [];
+  }
+  return shapes.filter((shape) => shape.kind === "zone" || shape.kind === "channel");
+}
+
+export function opticalTargetMaskBounds(shape: VisualShape, sceneBounds: VisualSceneV1["bounds"]): MaskBounds {
+  return opticalOccluderMaskBounds([shape], sceneBounds);
+}
+
+function opticalOccluderMaskBounds(shapes: VisualShape[], sceneBounds: VisualSceneV1["bounds"]): MaskBounds {
+  const pixelsPerCm = 1024 / Math.max(sceneBounds.widthCm, sceneBounds.heightCm, 1);
+  const paddingCm = 2 / pixelsPerCm;
+  const minX = Math.min(...shapes.map((shape) => shape.x));
+  const minY = Math.min(...shapes.map((shape) => shape.y));
+  const maxX = Math.max(...shapes.map((shape) => shape.x + shape.width));
+  const maxY = Math.max(...shapes.map((shape) => shape.y + shape.height));
+  return {
+    x: minX - paddingCm,
+    y: minY - paddingCm,
+    width: Math.max(0.0001, maxX - minX + paddingCm * 2),
+    height: Math.max(0.0001, maxY - minY + paddingCm * 2)
+  };
+}
+
+export function targetMaskTextureSize(bounds: MaskBounds) {
+  const longest = Math.max(bounds.width, bounds.height, 0.0001);
+  const pixelsPerCm = 1024 / longest;
+  return {
+    width: Math.max(1, Math.ceil(bounds.width * pixelsPerCm)),
+    height: Math.max(1, Math.ceil(bounds.height * pixelsPerCm))
+  };
+}
+
+export function faceMaskTextureSize(visualScene: Pick<VisualSceneV1, "bounds">) {
+  const longest = Math.max(visualScene.bounds.widthCm, visualScene.bounds.heightCm, 1);
+  return {
+    width: Math.max(1, Math.round(2048 * visualScene.bounds.widthCm / longest)),
+    height: Math.max(1, Math.round(2048 * visualScene.bounds.heightCm / longest))
+  };
+}
+
+function visualShapePath(graphic: VisualShape) {
   const path = new Path2D();
   if (graphic.primitive === "ellipse") {
     path.ellipse(graphic.x + graphic.width / 2, graphic.y + graphic.height / 2, Math.abs(graphic.width / 2), Math.abs(graphic.height / 2), 0, 0, Math.PI * 2);

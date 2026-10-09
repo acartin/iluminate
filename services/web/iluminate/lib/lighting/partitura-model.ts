@@ -20,7 +20,7 @@ export type DesignerContour = {
   closed: true;
 };
 
-export const DESIGNER_SCHEMA_VERSION = 9 as const;
+export const DESIGNER_SCHEMA_VERSION = 11 as const;
 export const DEFAULT_CHANNEL_ROUTER_DIAMETER_MM = 10;
 
 /**
@@ -168,6 +168,21 @@ export type DesignerChannelForm = {
 };
 
 export type DesignerOpticalMode = "front" | "halo" | "wall_wash";
+
+export const DESIGNER_GLOBAL_LIGHT_SOURCE_TARGETS: ReadonlyArray<{ id: string; mode: DesignerOpticalMode; name: string }> = [
+  { id: "full_front", mode: "front", name: "All Front" },
+  { id: "full_halo", mode: "halo", name: "All Halo" },
+  { id: "full_wall_wash", mode: "wall_wash", name: "All Wall Wash" }
+];
+
+export function designerGlobalLightSourceTarget(mode: DesignerOpticalMode) {
+  return DESIGNER_GLOBAL_LIGHT_SOURCE_TARGETS.find((target) => target.mode === mode)!;
+}
+
+export function designerGlobalLightSourceMode(targetId: string) {
+  return DESIGNER_GLOBAL_LIGHT_SOURCE_TARGETS.find((target) => target.id === targetId)?.mode ?? null;
+}
+
 export type DesignerOpticalMaterial = "none" | "silicone" | "milky_white" | "day_night" | "opaque";
 export type DesignerOpticalReceiverType = "canvas" | "build_area" | "zone";
 
@@ -205,11 +220,14 @@ export type DesignerLightSource = {
 export type DesignerOpticalTreatment = DesignerLightSource;
 
 export type DesignerRouteKind = "led_string" | "data_cable";
+export type DesignerRouteSurface = "rear" | "front";
 
 export type DesignerRouteForm = {
   id: string;
   name: string;
   kind: DesignerRouteKind;
+  /** Designer-only mounting face used to isolate dense wiring while authoring. */
+  designSurface?: DesignerRouteSurface;
   points: DesignerPoint[];
   visible?: boolean;
 };
@@ -272,6 +290,24 @@ export type DesignerBuildAreaForm = {
   opacity: number;
 };
 
+export type DesignerWorkLineForm = {
+  id: string;
+  name: string;
+  /** Organizational owner captured at creation; omitted means global. */
+  layer?: "artwork" | "zones" | "faceGraphic";
+  points: DesignerPoint[];
+};
+
+export type DesignerAlignmentMarksForm = {
+  enabled: boolean;
+  locked: boolean;
+  /** Top-left calibration origin in canonical canvas centimeters. */
+  originXcm: number;
+  originYcm: number;
+  /** Exact distance between each orthogonal pair, persisted in millimeters. */
+  spacingMm: number;
+};
+
 export type DesignerForm = {
   /** Missing on legacy documents; normalization always writes the current version. */
   designerSchemaVersion?: typeof DESIGNER_SCHEMA_VERSION;
@@ -295,10 +331,14 @@ export type DesignerForm = {
   filletRadiusMm: number;
   /** Router-bit diameter used as the width of newly traced neon-flex channels. */
   channelRouterDiameterMm: number;
+  alignmentMarks: DesignerAlignmentMarksForm;
   rulerVisible: boolean;
   sourceSvg: string | null;
   layers: DesignerLayersForm;
   artwork: DesignerArtworkForm[];
+  /** Construction-only open polylines, globally shown or hidden. */
+  workLinesVisible: boolean;
+  workLines: DesignerWorkLineForm[];
   buildAreas: DesignerBuildAreaForm[];
   controller: DesignerControllerForm;
   zones: DesignerZoneForm[];
@@ -456,6 +496,45 @@ export function createDefaultPartituraDocument(projectId = "web_test_partitura")
   };
 }
 
+/**
+ * Creates the clean authoring document used for newly persisted partituras.
+ * The richer default document remains available as a demo/test fixture.
+ */
+export function createNewPartituraDocument(projectId: string): PartituraDocument {
+  const designer = createDefaultDesigner();
+  return {
+    projectId,
+    scenes: [
+      {
+        id: "normal",
+        name: "Normal",
+        loop: true,
+        durationMs: 4000,
+        laneCount: 1,
+        clips: []
+      }
+    ],
+    activeSceneId: "normal",
+    previewTimeMs: 0,
+    accentColor: "#FFFFFF",
+    designer: canonicalizeDesignerGeometry({
+      ...designer,
+      artwork: [],
+      workLines: [],
+      projections: [],
+      derivedGeometries: [],
+      texts: [],
+      buildAreas: [],
+      zones: [],
+      faceGraphics: [],
+      groups: [],
+      channels: [],
+      lightSources: [],
+      routes: []
+    })
+  };
+}
+
 export function clonePartituraDocument(document: PartituraDocument) {
   return JSON.parse(JSON.stringify(document)) as PartituraDocument;
 }
@@ -493,7 +572,7 @@ export function normalizeDefaultSignLayout(document: PartituraDocument) {
   const fallback = createDefaultPartituraDocument(document.projectId);
   const source = clonePartituraDocument(document);
   const designer = normalizeDesigner(source.designer, source.compiledLayout);
-  const targetIds = new Set(["full_sign", ...designer.lightSources.map((source) => source.id), ...designer.zones.map((zone) => zone.id), ...designer.channels.map((channel) => channel.id), ...designer.groups.map((group) => group.id)]);
+  const targetIds = new Set(["full_sign", ...DESIGNER_GLOBAL_LIGHT_SOURCE_TARGETS.map((target) => target.id), ...designer.lightSources.map((source) => source.id), ...designer.zones.map((zone) => zone.id), ...designer.channels.map((channel) => channel.id), ...designer.groups.map((group) => group.id)]);
   // An empty scene list is a valid authoring state while Animate is being composed.
   const scenes = Array.isArray(source.scenes) ? source.scenes : fallback.scenes;
 
@@ -531,10 +610,13 @@ export function createDefaultDesigner(): DesignerForm {
     fabricationCutterUnit: "mm",
     filletRadiusMm: 3.175,
     channelRouterDiameterMm: DEFAULT_CHANNEL_ROUTER_DIAMETER_MM,
+    alignmentMarks: { enabled: false, locked: false, originXcm: 2, originYcm: 2, spacingMm: 100 },
     rulerVisible: true,
     sourceSvg: null,
     layers: defaultDesignerLayers(),
     artwork: [],
+    workLinesVisible: true,
+    workLines: [],
     projections: [],
     derivedGeometries: [],
     texts: [],
@@ -602,10 +684,10 @@ export function createDefaultDesigner(): DesignerForm {
     ],
     faceGraphics: [],
     routes: [
-      { id: "route_fondo", name: "Fondo LED string", kind: "led_string", points: [{ x: 44, y: 4, joint: true }, { x: 100, y: 4 }, { x: 100, y: 8 }, { x: 44, y: 8 }, { x: 44, y: 12 }, { x: 100, y: 12 }] },
-      { id: "route_estrella", name: "Estrella LED string", kind: "led_string", points: [{ x: 110, y: 12 }, { x: 124, y: 12 }] },
-      { id: "route_letras", name: "Letras LED string", kind: "led_string", points: [{ x: 44, y: 30 }, { x: 64, y: 30 }, { x: 70, y: 30 }, { x: 90, y: 30 }, { x: 96, y: 30 }, { x: 116, y: 30 }, { x: 122, y: 30 }, { x: 142, y: 30 }] },
-      { id: "data_feed_1", name: "Data cable", kind: "data_cable", points: [{ x: 16, y: 8, joint: true }, { x: 32, y: 8 }, { x: 32, y: 4 }, { x: 44, y: 4, joint: true }] }
+      { id: "route_fondo", name: "Fondo LED string", kind: "led_string", designSurface: "rear", points: [{ x: 44, y: 4, joint: true }, { x: 100, y: 4 }, { x: 100, y: 8 }, { x: 44, y: 8 }, { x: 44, y: 12 }, { x: 100, y: 12 }] },
+      { id: "route_estrella", name: "Estrella LED string", kind: "led_string", designSurface: "rear", points: [{ x: 110, y: 12 }, { x: 124, y: 12 }] },
+      { id: "route_letras", name: "Letras LED string", kind: "led_string", designSurface: "rear", points: [{ x: 44, y: 30 }, { x: 64, y: 30 }, { x: 70, y: 30 }, { x: 90, y: 30 }, { x: 96, y: 30 }, { x: 116, y: 30 }, { x: 122, y: 30 }, { x: 142, y: 30 }] },
+      { id: "data_feed_1", name: "Data cable", kind: "data_cable", designSurface: "rear", points: [{ x: 16, y: 8, joint: true }, { x: 32, y: 8 }, { x: 32, y: 4 }, { x: 44, y: 4, joint: true }] }
     ]
   };
   return canonicalizeDesignerGeometry(designer);
@@ -620,6 +702,7 @@ function normalizeDesigner(designer?: DesignerForm, compiledLayout?: PartituraDo
     id: typeof route.id === "string" && route.id ? route.id : `route_${index + 1}`,
     name: typeof route.name === "string" && route.name ? route.name : `Route ${index + 1}`,
     kind: route.kind === "data_cable" ? "data_cable" : "led_string",
+    designSurface: route.designSurface === "front" ? "front" : "rear",
     visible: route.visible !== false,
     points: Array.isArray(route.points) ? route.points.filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y)).map((point) => ({ x: point.x, y: point.y, ...(point.joint ? { joint: true } : {}) })) : []
   })).filter((route) => route.points.length >= 2) : fallback.routes;
@@ -638,10 +721,19 @@ function normalizeDesigner(designer?: DesignerForm, compiledLayout?: PartituraDo
     fabricationCutterUnit: designer.fabricationCutterUnit === "in" || designer.fabricationCutterUnit === "cm" ? designer.fabricationCutterUnit : "mm",
     filletRadiusMm: positiveNumber(designer.filletRadiusMm, positiveNumber(designer.fabricationCutterDiameterMm, fallback.fabricationCutterDiameterMm) / 2),
     channelRouterDiameterMm: Math.max(3, Math.min(20, positiveNumber(designer.channelRouterDiameterMm, fallback.channelRouterDiameterMm))),
+    alignmentMarks: {
+      enabled: designer.alignmentMarks?.enabled === true,
+      locked: designer.alignmentMarks?.locked === true,
+      originXcm: nonNegativeNumber(designer.alignmentMarks?.originXcm, fallback.alignmentMarks.originXcm),
+      originYcm: nonNegativeNumber(designer.alignmentMarks?.originYcm, fallback.alignmentMarks.originYcm),
+      spacingMm: positiveNumber(designer.alignmentMarks?.spacingMm, fallback.alignmentMarks.spacingMm)
+    },
     rulerVisible: typeof designer.rulerVisible === "boolean" ? designer.rulerVisible : fallback.rulerVisible,
     sourceSvg: typeof designer.sourceSvg === "string" ? designer.sourceSvg : null,
     layers: normalizeDesignerLayers(designer.layers, fallback.layers),
     artwork: Array.isArray(designer.artwork) ? designer.artwork.map(normalizeDesignerArtwork) : [],
+    workLinesVisible: designer.workLinesVisible !== false,
+    workLines: normalizeDesignerWorkLines(designer.workLines),
     projections: normalizeDesignerProjections(designer.projections),
     derivedGeometries: normalizeDesignerDerivedGeometries(designer.derivedGeometries),
     texts: normalizeDesignerTexts(designer.texts),
@@ -1224,6 +1316,23 @@ function normalizeDesignerLayer(layer: DesignerLayerSettings | undefined, fallba
     locked: typeof layer?.locked === "boolean" ? layer.locked : fallback.locked,
     opacity: clampNumber(typeof layer?.opacity === "number" ? layer.opacity : fallback.opacity, 0.05, 1)
   };
+}
+
+function normalizeDesignerWorkLines(workLines: DesignerWorkLineForm[] | undefined): DesignerWorkLineForm[] {
+  if (!Array.isArray(workLines)) return [];
+  return workLines.flatMap((line, index) => {
+    const points = Array.isArray(line?.points)
+      ? line.points.filter((point) => Number.isFinite(point?.x) && Number.isFinite(point?.y)).map((point) => ({ x: point.x, y: point.y }))
+      : [];
+    if (points.length < 2) return [];
+    const layer = line.layer === "artwork" || line.layer === "zones" || line.layer === "faceGraphic" ? line.layer : undefined;
+    return [{
+      id: typeof line.id === "string" && line.id ? line.id : `work_line_${index + 1}`,
+      name: typeof line.name === "string" && line.name ? line.name : `Work line ${index + 1}`,
+      ...(layer ? { layer } : {}),
+      points
+    }];
+  });
 }
 
 function normalizeBuildAreas(designer: (Partial<DesignerForm> & { buildArea?: Partial<DesignerBuildAreaForm> }) | undefined, fallback: DesignerBuildAreaForm[]): DesignerBuildAreaForm[] {

@@ -1,11 +1,13 @@
 import { NextResponse } from "next/server";
 import { createProject, listProjects } from "@/lib/server/projects";
+import { getMenu } from "@/lib/api";
 import { redirectTo } from "@/lib/request-url";
 
 export const runtime = "nodejs";
 
 export async function GET() {
-  return NextResponse.json({ records: await listProjects() });
+  const menu = await getMenu();
+  return NextResponse.json({ records: await listProjects(menu.tenant.client_id) });
 }
 
 export async function POST(request: Request) {

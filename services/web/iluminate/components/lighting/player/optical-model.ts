@@ -67,7 +67,7 @@ export function faceGraphicMaskUv(point: DesignerPoint, canvasSize: { width: num
 /** Resolves physical Face Graphic regions, including live derived profiles. */
 export function resolvePhysicalFaceGraphics(designer: DesignerForm): DesignerFaceGraphicForm[] {
   const derived = designer.derivedGeometries.flatMap((operation): DesignerFaceGraphicForm[] => {
-    if (operation.targetLayer !== "faceGraphic") return [];
+    if (operation.targetLayer !== "faceGraphic" || operation.visible === false) return [];
     const resolved = resolveDesignerDerivedGeometry(designer, operation.id);
     if (!resolved.geometry) return [];
     return [{
@@ -82,7 +82,7 @@ export function resolvePhysicalFaceGraphics(designer: DesignerForm): DesignerFac
       opacity: 1
     }];
   });
-  return [...designer.faceGraphics, ...derived];
+  return [...designer.faceGraphics.filter((graphic) => graphic.visible !== false), ...derived];
 }
 
 export function orderOpticalTreatmentsForRendering(treatments: DesignerOpticalTreatment[]) {

@@ -46,13 +46,6 @@ export const menuCatalog: MenuSection[] = [
         required_permission: "lighting:projects:manage"
       },
       {
-        id: "partitura-generator",
-        label: "Partitura Generator",
-        href: "/partituras/generator",
-        description: "Internal generator and validation workbench for partitura.v2.",
-        required_permission: "lighting:partituras:manage"
-      },
-      {
         id: "designer",
         label: "Designer",
         href: "/partituras/designer",
@@ -150,6 +143,18 @@ function placeholderMenuForRole(role: Role): MenuPayload {
 
 export const placeholderMenu: MenuPayload = placeholderMenuForRole(defaultPlaceholderRole);
 
+function withoutLegacyGenerator(menu: MenuPayload): MenuPayload {
+  return {
+    ...menu,
+    sections: menu.sections
+      .map((section) => ({
+        ...section,
+        items: section.items.filter((item) => item.href !== "/partituras/generator")
+      }))
+      .filter((section) => section.items.length > 0)
+  };
+}
+
 async function authHeaders(): Promise<HeadersInit> {
   const cookieStore = await cookies();
   const token = cookieStore.get(sessionCookieName)?.value;
@@ -186,10 +191,10 @@ export async function getMenu(): Promise<MenuPayload> {
     if (!cookieStore.get(sessionCookieName)?.value) redirect("/login");
     const requestedRole = cookieStore.get(placeholderRoleCookieName)?.value ?? defaultPlaceholderRole;
     const role = isRole(requestedRole) ? requestedRole : defaultPlaceholderRole;
-    return placeholderMenuForRole(role);
+    return withoutLegacyGenerator(placeholderMenuForRole(role));
   }
 
-  return getJson<MenuPayload>("/menu");
+  return withoutLegacyGenerator(await getJson<MenuPayload>("/menu"));
 }
 
 export async function getModule(path: string): Promise<ModulePayload> {

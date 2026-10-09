@@ -4,11 +4,11 @@ import { cloneElement, isValidElement, useEffect, useRef, useState, type ReactEl
 import { DndContext, KeyboardSensor, PointerSensor, closestCenter, type DragEndEvent, useSensor, useSensors } from "@dnd-kit/core";
 import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { ChevronDown, ChevronRight, CircleDot, CornerDownRight, Eye, EyeOff, Folder, GripVertical, ImageIcon, Info, Layers, Lightbulb, Lock, Minus, Pencil, Plus, Search, Spline, Trash2, Type, Unlock, Upload, Waves, X } from "lucide-react";
-import type { DesignerArtworkForm, DesignerBuildAreaForm, DesignerChannelForm, DesignerFaceGraphicForm, DesignerForm, DesignerGroupForm, DesignerLayerSettings, DesignerLayersForm, DesignerPointNodeType, DesignerText, DesignerZoneForm } from "@/lib/lighting/partitura-model";
+import { Cable, ChevronDown, ChevronRight, CircleDot, Contrast, CornerDownRight, Cpu, Eye, EyeOff, Folder, GripVertical, ImageIcon, Info, Layers, Lightbulb, Lock, Minus, Pencil, Plus, Search, Spline, Trash2, Type, Unlock, Upload, Waves, X } from "lucide-react";
+import type { DesignerArtworkForm, DesignerBuildAreaForm, DesignerChannelForm, DesignerFaceGraphicForm, DesignerForm, DesignerGroupForm, DesignerLayerSettings, DesignerLayersForm, DesignerPointNodeType, DesignerText, DesignerWorkLineForm, DesignerZoneForm } from "@/lib/lighting/partitura-model";
 import { resolveDesignerDerivedGeometry, resolveDesignerProjectionGeometry, type DesignerDerivedGeometry, type DesignerProjection, type DesignerProjectionLayer } from "@/lib/lighting/partitura-model";
 import { formatDecimal, rulerTicks } from "./designer-geometry";
-import { designerLayerForSelection, type DesignerActiveLayer, type DesignerRouteSummary, type DesignerSelection, type DesignerViewport } from "./types";
+import { designerAdditiveSelectionRequested, designerLayerForSelection, routeMatchesSurfaceView, type DesignerActiveLayer, type DesignerRouteSummary, type DesignerRouteSurfaceView, type DesignerSelection, type DesignerViewport } from "./types";
 
 export function ToolButton({
   label,
@@ -51,12 +51,18 @@ export function DesignerLayersPanel({
   designer,
   activeLayer,
   selection,
+  selectedGeometryKeys,
   routeSummaries,
   routeOutputs,
   assets,
+  faceGraphicVinylPreview,
+  routeSurfaceView,
   onActivateLayer,
   onPatchLayer,
   onPatchLayers,
+  onPatchWorkLine,
+  onToggleFaceGraphicVinylPreview,
+  onRouteSurfaceViewChange,
   onUploadArtwork,
   onPatchArtwork,
   onPatchBuildArea,
@@ -81,12 +87,18 @@ export function DesignerLayersPanel({
   designer: DesignerForm;
   activeLayer: DesignerActiveLayer | null;
   selection: DesignerSelection;
+  selectedGeometryKeys: string[];
   routeSummaries: DesignerRouteSummary[];
   routeOutputs: Map<string, number>;
   assets: Array<{ id: string; fileName: string; mimeType: string }>;
+  faceGraphicVinylPreview: boolean;
+  routeSurfaceView: DesignerRouteSurfaceView;
   onActivateLayer: (layer: DesignerActiveLayer) => void;
   onPatchLayer: (layer: keyof DesignerLayersForm, patch: Partial<DesignerLayerSettings>) => void;
   onPatchLayers: (layers: Array<keyof DesignerLayersForm>, patch: Partial<DesignerLayerSettings>) => void;
+  onPatchWorkLine: (workLineId: string, patch: Partial<Pick<DesignerWorkLineForm, "name" | "layer" | "points">>) => void;
+  onToggleFaceGraphicVinylPreview: () => void;
+  onRouteSurfaceViewChange: (view: DesignerRouteSurfaceView) => void;
   onUploadArtwork: (file: File) => void | Promise<void>;
   onPatchArtwork: (artworkId: string, patch: Partial<DesignerArtworkForm>) => void;
   onPatchBuildArea: (buildAreaId: string, patch: Partial<Pick<DesignerBuildAreaForm, "name" | "visible" | "locked" | "opacity">>) => void;
@@ -105,7 +117,7 @@ export function DesignerLayersPanel({
   onPatchController: (patch: Partial<Pick<DesignerForm["controller"], "name" | "visible">>) => void;
   onPatchRoute: (routeId: string, patch: Partial<Pick<DesignerForm["routes"][number], "name" | "visible">>) => void;
   onReorderItems: (layer: "artwork" | "reference" | "zones" | "channels" | "faceGraphic" | "strings", activeId: string, overId: string) => void;
-  onSelect: (selection: DesignerSelection) => void;
+  onSelect: (selection: DesignerSelection, additive?: boolean) => void;
   onClose: () => void;
 }) {
   const [searchTerm, setSearchTerm] = useState("");
@@ -157,6 +169,11 @@ export function DesignerLayersPanel({
 
   useEffect(() => {
     if (!selection) return;
+    if (selection.type === "work_line") {
+      const owner = designer.workLines.find((line) => line.id === selection.id)?.layer;
+      if (owner) setExpandedLayers((current) => ({ ...current, [owner]: true }));
+      return;
+    }
     if (selection.type === "build_area") {
       setExpandedLayers((current) => ({ ...current, artwork: true }));
       setExpandedArtworkGroups((current) => ({ ...current, reference: true }));
@@ -303,13 +320,13 @@ export function DesignerLayersPanel({
                   <LayerChildRow
                     label={buildArea.name}
                     detail={`${buildArea.shape} · ${formatDecimal(buildArea.width)}x${formatDecimal(buildArea.height)} cm`}
-                    selected={selection?.type === "build_area" && selection.id === buildArea.id}
+                    selected={(selection?.type === "build_area" && selection.id === buildArea.id) || selectedGeometryKeys.includes(`build_area:${buildArea.id}`)}
                     color="violet"
                     visible={buildArea.visible}
                     onToggleVisible={() => onPatchBuildArea(buildArea.id, { visible: buildArea.visible === false })}
-                    onClick={() => {
+                    onClick={(event) => {
                       activateLayer("artwork");
-                      onSelect({ type: "build_area", id: buildArea.id });
+                      onSelect({ type: "build_area", id: buildArea.id }, designerAdditiveSelectionRequested(event));
                     }}
                     onRename={(name) => onPatchBuildArea(buildArea.id, { name })}
                     onOpenDetails={() => setDetails({ type: "build_area", id: buildArea.id })}
@@ -319,8 +336,9 @@ export function DesignerLayersPanel({
             </SortableLayerList>
           </RouteFolder>
           <TextRows designer={designer} targetLayer="reference" selection={selection} onActivate={() => activateLayer("artwork")} onSelect={onSelect} onPatch={onPatchText} />
-          <ProjectionRows designer={designer} targetLayer="reference" selection={selection} onActivate={() => activateLayer("artwork")} onSelect={onSelect} onPatch={onPatchProjection} />
-          <DerivedGeometryRows designer={designer} targetLayer="reference" selection={selection} onActivate={() => activateLayer("artwork")} onSelect={onSelect} onPatch={onPatchDerivedGeometry} />
+          <ProjectionRows designer={designer} targetLayer="reference" selection={selection} selectedGeometryKeys={selectedGeometryKeys} onActivate={() => activateLayer("artwork")} onSelect={onSelect} onPatch={onPatchProjection} />
+          <DerivedGeometryRows designer={designer} targetLayer="reference" selection={selection} selectedGeometryKeys={selectedGeometryKeys} onActivate={() => activateLayer("artwork")} onSelect={onSelect} onPatch={onPatchDerivedGeometry} />
+          <WorkLineRows designer={designer} layer="artwork" selection={selection} matchesSearch={matchesSearch} onActivate={() => activateLayer("artwork")} onSelect={onSelect} onPatch={onPatchWorkLine} />
         </LayerPanelSection>
 
         <LayerPanelSection
@@ -349,14 +367,14 @@ export function DesignerLayersPanel({
                 <SortableLayerChildRow key={zone.id} id={zone.id} disabled={designer.layers.zones.locked}>
                   <LayerChildRow
                     label={zone.name}
-                    selected={selection?.type === "zone" && selection.id === zone.id}
+                    selected={(selection?.type === "zone" && selection.id === zone.id) || selectedGeometryKeys.includes(`zone:${zone.id}`)}
                     color="blue"
                     strongColor
                     visible={zone.visible}
                     onToggleVisible={() => onPatchZone(zone.id, { visible: zone.visible === false })}
-                    onClick={() => {
+                    onClick={(event) => {
                       activateLayer("zones");
-                      onSelect({ type: "zone", id: zone.id });
+                      onSelect({ type: "zone", id: zone.id }, designerAdditiveSelectionRequested(event));
                     }}
                     onRename={(name) => onPatchZone(zone.id, { name })}
                     onOpenDetails={() => setDetails({ type: "zone", id: zone.id })}
@@ -426,8 +444,9 @@ export function DesignerLayersPanel({
             />
           </RouteFolder>
           <TextRows designer={designer} targetLayer="zones" selection={selection} onActivate={() => activateLayer("zones")} onSelect={onSelect} onPatch={onPatchText} />
-          <ProjectionRows designer={designer} targetLayer="zones" selection={selection} onActivate={() => activateLayer("zones")} onSelect={onSelect} onPatch={onPatchProjection} />
-          <DerivedGeometryRows designer={designer} targetLayer="zones" selection={selection} onActivate={() => activateLayer("zones")} onSelect={onSelect} onPatch={onPatchDerivedGeometry} />
+          <ProjectionRows designer={designer} targetLayer="zones" selection={selection} selectedGeometryKeys={selectedGeometryKeys} onActivate={() => activateLayer("zones")} onSelect={onSelect} onPatch={onPatchProjection} />
+          <DerivedGeometryRows designer={designer} targetLayer="zones" selection={selection} selectedGeometryKeys={selectedGeometryKeys} onActivate={() => activateLayer("zones")} onSelect={onSelect} onPatch={onPatchDerivedGeometry} />
+          <WorkLineRows designer={designer} layer="zones" selection={selection} matchesSearch={matchesSearch} onActivate={() => activateLayer("zones")} onSelect={onSelect} onPatch={onPatchWorkLine} />
         </LayerPanelSection>
 
         <LayerPanelSection
@@ -447,11 +466,13 @@ export function DesignerLayersPanel({
             setExpandedLayers((current) => ({ ...current, strings: !expanded, hardware: !expanded }));
           }}
           onChange={(patch) => onPatchLayers(["strings", "hardware"], patch)}
+          action={<RouteSurfaceViewToggle value={routeSurfaceView} onChange={onRouteSurfaceViewChange} />}
         >
           <RouteFolder
             label="Data cables"
+            icon={Cable}
             order={2}
-            count={designer.routes.filter((route) => route.kind === "data_cable").length}
+            count={designer.routes.filter((route) => route.kind === "data_cable" && routeMatchesSurfaceView(route.designSurface, routeSurfaceView)).length}
             expanded={expandedStringGroups.data_cables}
             onToggle={() => {
               activateLayer("strings");
@@ -459,16 +480,17 @@ export function DesignerLayersPanel({
             }}
           >
             <SortableLayerList
-              ids={designer.routes.filter((route) => route.kind === "data_cable").map((route) => route.id)}
+              ids={designer.routes.filter((route) => route.kind === "data_cable" && routeMatchesSurfaceView(route.designSurface, routeSurfaceView)).map((route) => route.id)}
               sensors={sensors}
               disabled={designer.layers.strings.locked}
               onReorder={(activeId, overId) => onReorderItems("strings", activeId, overId)}
             >
-              {designer.routes.map((route, index) => ({ route, index })).filter(({ route }) => route.kind === "data_cable").filter(({ route }) => matchesSearch(route.name, "data cable")).map(({ route }) => (
+              {designer.routes.map((route, index) => ({ route, index })).filter(({ route }) => route.kind === "data_cable" && routeMatchesSurfaceView(route.designSurface, routeSurfaceView)).filter(({ route }) => matchesSearch(route.name, "data cable")).map(({ route }) => (
                 <SortableLayerChildRow key={route.id} id={route.id} disabled={designer.layers.strings.locked}>
                   <LayerChildRow
                     label={route.name}
-                    detail={`${routeOutputs.get(route.id) ? `Out ${routeOutputs.get(route.id)}` : "Unassigned"} · data cable`}
+                    icon={Cable}
+                    detail={`${routeOutputs.get(route.id) ? `Out ${routeOutputs.get(route.id)}` : "Unassigned"} · ${route.designSurface === "front" ? "Front" : "Rear"} · data cable`}
                     selected={selection?.type === "route" && selection.id === route.id}
                     color="green"
                     strongColor
@@ -487,8 +509,9 @@ export function DesignerLayersPanel({
           </RouteFolder>
           <RouteFolder
             label="Strings"
+            icon={Lightbulb}
             order={1}
-            count={designer.routes.filter((route) => route.kind === "led_string").length}
+            count={designer.routes.filter((route) => route.kind === "led_string" && routeMatchesSurfaceView(route.designSurface, routeSurfaceView)).length}
             expanded={expandedStringGroups.led_strings}
             onToggle={() => {
               activateLayer("strings");
@@ -496,16 +519,17 @@ export function DesignerLayersPanel({
             }}
           >
             <SortableLayerList
-              ids={designer.routes.filter((route) => route.kind === "led_string").map((route) => route.id)}
+              ids={designer.routes.filter((route) => route.kind === "led_string" && routeMatchesSurfaceView(route.designSurface, routeSurfaceView)).map((route) => route.id)}
               sensors={sensors}
               disabled={designer.layers.strings.locked}
               onReorder={(activeId, overId) => onReorderItems("strings", activeId, overId)}
             >
-              {designer.routes.map((route, index) => ({ route, index })).filter(({ route, index }) => route.kind === "led_string" && matchesSearch(route.name, `${routeSummaries[index]?.pixels ?? 0} px`)).map(({ route, index }) => (
+              {designer.routes.map((route, index) => ({ route, index })).filter(({ route, index }) => route.kind === "led_string" && routeMatchesSurfaceView(route.designSurface, routeSurfaceView) && matchesSearch(route.name, `${routeSummaries[index]?.pixels ?? 0} px`)).map(({ route, index }) => (
                 <SortableLayerChildRow key={route.id} id={route.id} disabled={designer.layers.strings.locked}>
                   <LayerChildRow
                     label={route.name}
-                    detail={`${routeOutputs.get(route.id) ? `Out ${routeOutputs.get(route.id)}` : "Unassigned"} · ${routeSummaries[index]?.pixels ?? 0} px · ${routeSummaries[index]?.leds ?? 0} LEDs`}
+                    icon={Lightbulb}
+                    detail={`${routeOutputs.get(route.id) ? `Out ${routeOutputs.get(route.id)}` : "Unassigned"} · ${route.designSurface === "front" ? "Front" : "Rear"} · ${routeSummaries[index]?.pixels ?? 0} px · ${routeSummaries[index]?.leds ?? 0} LEDs`}
                     selected={selection?.type === "route" && selection.id === route.id}
                     color="amber"
                     strongColor
@@ -524,6 +548,7 @@ export function DesignerLayersPanel({
           </RouteFolder>
           <RouteFolder
             label="Controller"
+            icon={Cpu}
             order={3}
             count={1}
             expanded={expandedControllerGroup}
@@ -534,6 +559,7 @@ export function DesignerLayersPanel({
           >
             <LayerChildRow
               label={designer.controller.name}
+              icon={Cpu}
               detail={`${designer.controller.dataOutputs} outputs`}
               selected={selection?.type === "controller"}
               visible={designer.controller.visible !== false}
@@ -557,6 +583,15 @@ export function DesignerLayersPanel({
           onActivate={() => activateLayer("faceGraphic")}
           onToggle={() => toggleLayer("faceGraphic")}
           onChange={(patch) => onPatchLayer("faceGraphic", patch)}
+          action={(
+            <IconToggle
+              active={faceGraphicVinylPreview}
+              label={faceGraphicVinylPreview ? "Exit black and white vinyl preview" : "Preview vinyl in black and white"}
+              onClick={onToggleFaceGraphicVinylPreview}
+            >
+              <Contrast className="h-3.5 w-3.5" />
+            </IconToggle>
+          )}
         >
           <SortableLayerList
             ids={designer.faceGraphics.map((element) => element.id)}
@@ -569,14 +604,14 @@ export function DesignerLayersPanel({
                 <LayerChildRow
                   label={element.name}
                   detail={`${element.passMode}${element.passMode === "translucent" ? ` · ${element.filterColor}` : ""}`}
-                  selected={selection?.type === "face_graphic" && selection.id === element.id}
+                  selected={(selection?.type === "face_graphic" && selection.id === element.id) || selectedGeometryKeys.includes(`face_graphic:${element.id}`)}
                   color="violet"
                   strongColor
                   visible={element.visible}
                   locked={element.locked}
                   onToggleVisible={() => onPatchFaceGraphic(element.id, { visible: element.visible === false })}
                   onToggleLocked={() => onPatchFaceGraphic(element.id, { locked: !element.locked })}
-                  onClick={() => { activateLayer("faceGraphic"); onSelect({ type: "face_graphic", id: element.id }); }}
+                  onClick={(event) => { activateLayer("faceGraphic"); onSelect({ type: "face_graphic", id: element.id }, designerAdditiveSelectionRequested(event)); }}
                   onRename={element.locked ? undefined : (name) => onPatchFaceGraphic(element.id, { name })}
                 />
               </SortableLayerChildRow>
@@ -584,8 +619,9 @@ export function DesignerLayersPanel({
           </SortableLayerList>
           {!designer.faceGraphics.length ? <p className="px-2 py-1 text-[11px] leading-4 text-muted-foreground">Use a shape or Bezier tool to create the frontal vinyl mask.</p> : null}
           <TextRows designer={designer} targetLayer="faceGraphic" selection={selection} onActivate={() => activateLayer("faceGraphic")} onSelect={onSelect} onPatch={onPatchText} />
-          <ProjectionRows designer={designer} targetLayer="faceGraphic" selection={selection} onActivate={() => activateLayer("faceGraphic")} onSelect={onSelect} onPatch={onPatchProjection} />
-          <DerivedGeometryRows designer={designer} targetLayer="faceGraphic" selection={selection} onActivate={() => activateLayer("faceGraphic")} onSelect={onSelect} onPatch={onPatchDerivedGeometry} />
+          <ProjectionRows designer={designer} targetLayer="faceGraphic" selection={selection} selectedGeometryKeys={selectedGeometryKeys} onActivate={() => activateLayer("faceGraphic")} onSelect={onSelect} onPatch={onPatchProjection} />
+          <DerivedGeometryRows designer={designer} targetLayer="faceGraphic" selection={selection} selectedGeometryKeys={selectedGeometryKeys} onActivate={() => activateLayer("faceGraphic")} onSelect={onSelect} onPatch={onPatchDerivedGeometry} />
+          <WorkLineRows designer={designer} layer="faceGraphic" selection={selection} matchesSearch={matchesSearch} onActivate={() => activateLayer("faceGraphic")} onSelect={onSelect} onPatch={onPatchWorkLine} />
         </LayerPanelSection>
       </div>
       {details ? (
@@ -619,6 +655,7 @@ function LayerPanelSection({
   expanded,
   layer,
   children,
+  action,
   onActivate,
   onToggle,
   onChange
@@ -629,6 +666,7 @@ function LayerPanelSection({
   expanded: boolean;
   layer: DesignerLayerSettings;
   children: React.ReactNode;
+  action?: React.ReactNode;
   onActivate: () => void;
   onToggle: () => void;
   onChange: (patch: Partial<DesignerLayerSettings>) => void;
@@ -642,6 +680,7 @@ function LayerPanelSection({
         <button type="button" className={`min-w-0 flex-1 truncate rounded px-1.5 py-1 text-left text-body-sm font-semibold ${active ? "bg-blue-600 text-white" : "text-foreground"}`} onClick={onActivate}>
           {label}
         </button>
+        {action}
         <IconToggle active={layer.visible} label={layer.visible ? `Hide ${label}` : `Show ${label}`} onClick={() => onChange({ visible: !layer.visible })}>
           {layer.visible ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
         </IconToggle>
@@ -663,8 +702,30 @@ function LayerPanelSection({
   );
 }
 
+function RouteSurfaceViewToggle({ value, onChange }: { value: DesignerRouteSurfaceView; onChange: (view: DesignerRouteSurfaceView) => void }) {
+  return (
+    <div className="flex items-center gap-0.5" role="group" aria-label="Wiring surface visibility">
+      {(["rear", "front", "both"] as const).map((view) => (
+        <IconToggle key={view} active={value === view} label={`Show ${view === "both" ? "both wiring surfaces" : `${view} wiring surface`}`} onClick={() => onChange(view)}>
+          <RouteSurfaceIcon view={view} />
+        </IconToggle>
+      ))}
+    </div>
+  );
+}
+
+function RouteSurfaceIcon({ view }: { view: DesignerRouteSurfaceView }) {
+  return (
+    <svg viewBox="0 0 18 18" aria-hidden="true" className="h-3.5 w-3.5 fill-none stroke-current" strokeWidth="1.5">
+      {view !== "front" ? <path d="M2.5 5.5h9v7h-9z M11.5 8h3.5" strokeDasharray="2 1.5" /> : null}
+      {view !== "rear" ? <path d="M6.5 2.5h9v7h-9z M3 6h3.5" /> : null}
+    </svg>
+  );
+}
+
 function RouteFolder({
   label,
+  icon: Icon = Folder,
   order,
   count,
   expanded,
@@ -673,6 +734,7 @@ function RouteFolder({
   action
 }: {
   label: string;
+  icon?: React.ComponentType<{ className?: string }>;
   order?: number;
   count: number;
   expanded: boolean;
@@ -689,7 +751,7 @@ function RouteFolder({
           onClick={onToggle}
         >
           {expanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-          <Folder className="h-3.5 w-3.5" />
+          <Icon className="h-3.5 w-3.5" />
           <span className="min-w-0 flex-1 truncate">{label}</span>
           <span className="font-mono text-[10px]">{count}</span>
         </button>
@@ -839,6 +901,45 @@ function SortableLayerList({
   );
 }
 
+function WorkLineDashedIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
+      <path d="M3 18 9 10 15 14 21 5" strokeDasharray="2.5 3" />
+      <circle cx="3" cy="18" r="1.25" fill="currentColor" stroke="none" />
+      <circle cx="9" cy="10" r="1.25" fill="currentColor" stroke="none" />
+      <circle cx="15" cy="14" r="1.25" fill="currentColor" stroke="none" />
+      <circle cx="21" cy="5" r="1.25" fill="currentColor" stroke="none" />
+    </svg>
+  );
+}
+
+function WorkLineRows({ designer, layer, selection, matchesSearch, onActivate, onSelect, onPatch }: {
+  designer: DesignerForm;
+  layer: NonNullable<DesignerWorkLineForm["layer"]>;
+  selection: DesignerSelection;
+  matchesSearch: (label: string, detail?: string) => boolean;
+  onActivate: () => void;
+  onSelect: (selection: DesignerSelection) => void;
+  onPatch: (workLineId: string, patch: Partial<Pick<DesignerWorkLineForm, "name" | "layer" | "points">>) => void;
+}) {
+  const lines = designer.workLines.filter((line) => line.layer === layer && matchesSearch(line.name, "work line construction"));
+  if (!lines.length) return null;
+  return (
+    <div className="border-t border-border-2 py-1">
+      {lines.map((line) => <LayerChildRow
+        key={line.id}
+        label={line.name}
+        detail={`Dashed reference · ${line.points.length} points`}
+        selected={selection?.type === "work_line" && selection.id === line.id}
+        color="green"
+        icon={WorkLineDashedIcon}
+        onClick={() => { onActivate(); onSelect({ type: "work_line", id: line.id }); }}
+        onRename={(name) => onPatch(line.id, { name })}
+      />)}
+    </div>
+  );
+}
+
 function TextRows({ designer, targetLayer, selection, onActivate, onSelect, onPatch }: {
   designer: DesignerForm;
   targetLayer: DesignerProjectionLayer;
@@ -870,12 +971,13 @@ function TextRows({ designer, targetLayer, selection, onActivate, onSelect, onPa
   );
 }
 
-function ProjectionRows({ designer, targetLayer, selection, onActivate, onSelect, onPatch }: {
+function ProjectionRows({ designer, targetLayer, selection, selectedGeometryKeys, onActivate, onSelect, onPatch }: {
   designer: DesignerForm;
   targetLayer: DesignerProjectionLayer;
   selection: DesignerSelection;
+  selectedGeometryKeys: string[];
   onActivate: () => void;
-  onSelect: (selection: DesignerSelection) => void;
+  onSelect: (selection: DesignerSelection, additive?: boolean) => void;
   onPatch: (projectionId: string, patch: Partial<DesignerProjection>) => void;
 }) {
   const projections = designer.projections.filter((projection) => projection.targetLayer === targetLayer);
@@ -889,12 +991,12 @@ function ProjectionRows({ designer, targetLayer, selection, onActivate, onSelect
           key={projection.id}
           label={projection.name}
           detail={issue === "cycle" ? "Invalid cycle" : issue === "broken" ? "Broken reference" : issue === "collapsed" ? "Source collapsed" : issue === "invalid-topology" ? "Invalid source" : "Linked · read only"}
-          selected={selection?.type === "projection" && selection.id === projection.id}
+          selected={(selection?.type === "projection" && selection.id === projection.id) || selectedGeometryKeys.includes(`projection:${projection.id}`)}
           color="blue"
           icon={Spline}
           visible={projection.visible}
           onToggleVisible={() => onPatch(projection.id, { visible: !projection.visible })}
-          onClick={() => { onActivate(); onSelect({ type: "projection", id: projection.id }); }}
+          onClick={(event) => { onActivate(); onSelect({ type: "projection", id: projection.id }, designerAdditiveSelectionRequested(event)); }}
           onRename={(name) => onPatch(projection.id, { name })}
         />;
       })}
@@ -902,12 +1004,13 @@ function ProjectionRows({ designer, targetLayer, selection, onActivate, onSelect
   );
 }
 
-function DerivedGeometryRows({ designer, targetLayer, selection, onActivate, onSelect, onPatch }: {
+function DerivedGeometryRows({ designer, targetLayer, selection, selectedGeometryKeys, onActivate, onSelect, onPatch }: {
   designer: DesignerForm;
   targetLayer: DesignerProjectionLayer;
   selection: DesignerSelection;
+  selectedGeometryKeys: string[];
   onActivate: () => void;
-  onSelect: (selection: DesignerSelection) => void;
+  onSelect: (selection: DesignerSelection, additive?: boolean) => void;
   onPatch: (derivedId: string, patch: Partial<DesignerDerivedGeometry>) => void;
 }) {
   const operations = designer.derivedGeometries.filter((operation) => operation.targetLayer === targetLayer);
@@ -926,12 +1029,12 @@ function DerivedGeometryRows({ designer, targetLayer, selection, onActivate, onS
           key={operation.id}
           label={operation.name}
           detail={detail}
-          selected={selection?.type === "derived_geometry" && selection.id === operation.id}
+          selected={(selection?.type === "derived_geometry" && selection.id === operation.id) || selectedGeometryKeys.includes(`derived_geometry:${operation.id}`)}
           color="amber"
           icon={operation.operation === "offset" ? CornerDownRight : CircleDot}
           visible={operation.visible}
           onToggleVisible={() => onPatch(operation.id, { visible: !operation.visible })}
-          onClick={() => { onActivate(); onSelect({ type: "derived_geometry", id: operation.id }); }}
+          onClick={(event) => { onActivate(); onSelect({ type: "derived_geometry", id: operation.id }, designerAdditiveSelectionRequested(event)); }}
           onRename={(name) => onPatch(operation.id, { name })}
         />;
       })}
@@ -973,7 +1076,7 @@ type LayerChildRowProps = {
   locked?: boolean;
   onToggleVisible?: () => void;
   onToggleLocked?: () => void;
-  onClick: () => void;
+  onClick: (event: React.MouseEvent<HTMLButtonElement>) => void;
   onRename?: (name: string) => void;
   onOpenDetails?: () => void;
   lightingCount?: number;

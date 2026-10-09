@@ -41,7 +41,7 @@ export default async function StartPage({
             <div className="text-sm font-medium uppercase tracking-wide text-muted-foreground">Iluminate Tools</div>
             <h1 className="mt-3 text-3xl font-light">What do you want to build?</h1>
             <p className="mt-3 text-sm leading-6 text-muted-foreground">
-              A project organizes the physical sign. Designer defines its geometry and wiring; Generator manages its partituras.
+              A project organizes the physical sign. Designer manages its geometry, wiring and partitura workflow.
             </p>
           </div>
 
@@ -59,7 +59,7 @@ export default async function StartPage({
             </Card>
           ) : null}
 
-          <div className="mt-6 grid gap-4 md:grid-cols-3">
+          <div className="mt-6 grid gap-4 md:grid-cols-2">
             <Card>
               <CardHeader><div className="flex items-center gap-2 font-medium"><FolderKanban className="h-4 w-4" />Projects</div></CardHeader>
               <CardContent className="space-y-4">
@@ -72,13 +72,6 @@ export default async function StartPage({
               <CardContent className="space-y-4">
                 <p className="text-sm text-muted-foreground">Model the physical form, zones, LED routes and connections.</p>
                 <Button asChild variant="outline"><Link href={authenticated ? "/partituras/designer" : loginHref("/partituras/designer")}>Open Designer<ArrowRight className="h-4 w-4" /></Link></Button>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader><div className="flex items-center gap-2 font-medium"><WandSparkles className="h-4 w-4" />Generator</div></CardHeader>
-              <CardContent className="space-y-4">
-                <p className="text-sm text-muted-foreground">Create, validate and prepare the partituras executed by each installation.</p>
-                <Button asChild variant="outline"><Link href={authenticated ? "/partituras/generator" : loginHref("/partituras/generator")}>Open Generator<ArrowRight className="h-4 w-4" /></Link></Button>
               </CardContent>
             </Card>
           </div>

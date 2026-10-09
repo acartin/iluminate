@@ -4,20 +4,23 @@ import { readFile } from "node:fs/promises";
 import paper from "paper";
 import type { VisualShape } from "@iluminate/lighting-core";
 import type { ClipForm, DesignerChannelForm } from "../../../lib/lighting/partitura-model";
-import { DESIGNER_SCHEMA_VERSION, canonicalizeDesignerGeometry, createDefaultOpticalTreatment, createDefaultPartituraDocument, nextEmptyClipLayer, normalizeDefaultSignLayout, resolveDesignerDerivedGeometry, resolveDesignerProjectionGeometry, wouldCreateDesignerDerivedGeometryCycle, wouldCreateDesignerProjectionCycle } from "../../../lib/lighting/partitura-model";
+import { DESIGNER_SCHEMA_VERSION, canonicalizeDesignerGeometry, createDefaultOpticalTreatment, createDefaultPartituraDocument, createNewPartituraDocument, nextEmptyClipLayer, normalizeDefaultSignLayout, resolveDesignerDerivedGeometry, resolveDesignerProjectionGeometry, wouldCreateDesignerDerivedGeometryCycle, wouldCreateDesignerProjectionCycle } from "../../../lib/lighting/partitura-model";
 import { designerFilletCornerIsEligible, filletDesignerGeometry, offsetDesignerGeometry } from "../../../lib/lighting/designer-derived-geometry";
 import { DEFAULT_DESIGNER_FONT_ID, designerFontResource } from "../../../lib/lighting/designer-font-catalog";
 import { designerTextToGeometry } from "../../../lib/lighting/designer-text-geometry";
+import { inspectArtworkIntrinsicSize } from "../../../lib/lighting/artwork-intrinsic-size";
+import { placeSvgPathCandidates } from "../../../lib/lighting/artwork-svg-zones";
 import { compileDesignerLayout, designerCompileSignature } from "./designer-compiler";
-import { canvasInteractionSnapCm, CHANNEL_ROUTER_BIT_PRESETS, channelWidthForRouterDiameter, geometryToolAllowedOnLayer, geometryToolPolicy } from "./canvas/designer-tool-policy";
+import { canvasInteractionSnapCm, CHANNEL_ROUTER_BIT_PRESETS, channelWidthForRouterDiameter, geometryToolAllowedOnLayer, geometryToolPolicy, POINTER_DRAG_THRESHOLD_PX, TERMINAL_SOLDER_CAPTURE_RADIUS_PX } from "./canvas/designer-tool-policy";
 import { applyDesignerGeometryCommand, applyDesignerNativeFillet } from "./geometry/designer-geometry-commands";
 import { applyDesignerBooleanOperation, validateDesignerGeometryTopology } from "./geometry/designer-geometry-boolean";
+import { trimDesignerPathAtPoint } from "./geometry/designer-path-trim";
 import { applyFaceGraphicToOpticalMode, applyFaceGraphicTransmission, faceGraphicMaskUv, faceGraphicTransmissionAtPoint, frontMaterialOffStyle, orderOpticalTreatmentsForRendering, resolvePhysicalFaceGraphics } from "../player/optical-model";
-import { buildOutlineSegments, selectedOutlineShapes } from "../player/gpu/webgl2-player-renderer";
+import { buildOutlineSegments, faceMaskTextureSize, opticalOccluderShapes, opticalTargetMaskBounds, opticalTargetMaskMode, opticalTargetShape, selectedOutlineShapes, targetMaskTextureSize } from "../player/gpu/webgl2-player-renderer";
 import { resolveChannelOutlineContours, sweptChannelOutlineContours } from "./rendering/channel-swept-outline";
-import { generateDesignerFabricationExport } from "./fabrication/designer-fabrication-export";
-import { designerLayerForSelection, designerSelectionForClipTarget } from "./types";
-import { clipIdForSelectedTargets, designerClipTargetIdsForSelection } from "./designer-animation-selection";
+import { generateDesignerFabricationExport, sha256Hex } from "./fabrication/designer-fabrication-export";
+import { designerAdditiveSelectionRequested, designerLayerForSelection, designerSelectionForClipTarget, routeMatchesSurfaceView } from "./types";
+import { clipIdForSelectedTargets, clipLightSourcesForTarget, clipScopeTargets, clipTargetsForSelection, designerClipTargetIdsForSelection, explicitClipTargetSelectionSettled } from "./designer-animation-selection";
 import {
   channelAllowedBendRadiusMm,
   channelBorderPolylines,
@@ -27,23 +30,49 @@ import {
   channelMinimumBendRadiusMm,
   channelTightBend,
   controllerPortPoint,
+  canSolderRoutes,
+  deleteDesignerRoute,
   designerFilletCornerForHit,
+  designerShapePointCount,
+  designerShapePointLocation,
   detachSolderedRoutePoint,
   distanceToChannelCenter,
+  findJointGroup,
+  findMatchingSolderTerminal,
+  findNearbySolderTerminal,
   nextDesignerItemNumber,
   pickDesignerHit,
   pickAnimationTarget,
+  pickPolygonPointHit,
   pointInPolygon,
   pointInsideDesignerShape,
   primitiveShapeBounds,
   moveControllerWithSolderedCables,
+  movedWorkLine,
   resolveRouteOutputs,
   setChannelNodeType,
   smoothBezierPoints,
-  smoothOpenBezierPoints
+  smoothOpenBezierPoints,
+  shapeInsertIndexAtPoint,
+  worldHitTolerance,
+  updatePolygonPoint,
+  updateWorkLinePoint
 } from "./designer-geometry";
 
 describe("Layers panel organization", () => {
+  it("forwards Ctrl, Command, and Shift row clicks as additive geometry selection", async () => {
+    assert.equal(designerAdditiveSelectionRequested({ shiftKey: true, ctrlKey: false, metaKey: false }), true);
+    assert.equal(designerAdditiveSelectionRequested({ shiftKey: false, ctrlKey: true, metaKey: false }), true);
+    assert.equal(designerAdditiveSelectionRequested({ shiftKey: false, ctrlKey: false, metaKey: true }), true);
+    assert.equal(designerAdditiveSelectionRequested({ shiftKey: false, ctrlKey: false, metaKey: false }), false);
+
+    const source = await readFile("components/lighting/designer/designer-ui.tsx", "utf8");
+    for (const type of ["build_area", "zone", "face_graphic", "projection", "derived_geometry"]) {
+      assert.match(source, new RegExp(`onSelect\\(\\{ type: "${type}"[\\s\\S]{0,120}designerAdditiveSelectionRequested\\(event\\)`));
+      assert.ok(source.includes("selectedGeometryKeys.includes(`" + type + ":${"));
+    }
+  });
+
   it("keeps the natural category order and nests electrical objects under Hardware", async () => {
     const source = await readFile("components/lighting/designer/designer-ui.tsx", "utf8");
 
@@ -56,9 +85,9 @@ describe("Layers panel organization", () => {
     const faceGraphicStart = source.indexOf('label="Face Graphic"', hardwareStart);
     const hardwareSection = source.slice(hardwareStart, faceGraphicStart);
     assert.ok(hardwareStart >= 0 && faceGraphicStart > hardwareStart);
-    assert.match(hardwareSection, /label="Strings"\s+order=\{1\}/);
-    assert.match(hardwareSection, /label="Data cables"\s+order=\{2\}/);
-    assert.match(hardwareSection, /label="Controller"\s+order=\{3\}/);
+    assert.match(hardwareSection, /label="Strings"[\s\S]{0,80}icon=\{Lightbulb\}[\s\S]{0,80}order=\{1\}/);
+    assert.match(hardwareSection, /label="Data cables"[\s\S]{0,80}icon=\{Cable\}[\s\S]{0,80}order=\{2\}/);
+    assert.match(hardwareSection, /label="Controller"[\s\S]{0,80}icon=\{Cpu\}[\s\S]{0,80}order=\{3\}/);
   });
 
   it("preserves the canvas layer mapping used by panel and canvas selection", () => {
@@ -77,6 +106,380 @@ describe("Layers panel organization", () => {
     assert.match(workspaceSource, /function patchDesignerLayers\([\s\S]*?layers\.forEach\([\s\S]*?updateDesigner\(/);
     assert.match(rendererSource, /if \(designer\.layers\.strings\.visible && designer\.layers\.lightSources\.visible\)/);
     assert.doesNotMatch(panelSource, /onPatchLayer\("strings", patch\);\s*onPatchLayer\("hardware", patch\)/);
+  });
+});
+
+describe("New partitura document", () => {
+  it("starts with only the hardware controller while preserving the demo fixture", () => {
+    const document = createNewPartituraDocument("new_project");
+    const normalized = normalizeDefaultSignLayout(JSON.parse(JSON.stringify(document)));
+    const designer = normalized.designer;
+
+    assert.equal(normalized.projectId, "new_project");
+    assert.equal(normalized.scenes.length, 1);
+    assert.deepEqual(normalized.scenes[0].clips, []);
+    assert.equal(designer.controller.name, "Controller");
+    assert.equal(designer.controller.dataOutputs, 3);
+    assert.deepEqual(designer.artwork, []);
+    assert.equal(designer.workLinesVisible, true);
+    assert.deepEqual(designer.workLines, []);
+    assert.deepEqual(designer.projections, []);
+    assert.deepEqual(designer.derivedGeometries, []);
+    assert.deepEqual(designer.texts, []);
+    assert.deepEqual(designer.buildAreas, []);
+    assert.deepEqual(designer.zones, []);
+    assert.deepEqual(designer.faceGraphics, []);
+    assert.deepEqual(designer.groups, []);
+    assert.deepEqual(designer.channels, []);
+    assert.deepEqual(designer.lightSources, []);
+    assert.deepEqual(designer.routes, []);
+    assert.deepEqual(designer.geometries, []);
+
+    const demo = createDefaultPartituraDocument("demo_project");
+    assert.ok(demo.scenes.some((scene) => scene.clips.length > 0));
+    assert.ok(demo.designer && demo.designer.buildAreas.length > 0);
+    assert.ok(demo.designer && demo.designer.zones.length > 0);
+    assert.ok(demo.designer && demo.designer.routes.length > 0);
+  });
+});
+
+describe("Electrical route deletion", () => {
+  it("deletes the final route and removes its light-source assignments", () => {
+    const document = createNewPartituraDocument("delete_last_route");
+    const route = { id: "route_only", name: "Only LED string", kind: "led_string" as const, points: [{ x: 1, y: 1 }, { x: 2, y: 2 }] };
+    document.designer.routes = [route];
+    document.designer.lightSources = [{
+      ...createDefaultOpticalTreatment("zone", "zone_1"),
+      id: "source_1",
+      name: "Source 1",
+      stringIds: [route.id]
+    }];
+
+    const result = deleteDesignerRoute(document.designer, route.id);
+
+    assert.deepEqual(result.routes, []);
+    assert.deepEqual(result.lightSources[0].stringIds, []);
+  });
+});
+
+describe("Designer wiring surface display", () => {
+  it("persists front/rear classification without changing electrical compilation", () => {
+    const document = createDefaultPartituraDocument();
+    if (!document.designer) assert.fail("default designer missing");
+    const before = designerCompileSignature(document.designer);
+    const changed = canonicalizeDesignerGeometry({
+      ...document.designer,
+      routes: document.designer.routes.map((route, index) => ({
+        ...route,
+        designSurface: index % 2 ? "front" as const : "rear" as const,
+        visible: false
+      }))
+    });
+    assert.equal(designerCompileSignature(changed), before);
+    assert.equal(changed.routes[1]?.designSurface, "front");
+    assert.equal(routeMatchesSurfaceView("front", "front"), true);
+    assert.equal(routeMatchesSurfaceView("front", "rear"), false);
+    assert.equal(routeMatchesSurfaceView(undefined, "rear"), true);
+    assert.equal(routeMatchesSurfaceView("front", "both"), true);
+  });
+
+  it("keeps the shared surface filter inside Design and applies it to strings and cables", async () => {
+    const [workspaceSource, layersSource, canvasSource] = await Promise.all([
+      readFile("components/lighting/partitura-workspace.tsx", "utf8"),
+      readFile("components/lighting/designer/designer-ui.tsx", "utf8"),
+      readFile("components/lighting/designer/designer-paper-canvas.tsx", "utf8")
+    ]);
+    assert.match(workspaceSource, /routeSurfaceView/);
+    assert.match(workspaceSource, /<option value="rear">Rear<\/option>[\s\S]*?<option value="front">Front<\/option>/);
+    assert.match(layersSource, /Wiring surface visibility/);
+    assert.match(layersSource, /route\.kind === "data_cable" && routeMatchesSurfaceView/);
+    assert.match(layersSource, /route\.kind === "led_string" && routeMatchesSurfaceView/);
+    assert.match(canvasSource, /displayedDesigner[\s\S]*?drawPaperDesigner/);
+    assert.match(canvasSource, /findNearbySolderTerminal\(displayedRoutes/);
+  });
+
+  it("keeps terminals on opposite physical surfaces independent", () => {
+    const rearOutput = {
+      id: "rear_output",
+      name: "Rear output",
+      kind: "led_string" as const,
+      designSurface: "rear" as const,
+      points: [{ x: 0, y: 0 }, { x: 10, y: 0, joint: true }]
+    };
+    const frontInput = {
+      id: "front_input",
+      name: "Front input",
+      kind: "led_string" as const,
+      designSurface: "front" as const,
+      points: [{ x: 10, y: 0, joint: true }, { x: 20, y: 0 }]
+    };
+
+    assert.equal(findNearbySolderTerminal([rearOutput, frontInput], rearOutput.id, 1, { x: 10, y: 0 }, 1), null);
+    assert.equal(findMatchingSolderTerminal([rearOutput, frontInput], rearOutput.id, 1, 2), null);
+    assert.deepEqual(findJointGroup([rearOutput, frontInput], rearOutput.id, 1, 2), [{ routeId: rearOutput.id, pointIndex: 1 }]);
+
+    const rearInput = { ...frontInput, id: "rear_input", designSurface: "rear" as const };
+    assert.deepEqual(findMatchingSolderTerminal([rearOutput, rearInput], rearOutput.id, 1, 2), { routeId: rearInput.id, pointIndex: 0 });
+  });
+});
+
+describe("terminal solder capture", () => {
+  it("keeps magnetic assistance inside the terminal marker", () => {
+    assert.equal(TERMINAL_SOLDER_CAPTURE_RADIUS_PX, 5);
+  });
+
+  it("keeps a click on a terminal as selection instead of treating it as a drag", async () => {
+    const canvasSource = await readFile("components/lighting/designer/designer-paper-canvas.tsx", "utf8");
+    assert.equal(POINTER_DRAG_THRESHOLD_PX, 3);
+    assert.match(canvasSource, /const routePointWasDragged =/);
+    assert.match(canvasSource, /if \(routePointWasDragged && endedRoutePointDrag\) onRoutePointDragEnd/);
+  });
+
+  it("requires opposite green/red polarities without restricting route kinds", () => {
+    const cable = { id: "cable", name: "Cable", kind: "data_cable" as const, points: [{ x: 0, y: 0 }, { x: 10, y: 0 }] };
+    const cableTwo = { id: "cable_two", name: "Cable two", kind: "data_cable" as const, points: [{ x: 10, y: 0 }, { x: 20, y: 0 }] };
+    const string = { id: "string", name: "String", kind: "led_string" as const, points: [{ x: 10, y: 0 }, { x: 20, y: 0 }] };
+    const stringTwo = { id: "string_two", name: "String two", kind: "led_string" as const, points: [{ x: 20, y: 0 }, { x: 30, y: 0 }] };
+
+    assert.equal(canSolderRoutes(cable, 1, cableTwo, 0, 0.1), true);
+    assert.equal(canSolderRoutes(cable, 1, string, 0, 0.1), true);
+    assert.equal(canSolderRoutes(string, 1, stringTwo, 0, 0.1), true);
+    assert.equal(canSolderRoutes(cableTwo, 0, string, 0, 0.1), false);
+    assert.equal(canSolderRoutes(cableTwo, 1, string, 1, 0.1), false);
+  });
+
+  it("does not treat separated terminals in the same large grid cell as coincident", () => {
+    const output = { id: "output", name: "Output", kind: "led_string" as const, points: [{ x: 20, y: 20 }, { x: 28.6, y: 24 }] };
+    const input = { id: "input", name: "Input", kind: "led_string" as const, points: [{ x: 29.4, y: 24 }, { x: 36, y: 24 }] };
+
+    assert.equal(canSolderRoutes(output, 1, input, 0, 2), false);
+  });
+
+  it("does not run a second proximity capture after pointer release", async () => {
+    const workspaceSource = await readFile("components/lighting/partitura-workspace.tsx", "utf8");
+    const autoSolderStart = workspaceSource.indexOf("function autoSolderRoutePoint");
+    const autoSolderEnd = workspaceSource.indexOf("function moveSolderedTerminals", autoSolderStart);
+    const autoSolderSource = workspaceSource.slice(autoSolderStart, autoSolderEnd);
+
+    assert.doesNotMatch(autoSolderSource, /findNearby(?:ControllerPort|SolderTerminal)/);
+    assert.match(autoSolderSource, /if \(!allowSolder\)/);
+    assert.match(autoSolderSource, /findMatchingControllerPort/);
+    assert.match(autoSolderSource, /findMatchingSolderTerminal/);
+  });
+});
+
+describe("Artwork intrinsic size", () => {
+  const closeTo = (actual: number, expected: number) => assert.ok(Math.abs(actual - expected) < 0.001, `${actual} != ${expected}`);
+
+  it("preserves physical SVG dimensions at 1:1 scale", () => {
+    const bytes = new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg" width="550mm" height="300mm" viewBox="0 0 550 300"/>');
+    const size = inspectArtworkIntrinsicSize(bytes, "image/svg+xml");
+    assert.deepEqual(size, { widthCm: 55, heightCm: 30, basis: "physical-units" });
+  });
+
+  it("uses embedded PNG pixel density when present", () => {
+    const bytes = new Uint8Array(66);
+    bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const view = new DataView(bytes.buffer);
+    view.setUint32(8, 13);
+    bytes.set(new TextEncoder().encode("IHDR"), 12);
+    view.setUint32(16, 2079);
+    view.setUint32(20, 1134);
+    view.setUint32(33, 9);
+    bytes.set(new TextEncoder().encode("pHYs"), 37);
+    view.setUint32(41, 3780);
+    view.setUint32(45, 3780);
+    bytes[49] = 1;
+    const size = inspectArtworkIntrinsicSize(bytes, "image/png");
+    closeTo(size.widthCm, 55);
+    closeTo(size.heightCm, 30);
+    assert.equal(size.basis, "embedded-density");
+  });
+
+  it("uses the explicit 96 dpi fallback for raster files without physical density", () => {
+    const bytes = new Uint8Array(30);
+    bytes.set(new TextEncoder().encode("RIFF"), 0);
+    bytes.set(new TextEncoder().encode("WEBP"), 8);
+    bytes.set(new TextEncoder().encode("VP8X"), 12);
+    const width = 960 - 1;
+    const height = 480 - 1;
+    bytes.set([width & 0xff, (width >> 8) & 0xff, (width >> 16) & 0xff], 24);
+    bytes.set([height & 0xff, (height >> 8) & 0xff, (height >> 16) & 0xff], 27);
+    const size = inspectArtworkIntrinsicSize(bytes, "image/webp");
+    closeTo(size.widthCm, 25.4);
+    closeTo(size.heightCm, 12.7);
+    assert.equal(size.basis, "css-pixels-96dpi");
+  });
+
+  it("reads JPEG and BMP embedded density without changing their native scale", () => {
+    const jpeg = new Uint8Array(41);
+    jpeg.set([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10]);
+    jpeg.set(new TextEncoder().encode("JFIF\0"), 6);
+    jpeg.set([0x01, 0x01, 0x01, 0x00, 0x64, 0x00, 0x64], 11);
+    jpeg.set([0xff, 0xc0, 0x00, 0x11, 0x08, 0x01, 0x2c, 0x02, 0x26], 20);
+    jpeg.set([0xff, 0xd9], 39);
+    const jpegSize = inspectArtworkIntrinsicSize(jpeg, "image/jpeg");
+    closeTo(jpegSize.widthCm, 13.97);
+    closeTo(jpegSize.heightCm, 7.62);
+    assert.equal(jpegSize.basis, "embedded-density");
+
+    const bmp = new Uint8Array(54);
+    const bmpView = new DataView(bmp.buffer);
+    bmp.set(new TextEncoder().encode("BM"));
+    bmpView.setUint32(14, 40, true);
+    bmpView.setInt32(18, 550, true);
+    bmpView.setInt32(22, 300, true);
+    bmpView.setInt32(38, 1000, true);
+    bmpView.setInt32(42, 1000, true);
+    const bmpSize = inspectArtworkIntrinsicSize(bmp, "image/bmp");
+    assert.deepEqual(bmpSize, { widthCm: 55, heightCm: 30, basis: "embedded-density" });
+  });
+});
+
+describe("SVG artwork path import", () => {
+  it("maps SVG curves and compound holes into the displayed object-contain rectangle", () => {
+    const imported = placeSvgPathCandidates([{
+      name: "letter-a",
+      fillRule: "nonzero",
+      contours: [
+        {
+          closed: true,
+          segments: [
+            { point: { x: 0, y: 0 }, handleOut: { x: 55, y: 0 } },
+            { point: { x: 550, y: 0 }, handleIn: { x: -55, y: 0 } },
+            { point: { x: 550, y: 300 } },
+            { point: { x: 0, y: 300 } }
+          ]
+        },
+        {
+          closed: true,
+          segments: [
+            { point: { x: 200, y: 100 } },
+            { point: { x: 350, y: 100 } },
+            { point: { x: 350, y: 200 } },
+            { point: { x: 200, y: 200 } }
+          ]
+        }
+      ]
+    }], { x: 0, y: 0, width: 550, height: 300 }, {
+      artwork: { x: 22, y: 12, width: 90, height: 30 },
+      intrinsicWidthCm: 55,
+      intrinsicHeightCm: 30
+    });
+
+    assert.equal(imported.skippedOpenPaths, 0);
+    assert.equal(imported.drafts.length, 1);
+    const zone = imported.drafts[0];
+    assert.equal(zone.suggestedName, "letter-a");
+    assert.equal(zone.x, 39.5);
+    assert.equal(zone.y, 12);
+    assert.equal(zone.fillRule, "evenodd");
+    assert.equal(zone.contours?.length, 2);
+    assert.deepEqual(zone.points?.[0], { x: 39.5, y: 12, handleOut: { x: 5.5, y: 0 }, nodeType: "smooth" });
+    assert.deepEqual(zone.points?.[1], { x: 94.5, y: 12, handleIn: { x: -5.5, y: 0 }, nodeType: "smooth" });
+  });
+
+  it("skips open SVG paths and exposes one contextual import command", async () => {
+    const imported = placeSvgPathCandidates([{
+      fillRule: "nonzero",
+      contours: [{ closed: false, segments: [{ point: { x: 0, y: 0 } }, { point: { x: 10, y: 10 } }] }]
+    }], { x: 0, y: 0, width: 10, height: 10 }, {
+      artwork: { x: 0, y: 0, width: 10, height: 10 },
+      intrinsicWidthCm: 10,
+      intrinsicHeightCm: 10
+    });
+    const workspaceSource = await readFile("components/lighting/partitura-workspace.tsx", "utf8");
+    const assetRouteSource = await readFile("app/api/lighting/projects/[id]/assets/[assetId]/route.ts", "utf8");
+    const svgImportSource = await readFile("lib/lighting/artwork-svg-zones.ts", "utf8");
+    const paperCanvasSource = await readFile("components/lighting/designer/designer-paper-canvas.tsx", "utf8");
+
+    assert.equal(imported.drafts.length, 0);
+    assert.equal(imported.skippedOpenPaths, 1);
+    assert.equal(workspaceSource.match(/createZonesFromArtworkSvg/g)?.length, 2);
+    assert.match(workspaceSource, /"Create Zones"/);
+    assert.doesNotMatch(workspaceSource, /entry\.id === artwork\.id \? \{ \.\.\.entry, visible: false \}/);
+    assert.doesNotMatch(workspaceSource, /zones: \{ \.\.\.latestDesigner\.layers\.zones, visible: true \}/);
+    assert.doesNotMatch(workspaceSource, /updateLiveDocument[\s\S]{0,240}setActiveLayer\("zones"\)/);
+    assert.match(assetRouteSource, /inspection === "svg-source"/);
+    assert.match(svgImportSource, /scope\.project\.clear\(\);[\s\S]{0,320}paper\.activate\(\)/);
+    assert.match(paperCanvasSource, /loadedPaper\.activate\(\);[\s\S]{0,120}setPaperScope\(loadedPaper\)/);
+  });
+
+  it("splits one compound lettering path into selectable regions while retaining counters as holes", () => {
+    const rectangle = (x: number, y: number, width: number, height: number) => ({
+      closed: true,
+      segments: [
+        { point: { x, y } },
+        { point: { x: x + width, y } },
+        { point: { x: x + width, y: y + height } },
+        { point: { x, y: y + height } }
+      ]
+    });
+    const letterBodies = Array.from({ length: 11 }, (_, index) => rectangle(index * 20, 0, 12, 20));
+    const imported = placeSvgPathCandidates([{
+      name: "outlined-word",
+      fillRule: "nonzero",
+      contours: [...letterBodies, rectangle(3, 5, 4, 8), rectangle(23, 5, 4, 8)]
+    }], { x: 0, y: 0, width: 220, height: 20 }, {
+      artwork: { x: 0, y: 0, width: 110, height: 10 },
+      intrinsicWidthCm: 110,
+      intrinsicHeightCm: 10
+    });
+
+    assert.equal(imported.drafts.length, 11);
+    assert.equal(imported.drafts[0].contours?.length, 2);
+    assert.equal(imported.drafts[1].contours?.length, 2);
+    assert.equal(imported.drafts[2].contours, undefined);
+  });
+});
+
+describe("Generator workspace tabs", () => {
+  it("exposes only Overview while keeping registry-based tab state", async () => {
+    const source = await readFile("components/lighting/partitura-workspace.tsx", "utf8");
+    const tabsStart = source.indexOf("const tabs = [");
+    const tabsEnd = source.indexOf("];", tabsStart);
+    const tabRegistry = source.slice(tabsStart, tabsEnd);
+
+    assert.ok(tabsStart >= 0 && tabsEnd > tabsStart);
+    assert.match(tabRegistry, /id: "overview", label: "Overview"/);
+    assert.doesNotMatch(tabRegistry, /label: "Scenes"|label: "Simulator"/);
+    assert.match(source, /tabs\.some\(\(tab\) => tab\.id === requestedTab\)/);
+    assert.doesNotMatch(source, /<ScenesTab\s/);
+    assert.doesNotMatch(source, /<SimulatorTab\s/);
+  });
+});
+
+describe("Designer navigation and tenant-scoped project filtering", () => {
+  it("keeps Designer as the single menu entry and redirects legacy Generator routes", async () => {
+    const [menuSource, generatorPage, generatorDetailPage] = await Promise.all([
+      readFile("lib/api.ts", "utf8"),
+      readFile("app/partituras/generator/page.tsx", "utf8"),
+      readFile("app/partituras/generator/[id]/page.tsx", "utf8")
+    ]);
+
+    assert.match(menuSource, /label: "Designer"/);
+    assert.doesNotMatch(menuSource, /label: "Partitura Generator"/);
+    assert.match(menuSource, /item\.href !== "\/partituras\/generator"/);
+    assert.match(generatorPage, /redirect\("\/partituras\/designer"\)/);
+    assert.match(generatorDetailPage, /redirect\(`\/partituras\/designer\/\$\{encodeURIComponent\(id\)\}`\)/);
+  });
+
+  it("derives catalog tenant scope from the session and filters Designer records by projectId", async () => {
+    const [projectsRoute, partiturasRoute, projectsServer, partiturasServer, designerSource] = await Promise.all([
+      readFile("app/api/lighting/projects/route.ts", "utf8"),
+      readFile("app/api/lighting/partituras/route.ts", "utf8"),
+      readFile("lib/server/projects.ts", "utf8"),
+      readFile("lib/server/partituras.ts", "utf8"),
+      readFile("components/lighting/partitura-designer-workbench.tsx", "utf8")
+    ]);
+
+    assert.match(projectsRoute, /listProjects\(menu\.tenant\.client_id\)/);
+    assert.match(partiturasRoute, /listPartituras\(menu\.tenant\.client_id\)/);
+    assert.match(projectsServer, /client\.id::text = \$1 or client\.client_key = \$1/);
+    assert.match(partiturasServer, /c\.id::text = \$1 or c\.client_key = \$1/);
+    assert.match(designerSource, /key: "projectId"/);
+    assert.match(designerSource, /allLabel: "All projects"/);
+    assert.doesNotMatch(designerSource, /client_id.*searchParams|searchParams.*client_id/);
   });
 });
 
@@ -102,6 +505,18 @@ describe("Designer snap-to-grid control", () => {
     assert.match(source, /aria-label="Snap to grid" aria-pressed=\{snapToGrid\}/);
     assert.match(source, /aria-label="Close Setup"/);
     assert.match(source, /setupDetailsRef\.current\.open = false/);
+  });
+
+  it("keeps global alignment marks configurable in Setup and movable across layers", async () => {
+    const workspaceSource = await readFile("components/lighting/partitura-workspace.tsx", "utf8");
+    const canvasSource = await readFile("components/lighting/designer/designer-paper-canvas.tsx", "utf8");
+    const rendererSource = await readFile("components/lighting/designer/designer-paper-renderer.ts", "utf8");
+
+    assert.match(workspaceSource, /Alignment \/ calibration/);
+    assert.match(workspaceSource, /Measured spacing/);
+    assert.match(canvasSource, /type: "alignment-guide-move"/);
+    assert.match(canvasSource, /designer\.alignmentMarks\.enabled && !designer\.alignmentMarks\.locked && pointNearAlignmentMarks/);
+    assert.match(rendererSource, /drawPaperAlignmentMarks\(designer/);
   });
 });
 
@@ -184,6 +599,19 @@ describe("Animate WebGL outlines", () => {
     assert.match(outlineGate, /this\.drawOutlineBatch\(this\.channelOutlines/);
     assert.match(outlineGate, /if \(this\.selectedOutline\) \{/);
     assert.match(outlineGate, /this\.drawOutlineBatch\(this\.selectedOutline/);
+  });
+
+  it("can bypass the Face Graphic mask only for the interactive preview", async () => {
+    const [workspace, surface, renderer] = await Promise.all([
+      readFile("components/lighting/partitura-workspace.tsx", "utf8"),
+      readFile("components/lighting/player/player-surface.tsx", "utf8"),
+      readFile("components/lighting/player/gpu/webgl2-player-renderer.ts", "utf8")
+    ]);
+
+    assert.match(workspace, /<span>Face mask<\/span>/);
+    assert.match(workspace, /faceMaskEnabled=\{animationFaceMaskEnabled\}/);
+    assert.match(surface, /renderer\.updateFaceMaskEnabled\(faceMaskEnabled\)/);
+    assert.match(renderer, /useFaceMask && this\.hasFaceMask && this\.faceMaskEnabled/);
   });
 
   it("builds selection feedback for exactly one clicked zone without exposing nodes", () => {
@@ -276,6 +704,107 @@ describe("compound paths and boolean operations", () => {
   });
 });
 
+describe("interactive path trim", () => {
+  it("removes the hovered self-crossing loop and stores a clean closed contour", () => {
+    paper.setup(new paper.Size(100, 100));
+    const crossing = {
+      id: "crossing",
+      kind: "path" as const,
+      x: 0,
+      y: 0,
+      width: 20,
+      height: 20,
+      points: [{ x: 0, y: 0 }, { x: 20, y: 20 }, { x: 0, y: 20 }, { x: 20, y: 0 }],
+      pathMode: "straight" as const,
+      closed: true,
+      fillRule: "nonzero" as const
+    };
+    const trimmed = trimDesignerPathAtPoint(paper, crossing, { x: 10, y: 18 });
+
+    assert.ok(trimmed);
+    assert.equal(trimmed.intersections.length, 1);
+    assert.equal(trimmed.geometry.closed, true);
+    assert.deepEqual(validateDesignerGeometryTopology(trimmed.geometry), []);
+    assert.ok(trimmed.removed.points.length >= 3);
+    assert.ok(trimmed.geometry.points?.every((point) => Number.isFinite(point.x) && Number.isFinite(point.y)));
+  });
+
+  it("maps the red removal preview to the branch under the pointer", () => {
+    paper.setup(new paper.Size(100, 100));
+    const crossing = {
+      id: "crossing-branch-choice",
+      kind: "path" as const,
+      x: 0,
+      y: 0,
+      width: 20,
+      height: 20,
+      points: [{ x: 0, y: 0 }, { x: 20, y: 20 }, { x: 0, y: 20 }, { x: 20, y: 0 }],
+      pathMode: "straight" as const,
+      closed: true,
+      fillRule: "nonzero" as const
+    };
+    const top = trimDesignerPathAtPoint(paper, crossing, { x: 10, y: 18 });
+    const bottom = trimDesignerPathAtPoint(paper, crossing, { x: 10, y: 2 });
+
+    assert.ok(top && bottom);
+    assert.ok(top.removed.points.some((point) => point.y === 20));
+    assert.ok(top.geometry.points?.some((point) => point.y === 0));
+    assert.ok(bottom.removed.points.some((point) => point.y === 0));
+    assert.ok(bottom.geometry.points?.some((point) => point.y === 20));
+  });
+
+  it("trims one selected span while leaving other crossings for subsequent passes", () => {
+    paper.setup(new paper.Size(120, 120));
+    const crossingChain = {
+      id: "multi-crossing",
+      kind: "path" as const,
+      x: 0,
+      y: -2,
+      width: 10,
+      height: 6,
+      points: [
+        { x: 0, y: -2 },
+        { x: 0, y: 0 },
+        { x: 4, y: 4 },
+        { x: 0, y: 4 },
+        { x: 4, y: 0 },
+        { x: 6, y: 0 },
+        { x: 10, y: 4 },
+        { x: 6, y: 4 },
+        { x: 10, y: 0 },
+        { x: 10, y: -2 }
+      ],
+      pathMode: "straight" as const,
+      closed: true,
+      fillRule: "nonzero" as const
+    };
+    const trimmed = trimDesignerPathAtPoint(paper, crossingChain, { x: 2, y: 3.5 });
+
+    assert.ok(trimmed);
+    assert.equal(trimmed.intersections.length, 2);
+    assert.ok(trimmed.removed.points.some((point) => point.x === 0 && point.y === 4));
+    const secondTrim = trimDesignerPathAtPoint(paper, trimmed.geometry, { x: 8, y: 3.5 });
+    assert.ok(secondTrim);
+  });
+
+  it("keeps every resolved compound contour node-addressable after trim", () => {
+    const shape = {
+      x: 0, y: 0, width: 10, height: 10,
+      points: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }],
+      contours: [
+        { points: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }], pathMode: "straight" as const, closed: true as const },
+        { points: [{ x: 3, y: 3 }, { x: 7, y: 3 }, { x: 5, y: 7 }], pathMode: "straight" as const, closed: true as const }
+      ]
+    };
+    assert.equal(designerShapePointCount(shape), 7);
+    assert.deepEqual(designerShapePointLocation(shape, 4)?.point, { x: 3, y: 3 });
+
+    const updated = updatePolygonPoint(shape, 4, { x: 4, y: 4 }, 0);
+    assert.deepEqual(updated.contours[1].points[0], { x: 4, y: 4 });
+    assert.deepEqual(updated.points[0], { x: 0, y: 0 });
+  });
+});
+
 describe("parametric offset and fillet operations", () => {
   const rectangle = { id: "rectangle", kind: "rect" as const, x: 0, y: 0, width: 10, height: 8 };
 
@@ -285,6 +814,102 @@ describe("parametric offset and fillet operations", () => {
     assert.equal(outward.issue, null);
     assert.deepEqual([outward.geometry?.x, outward.geometry?.y, outward.geometry?.width, outward.geometry?.height], [-1, -1, 12, 10]);
     assert.deepEqual([inward.geometry?.x, inward.geometry?.y, inward.geometry?.width, inward.geometry?.height], [1, 1, 8, 6]);
+  });
+
+  it("keeps the parallel legs of a concave M aligned for outward and inward offsets", () => {
+    const letterM = {
+      id: "letter_m",
+      kind: "path" as const,
+      x: 0,
+      y: 0,
+      width: 10,
+      height: 10,
+      points: [
+        { x: 0, y: 10 }, { x: 0, y: 0 }, { x: 2, y: 0 },
+        { x: 5, y: 5 }, { x: 8, y: 0 }, { x: 10, y: 0 },
+        { x: 10, y: 10 }, { x: 8, y: 10 }, { x: 8, y: 4 },
+        { x: 5, y: 9 }, { x: 2, y: 4 }, { x: 2, y: 10 }
+      ],
+      pathMode: "straight" as const,
+      closed: true
+    };
+
+    const outward = offsetDesignerGeometry(letterM, 2, "miter", 4, "letter_m_outward");
+    const inward = offsetDesignerGeometry(letterM, -2, "miter", 4, "letter_m_inward");
+    const largeRound = offsetDesignerGeometry(letterM, 13, "round", 4, "letter_m_round_13mm");
+    const legXs = (geometry: typeof outward.geometry) => geometry?.points
+      ?.filter((_, index) => [0, 1, 6, 7, 8, 11].includes(index))
+      .map((point) => Math.round(point.x * 10) / 10);
+
+    assert.equal(outward.issue, null);
+    assert.equal(inward.issue, null);
+    assert.equal(largeRound.issue, null);
+    assert.deepEqual(legXs(outward.geometry), [-0.2, -0.2, 10.2, 7.8, 7.8, 2.2]);
+    assert.deepEqual(legXs(inward.geometry), [0.2, 0.2, 9.8, 8.2, 8.2, 1.8]);
+    assert.ok(Math.abs((largeRound.geometry?.x ?? 0) + 1.3) < 1e-9);
+    assert.ok(Math.abs((largeRound.geometry?.width ?? 0) - 12.6) < 1e-9);
+    assert.ok((largeRound.geometry?.points?.length ?? 0) > letterM.points.length);
+    assert.ok(Math.abs((outward.geometry?.points?.[3].x ?? 0) - 5) < 1e-9);
+    assert.ok(Math.abs((inward.geometry?.points?.[3].x ?? 0) - 5) < 1e-9);
+  });
+
+  it("preserves an acute miter without inserting a bevel segment", () => {
+    const acute = {
+      id: "acute",
+      kind: "path" as const,
+      x: -1,
+      y: 0,
+      width: 2,
+      height: 10,
+      points: [{ x: -1, y: 10 }, { x: 0, y: 0 }, { x: 1, y: 10 }],
+      pathMode: "straight" as const,
+      closed: true
+    };
+
+    const result = offsetDesignerGeometry(acute, 2, "miter", 1, "acute_offset");
+
+    assert.equal(result.issue, null);
+    assert.equal(result.geometry?.points?.length, 3);
+    assert.deepEqual(result.warnings, []);
+    assert.ok((result.geometry?.points?.[1].y ?? 0) < -2);
+  });
+
+  it("trims inverted offset loops from a tight Bezier letterform", () => {
+    const tuples: Array<[number, number, number | null, number | null, number | null, number | null]> = [
+      [48.0121, 33.73225, null, null, null, null], [48.0121, 22.63258, null, null, null, null], [51.0975, 22.63258, null, null, null, null],
+      [51.0975, 24.71774, null, null, 0.14838, -0.42346], [51.66611, 23.63113, -0.23069, 0.30094, 0.31693, -0.42044],
+      [52.77536, 22.69565, -0.42257, 0.20321, 0.42257, -0.20321], [54.10833, 22.39083, -0.46607, 0, 0.74572, 0],
+      [56.06583, 23.1266, -0.55929, -0.49051, 0.42728, 0.36938], [56.95595, 24.60897, -0.16614, -0.61886, 0.12326, -0.3516],
+      [57.45472, 23.67318, -0.20926, 0.27226, 0.32314, -0.42044], [58.62923, 22.71667, -0.45986, 0.21723, 0.46607, -0.21723],
+      [60.12066, 22.39083, -0.52822, 0, 0.64629, 0], [61.8358, 22.86383, -0.49714, -0.31533, 0.50336, 0.31533],
+      [63.01962, 24.23026, -0.28585, -0.59563, 0.28586, 0.58862], [63.44841, 26.34298, 0, -0.81986, null, null],
+      [63.44841, 33.73225, null, null, null, null], [60.23252, 33.73225, null, null, null, null], [60.23252, 27.14182, null, null, 0, -0.58161],
+      [59.81305, 25.79641, 0.27964, 0.31533, -0.27343, -0.31533], [58.7504, 25.32341, 0.435, 0, -0.29828, 0],
+      [57.9674, 25.55465, 0.22372, -0.15416, -0.22371, 0.15416], [57.4454, 26.20634, 0.12429, -0.28029, -0.12429, 0.2803],
+      [57.25897, 27.19438, 0, -0.3784, null, null], [57.25897, 33.73225, null, null, null, null], [54.19222, 33.73225, null, null, null, null],
+      [54.19222, 27.09978, null, null, 0, -0.53957], [53.7914, 25.80692, 0.26721, 0.32234, -0.26721, -0.32234],
+      [52.72875, 25.32341, 0.44122, 0, -0.28586, 0], [51.95507, 25.55465, 0.22993, -0.15416, -0.22371, 0.15416],
+      [51.41443, 26.21685, 0.13672, -0.2873, -0.1305, 0.2873], [51.21868, 27.26795, 0, -0.41343, null, null],
+      [51.21868, 33.73225, null, null, null, null]
+    ];
+    const points = tuples.map(([x, y, handleInX, handleInY, handleOutX, handleOutY]) => ({
+      x, y,
+      ...(handleInX !== null && handleInY !== null ? { handleIn: { x: handleInX, y: handleInY } } : {}),
+      ...(handleOutX !== null && handleOutY !== null ? { handleOut: { x: handleOutX, y: handleOutY } } : {})
+    }));
+    const letterform = { id: "projected_m", kind: "path" as const, x: 48.0121, y: 22.39083, width: 15.43631, height: 11.34142, points, pathMode: "bezier" as const, closed: true, fillRule: "nonzero" as const };
+
+    const outward = offsetDesignerGeometry(letterform, 2, "round", 4, "projected_m_outward");
+    const largerOutward = offsetDesignerGeometry(letterform, 13, "round", 4, "projected_m_outward_13mm");
+    const inward = offsetDesignerGeometry(letterform, -2, "round", 4, "projected_m_inward");
+
+    for (const result of [outward, largerOutward, inward]) {
+      assert.equal(result.issue, null);
+      assert.ok(result.geometry);
+      assert.ok(result.warnings.some((warning) => warning.includes("loops were trimmed")));
+      assert.ok((result.geometry?.points?.length ?? Infinity) < 200);
+    }
+    assert.equal(largerOutward.geometry?.contours, undefined);
   });
 
   it("offsets an open path without inventing a closing segment", () => {
@@ -474,6 +1099,11 @@ describe("controlled text and deterministic outlines", () => {
 });
 
 describe("fabrication SVG and DXF export", () => {
+  it("keeps export checksums available when browser Web Crypto is unavailable", async () => {
+    assert.equal(await sha256Hex("abc", null), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    assert.equal(await sha256Hex(new TextEncoder().encode("abc").buffer, null), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+  });
+
   it("emits path-only SVG at explicit 1:1 millimeter scale and groups Face Graphic material", async () => {
     const document = createDefaultPartituraDocument("fabrication_project");
     if (!document.designer) assert.fail("default designer missing");
@@ -490,6 +1120,90 @@ describe("fabrication SVG and DXF export", () => {
     assert.match(result.svg, /<metadata>.*sha256:/);
     assert.doesNotMatch(result.svg, /<(rect|ellipse|text|image|polyline)\b/);
     assert.doesNotMatch(result.svg, /led_string|controller/i);
+  });
+
+  it("splits fabrication into layer files and exports Channels as router centerline toolpaths", async () => {
+    const document = createDefaultPartituraDocument("fabrication_layers");
+    document.designer.buildAreas = [];
+    document.designer.zones = [{ id: "zone_cut", name: "Zone cut", shape: "rect", x: 10, y: 10, width: 20, height: 10, visible: true, locked: false, opacity: 1 }];
+    document.designer.channels = [{
+      id: "channel_route",
+      name: "Channel route",
+      points: [{ x: 2, y: 3 }, { x: 8, y: 7 }, { x: 14, y: 4 }],
+      pathMode: "straight",
+      widthMm: 12,
+      closed: false,
+      cap: "round",
+      visible: true,
+      locked: false,
+      opacity: 1
+    }];
+    document.designer.faceGraphics = [{ id: "face_cut", name: "Face cut", shape: "ellipse", x: 40, y: 5, width: 12, height: 8, passMode: "clear", filterColor: "#FFFFFF", visible: true, locked: false, opacity: 1 }];
+    const designer = canonicalizeDesignerGeometry(document.designer);
+    const result = await generateDesignerFabricationExport({
+      designer,
+      identity: { projectId: document.projectId, partituraId: "1", partituraKey: "layers", partituraName: "Layer files" },
+      sourceDocument: { ...document, designer },
+      options: { includeReference: false, includeZones: true, includeChannels: true, includeFaceGraphic: true },
+      generatedAt: "2026-10-08T12:00:00.000Z"
+    });
+
+    assert.deepEqual(result.files.map((file) => [file.layer, file.fileSuffix]), [
+      ["zones", "zones"],
+      ["channels", "channels-toolpath"],
+      ["faceGraphic", "face-graphic"]
+    ]);
+    const zones = result.files.find((file) => file.layer === "zones")!;
+    const channels = result.files.find((file) => file.layer === "channels")!;
+    const faceGraphic = result.files.find((file) => file.layer === "faceGraphic")!;
+    assert.match(zones.svg, /id="zone_cut"/);
+    assert.doesNotMatch(zones.svg, /channel_route|face_cut/);
+    assert.match(channels.svg, /data-toolpath="router-centerline"/);
+    assert.match(channels.svg, /id="channel_route"[^>]*d="M 20 30 L 80 70 L 140 40"/);
+    assert.doesNotMatch(channels.svg, /id="channel_route"[^>]*d="[^"]* Z"/);
+    assert.match(channels.dxf, /\nLWPOLYLINE\n100\nAcDbEntity\n8\nCHANNEL_TOOLPATH\n100\nAcDbPolyline\n90\n3\n70\n0\n/);
+    assert.match(faceGraphic.svg, /id="face_cut"/);
+    assert.doesNotMatch(faceGraphic.svg, /zone_cut|channel_route/);
+  });
+
+  it("repeats optional calibrated alignment marks on every output file as no-cut geometry", async () => {
+    const document = createDefaultPartituraDocument("fabrication_alignment");
+    document.designer.buildAreas = [];
+    document.designer.zones = [{ id: "zone_cut", name: "Zone cut", shape: "rect", x: 10, y: 10, width: 20, height: 10, visible: true, locked: false, opacity: 1 }];
+    document.designer.channels = [{ id: "channel_cut", name: "Channel cut", points: [{ x: 2, y: 3 }, { x: 8, y: 7 }], pathMode: "straight", widthMm: 6, closed: false, cap: "round", visible: true, locked: false, opacity: 1 }];
+    document.designer.faceGraphics = [{ id: "face_cut", name: "Face cut", shape: "rect", x: 40, y: 5, width: 12, height: 8, passMode: "clear", filterColor: "#FFFFFF", visible: true, locked: false, opacity: 1 }];
+    document.designer.alignmentMarks = { enabled: true, locked: false, originXcm: 1, originYcm: 2, spacingMm: 100 };
+    const result = await generateDesignerFabricationExport({
+      designer: canonicalizeDesignerGeometry(document.designer),
+      identity: { projectId: document.projectId, partituraId: "1", partituraKey: "alignment", partituraName: "Alignment" },
+      sourceDocument: document,
+      options: { includeReference: false, includeZones: true, includeChannels: true, includeFaceGraphic: true, includeAlignmentMarks: true },
+      generatedAt: "2026-10-08T12:00:00.000Z"
+    });
+
+    assert.equal(result.files.length, 3);
+    const guideGroups = result.files.map((file) => file.svg.match(/<g id="ALIGNMENT_GUIDES_NO_CUT"[\s\S]*?<\/g>/)?.[0]);
+    assert.ok(guideGroups.every(Boolean));
+    assert.deepEqual(new Set(guideGroups).size, 1);
+    result.files.forEach((file) => {
+      assert.match(file.svg, /data-purpose="alignment-calibration" data-operation-mode="no-cut" data-spacing-mm="100"/);
+      assert.match(file.svg, /id="alignment_origin_horizontal"[^>]*d="M 5 20 L 15 20"/);
+      assert.match(file.svg, /id="alignment_origin_vertical"[^>]*d="M 10 15 L 10 25"/);
+      assert.match(file.svg, /id="alignment_x_spacing_horizontal"[^>]*d="M 105 20 L 115 20"/);
+      assert.match(file.svg, /id="alignment_y_spacing_vertical"[^>]*d="M 10 115 L 10 125"/);
+      assert.match(file.dxf, /ALIGNMENT_GUIDES_NO_CUT \| spacing=100mm \| remove before machining/);
+      assert.equal((file.dxf.match(/\n8\nALIGNMENT_GUIDES_NO_CUT\n/g) ?? []).length, 6);
+    });
+
+    const withoutMarks = await generateDesignerFabricationExport({
+      designer: document.designer,
+      identity: { projectId: document.projectId, partituraId: "1", partituraKey: "alignment", partituraName: "Alignment" },
+      sourceDocument: document,
+      options: { includeReference: false, includeZones: true, includeChannels: false, includeFaceGraphic: false, includeAlignmentMarks: false },
+      generatedAt: "2026-10-08T12:00:00.000Z"
+    });
+    assert.doesNotMatch(withoutMarks.files[0].svg, /ALIGNMENT_GUIDES_NO_CUT/);
+    assert.doesNotMatch(withoutMarks.files[0].dxf, /ALIGNMENT_GUIDES_NO_CUT/);
   });
 
   it("round-trips a direct native fillet and exports it as a compact SVG curve", async () => {
@@ -607,6 +1321,15 @@ describe("primitive drag creation", () => {
     assert.equal(nextDesignerItemNumber([{ id: "zone_2" }, { id: "zone_8" }, { id: "zone_9" }], "zone_"), 10);
   });
 
+  it("does not reuse a Build Area ID after an earlier area was deleted", async () => {
+    const areas = [{ id: "build_area_3" }, { id: "build_area_2" }];
+    assert.equal(nextDesignerItemNumber(areas, "build_area_"), 4);
+
+    const canvasSource = await readFile("components/lighting/designer/designer-paper-canvas.tsx", "utf8");
+    assert.doesNotMatch(canvasSource, /designer\.buildAreas\.length \+ 1/);
+    assert.equal(canvasSource.match(/nextDesignerItemNumber\(designer\.buildAreas, "build_area_"\)/g)?.length, 2);
+  });
+
   it("normalizes a reverse drag into positive bounds", () => {
     assert.deepEqual(
       primitiveShapeBounds({ x: 12, y: 9 }, { x: 4, y: 3 }, 1),
@@ -629,6 +1352,47 @@ describe("primitive drag creation", () => {
   });
 });
 
+describe("shared node authoring context", () => {
+  it("preserves the chosen node type when initializing Bezier handles", () => {
+    const points = smoothBezierPoints([
+      { x: 0, y: 0, nodeType: "corner" },
+      { x: 10, y: 0, nodeType: "smooth" },
+      { x: 10, y: 10, nodeType: "straight" },
+      { x: 0, y: 10, nodeType: "symmetric" }
+    ]);
+
+    assert.equal(points[0].nodeType, "corner");
+    assert.equal(points[0].handleIn, undefined);
+    assert.equal(points[1].nodeType, "smooth");
+    assert.ok(points[1].handleIn && points[1].handleOut);
+    assert.equal(points[2].nodeType, "straight");
+    assert.equal(points[2].handleOut, undefined);
+    assert.equal(points[3].nodeType, "symmetric");
+    assert.ok(points[3].handleIn && points[3].handleOut);
+  });
+
+  it("uses one contextual picker and one canvas node type across geometric layers", async () => {
+    const workspaceSource = await readFile("components/lighting/partitura-workspace.tsx", "utf8");
+    const canvasSource = await readFile("components/lighting/designer/designer-paper-canvas.tsx", "utf8");
+
+    assert.match(workspaceSource, /nodeCreationToolActive[\s\S]*?<ToolbarField label="New node">[\s\S]*?<NodeTypePicker value=\{nodeCreationType\}/);
+    assert.match(workspaceSource, /nodeCreationType=\{nodeCreationType\}/);
+    assert.equal(canvasSource.match(/nodeType: nodeCreationType/g)?.length, 1);
+    assert.match(canvasSource, /target === "build_area"[\s\S]*target === "zone" \|\| target === "channel"[\s\S]*target === "face_graphic"/);
+  });
+});
+
+describe("Designer zone layout visibility", () => {
+  it("keeps persistent Zone contours independent from selection", async () => {
+    const canvasSource = await readFile("components/lighting/designer/designer-paper-canvas.tsx", "utf8");
+    const rendererSource = await readFile("components/lighting/designer/designer-paper-renderer.ts", "utf8");
+
+    assert.match(canvasSource, /<img src=\{url\}[^>]*object-contain/);
+    assert.match(rendererSource, /filter\(\(zone\) => zone\.visible !== false\)/);
+    assert.match(rendererSource, /strokeColor: options\.selected \? "#38bdf8" : "#2563eb"/);
+  });
+});
+
 describe("canonical designer geometry schema", () => {
   it("migrates a legacy document without losing editable shapes", () => {
     const legacy = createDefaultPartituraDocument();
@@ -636,6 +1400,7 @@ describe("canonical designer geometry schema", () => {
     delete legacy.designer.designerSchemaVersion;
     delete legacy.designer.geometries;
     delete (legacy.designer as Partial<typeof legacy.designer>).filletRadiusMm;
+    delete (legacy.designer as Partial<typeof legacy.designer>).alignmentMarks;
     legacy.designer.zones[0].geometryId = undefined;
 
     const normalized = normalizeDefaultSignLayout(legacy).designer;
@@ -647,6 +1412,7 @@ describe("canonical designer geometry schema", () => {
     assert.equal(normalized.fabricationCutterUnit, "mm");
     assert.equal(normalized.filletRadiusMm, 1.5875);
     assert.equal(normalized.channelRouterDiameterMm, 10);
+    assert.deepEqual(normalized.alignmentMarks, { enabled: false, locked: false, originXcm: 2, originYcm: 2, spacingMm: 100 });
   });
 
   it("persists a custom cutter diameter independently from canvas units", () => {
@@ -855,9 +1621,67 @@ describe("Face Graphic authoring", () => {
   it("maps Face Graphic selection to its dedicated layer", () => {
     assert.equal(designerLayerForSelection({ type: "face_graphic", id: "face_graphic_1" }), "faceGraphic");
   });
+
+  it("keeps the black and white vinyl preview transient and scoped to Design", async () => {
+    const [workspaceSource, layersSource, canvasSource, rendererSource] = await Promise.all([
+      readFile("components/lighting/partitura-workspace.tsx", "utf8"),
+      readFile("components/lighting/designer/designer-ui.tsx", "utf8"),
+      readFile("components/lighting/designer/designer-paper-canvas.tsx", "utf8"),
+      readFile("components/lighting/designer/designer-paper-renderer.ts", "utf8")
+    ]);
+    assert.match(workspaceSource, /useState\(false\)[\s\S]{0,120}faceGraphicVinylPreview|faceGraphicVinylPreview[\s\S]{0,120}useState\(false\)/);
+    assert.match(layersSource, /Preview vinyl in black and white/);
+    assert.match(canvasSource, /presentation === "animate"[\s\S]*?drawPaperAnimationMap[\s\S]*?else drawPaperDesigner/);
+    assert.match(rendererSource, /faceGraphicVinylPreview && activeLayer === "faceGraphic"/);
+    assert.match(rendererSource, /element\.passMode === "opaque" \? "#050505" : "#ffffff"/);
+    assert.match(rendererSource, /selectedDerivedGeometryId === element\.id/);
+  });
 });
 
 describe("Face Graphic optical renderer", () => {
+  it("clips Front illumination to its owning zone", async () => {
+    const zone = { id: "zone_front", kind: "zone" as const } as VisualShape;
+    const channel = { id: "channel_front", kind: "channel" as const } as VisualShape;
+    const unrelated = { id: "zone_other", kind: "zone" as const } as VisualShape;
+    const source = { targetType: "zone" as const, targetId: "zone_front" };
+
+    assert.equal(opticalTargetShape([unrelated, channel, zone], source), zone);
+    assert.equal(opticalTargetShape([unrelated, channel], source), null);
+    const boundaryChannel = { ...channel, x: 42.5, y: -0.5, width: 87, height: 41 } as VisualShape;
+    const maskBounds = opticalTargetMaskBounds(boundaryChannel, { widthCm: 130, heightCm: 40 });
+    assert.ok(maskBounds.y < -0.5);
+    assert.ok(maskBounds.y + maskBounds.height > 40.5);
+
+    const rendererSource = await readFile("components/lighting/player/gpu/webgl2-player-renderer.ts", "utf8");
+    assert.equal(opticalTargetMaskMode("front"), 1);
+    assert.match(rendererSource, /maskedTargetAlpha = uTargetMaskMode < -0\.5 \? 1\.0 - targetAlpha : targetAlpha/);
+    assert.match(rendererSource, /targetUv = \(vWorld - uTargetMaskBounds\.xy\) \/ uTargetMaskBounds\.zw/);
+  });
+
+  it("rasterizes cropped Front and Face Graphic masks densely enough for zoomed curves", () => {
+    assert.deepEqual(targetMaskTextureSize({ x: 30, y: 18, width: 3, height: 16 }), { width: 192, height: 1024 });
+    assert.deepEqual(targetMaskTextureSize({ x: 48, y: 22, width: 16, height: 11 }), { width: 1024, height: 704 });
+    assert.deepEqual(faceMaskTextureSize({ bounds: { widthCm: 170, heightCm: 40 } }), { width: 2048, height: 482 });
+  });
+
+  it("keeps Halo and Wall Wash off every zone and channel surface", async () => {
+    assert.equal(opticalTargetMaskMode("halo"), -1);
+    assert.equal(opticalTargetMaskMode("wall_wash"), -1);
+
+    const owner = { id: "zone_owner", kind: "zone" as const } as VisualShape;
+    const neighbor = { id: "zone_neighbor", kind: "zone" as const } as VisualShape;
+    const channel = { id: "channel_neighbor", kind: "channel" as const } as VisualShape;
+    const faceGraphic = { id: "face", kind: "face-graphic" as const } as VisualShape;
+    const source = { mode: "halo" as const, targetType: "zone" as const, targetId: owner.id };
+    assert.deepEqual(opticalOccluderShapes([faceGraphic, neighbor, channel, owner], source), [neighbor, channel, owner]);
+
+    const rendererSource = await readFile("components/lighting/player/gpu/webgl2-player-renderer.ts", "utf8");
+    assert.match(rendererSource, /for \(const occluder of occluders\)/);
+    assert.match(rendererSource, /1\.0 - targetAlpha/);
+    assert.doesNotMatch(rendererSource, /step\(0\.001, targetAlpha\)/);
+    assert.match(rendererSource, /step\(0\.5, abs\(uTargetMaskMode\)\)/);
+  });
+
   it("keeps an unlit Front diffuser black instead of exposing a gray material base", () => {
     assert.deepEqual(frontMaterialOffStyle("silicone"), { color: 0x000000, alpha: 1 });
     assert.deepEqual(frontMaterialOffStyle("milky_white"), { color: 0x000000, alpha: 1 });
@@ -894,16 +1718,20 @@ describe("Face Graphic optical renderer", () => {
     assert.deepEqual(faceGraphicMaskUv({ x: 1200, y: 500 }, { width: 1200, height: 500 }), { x: 1, y: 1 });
   });
 
-  it("resolves live Face Graphic derivations as physical masks independent of editor visibility", () => {
+  it("keeps the black-and-white preview and physical Face Graphic mask visibility consistent", () => {
     const designer = createDefaultPartituraDocument("derived_face_graphic_optics").designer;
     const source = designer.zones[0];
+    designer.faceGraphics = [
+      { id: "visible_mask", name: "Visible", shape: "rect", x: 0, y: 0, width: 10, height: 10, passMode: "clear", filterColor: "#FFFFFF", visible: true, locked: false, opacity: 1 },
+      { id: "hidden_mask", name: "Hidden", shape: "rect", x: 0, y: 0, width: 20, height: 20, passMode: "translucent", filterColor: "#00FF00", visible: false, locked: false, opacity: 1 }
+    ];
     designer.projections = [{ id: "projection", name: "Projection", geometryId: "geometry_projection", sourceGeometryId: source.geometryId!, targetLayer: "faceGraphic", linked: true, visible: false }];
     designer.derivedGeometries = [{ id: "red_offset", name: "Red offset", geometryId: "geometry_red_offset", sourceGeometryId: "geometry_projection", targetLayer: "faceGraphic", operation: "offset", distanceMm: 2, join: "round", miterLimit: 4, passMode: "translucent", filterColor: "#FF0000", visible: false }];
 
     const physical = resolvePhysicalFaceGraphics(designer);
     assert.equal(physical.length, 1);
-    assert.deepEqual(faceGraphicTransmissionAtPoint(physical, { x: source.x + 1, y: source.y + 1 }), { passMode: "translucent", filterColor: "#FF0000" });
-    assert.deepEqual(applyFaceGraphicTransmission({ r: 255, g: 255, b: 255 }, physical[0].passMode, physical[0].filterColor), { r: 255, g: 0, b: 0 });
+    assert.equal(physical[0].id, "visible_mask");
+    assert.deepEqual(faceGraphicTransmissionAtPoint(physical, { x: 1, y: 1 }), { passMode: "clear", filterColor: "#FFFFFF" });
   });
 });
 
@@ -1386,6 +2214,116 @@ describe("timeline clip target selection", () => {
     );
   });
 
+  it("offers separate clip creation targets for Front and Halo on the same zone", () => {
+    const targets = [
+      { id: "full_sign", name: "Full sign" },
+      { id: "source_logo_front", name: "Logo · Front" },
+      { id: "source_logo_halo", name: "Logo · Halo" }
+    ];
+
+    assert.deepEqual(
+      clipTargetsForSelection(targets, ["source_logo_front", "source_logo_halo", "zone_logo"]),
+      [targets[1], targets[2]]
+    );
+  });
+
+  it("shows only the selected clip source calibration for a shared zone", () => {
+    const sources = [
+      { id: "source_logo_front", targetType: "zone" as const, targetId: "zone_logo", mode: "front" },
+      { id: "source_logo_halo", targetType: "zone" as const, targetId: "zone_logo", mode: "halo" }
+    ];
+
+    assert.deepEqual(
+      clipLightSourcesForTarget(sources, { type: "zone", id: "zone_logo" }, "source_logo_halo"),
+      [sources[1]]
+    );
+    assert.deepEqual(
+      clipLightSourcesForTarget(sources, { type: "zone", id: "zone_logo" }, null),
+      sources
+    );
+  });
+
+  it("offers only same-mode local and global scope targets", () => {
+    const sources = [
+      { id: "source_logo_front", name: "Logo · Front", mode: "front" as const },
+      { id: "source_text_front", name: "Text · Front", mode: "front" as const },
+      { id: "source_logo_halo", name: "Logo · Halo", mode: "halo" as const }
+    ];
+
+    assert.deepEqual(clipScopeTargets(sources, "source_logo_front"), [
+      { id: "source_logo_front", name: "Logo · Front" },
+      { id: "source_text_front", name: "Text · Front" },
+      { id: "full_front", name: "All Front" }
+    ]);
+    assert.deepEqual(clipScopeTargets(sources, "full_halo"), [
+      { id: "source_logo_halo", name: "Logo · Halo" },
+      { id: "full_halo", name: "All Halo" }
+    ]);
+  });
+
+  it("compiles separate global groups for Front and Halo sources", () => {
+    const designer = createDefaultPartituraDocument("typed_global_targets").designer!;
+    const target = designer.zones[0];
+    const string = designer.routes.find((route) => route.kind === "led_string");
+    assert.ok(target && string);
+    designer.lightSources = [
+      { ...createDefaultOpticalTreatment("zone", target.id, "front"), id: "source_front", stringIds: [string.id] },
+      { ...createDefaultOpticalTreatment("zone", target.id, "halo"), id: "source_halo", stringIds: [string.id] }
+    ];
+
+    const groups = compileDesignerLayout(designer).groups;
+    assert.deepEqual(groups.find((group) => group.id === "full_front")?.members, [{ type: "zone", id: "source_front" }]);
+    assert.deepEqual(groups.find((group) => group.id === "full_halo")?.members, [{ type: "zone", id: "source_halo" }]);
+  });
+
+  it("requires a selected source with an assigned strip to create a clip", async () => {
+    const source = await readFile("components/lighting/designer/designer-animate-timeline.tsx", "utf8");
+
+    assert.match(source, /creatableSourceIds\.has\(targetId\)/);
+    assert.match(source, /Select a zone with an assigned light strip/);
+    assert.match(source, /Select label="Scope"/);
+    assert.doesNotMatch(source, /clipCreationTargets\[0\]\?\.id \?\? "full_sign"/);
+  });
+
+  it("renames the selected clip from its inspector", async () => {
+    const source = await readFile("components/lighting/designer/designer-animate-timeline.tsx", "utf8");
+
+    assert.match(source, /Name[\s\S]*?value=\{clip\.name\}[\s\S]*?onChange=\{\(event\) => onChange\(\{ name: event\.target\.value \}\)\}/);
+    assert.match(source, /placeholder="Letter or effect name"/);
+  });
+
+  it("keeps visible Front, Halo and Wall indicators on timeline clips", async () => {
+    const source = await readFile("components/lighting/designer/designer-animate-timeline.tsx", "utf8");
+
+    assert.match(source, /mode === "front"[\s\S]*?border-sky-500/);
+    assert.match(source, /mode === "halo"[\s\S]*?border-violet-500/);
+    assert.match(source, /mode === "wall_wash"[\s\S]*?border-amber-500/);
+    assert.match(source, /const scope = globalMode \? "All " : ""/);
+    assert.match(source, /targetId === "full_sign"[\s\S]*?label: "Full"/);
+    assert.match(source, /absolute bottom-0 left-0 top-0 z-40[\s\S]*?onDrag\(event, "start"\)/);
+    assert.match(source, /absolute bottom-0 right-0 top-0 z-40[\s\S]*?onDrag\(event, "end"\)/);
+  });
+
+  it("keeps the complete Front calibration visible for a selected clip", async () => {
+    const source = await readFile("components/lighting/partitura-workspace.tsx", "utf8");
+    const frontEditor = source.slice(source.indexOf('function LightingMountsEditor'), source.indexOf('function DiffuserSlider'));
+
+    assert.match(frontEditor, /label="Intensity"/);
+    assert.match(frontEditor, /label="Distance to diffusor"/);
+    assert.match(frontEditor, /label="Softness"/);
+    assert.match(frontEditor, /treatment\.material === "silicone"[\s\S]*?label="Transmission"[\s\S]*?label="Beam"/);
+  });
+
+  it("lays out lighting setup string assignments as a responsive matrix", async () => {
+    const source = await readFile("components/lighting/partitura-workspace.tsx", "utf8");
+    const editor = source.slice(source.indexOf('function LightingMountsEditor'), source.indexOf('function DiffuserSlider'));
+
+    assert.match(editor, /const ledStrings = designer\.routes\.filter\(\(route\) => route\.kind === "led_string"\)/);
+    assert.match(editor, /grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3/);
+    assert.match(editor, /checked=\{treatment\.stringIds\.includes\(route\.id\)\}/);
+    assert.match(editor, /<span className="min-w-0 truncate" title=\{route\.name\}>\{route\.name\}<\/span>/);
+  });
+
   it("preserves the selected clip when its source belongs to the selected zone", () => {
     const clips = [
       { id: "clip_front", target: "source_logo_front" },
@@ -1395,6 +2333,61 @@ describe("timeline clip target selection", () => {
 
     assert.equal(clipIdForSelectedTargets(clips, "clip_halo", targets), "clip_halo");
     assert.equal(clipIdForSelectedTargets(clips, undefined, targets), "clip_front");
+    assert.equal(clipIdForSelectedTargets(clips, "clip_halo", ["zone_without_clips"]), undefined);
+  });
+
+  it("does not let stale canvas selection clear an explicitly clicked clip", () => {
+    const clips = [
+      { id: "clip_full_sign", target: "full_sign" },
+      { id: "clip_zone", target: "source_logo_halo" }
+    ] as ClipForm[];
+
+    assert.equal(explicitClipTargetSelectionSettled(clips, "clip_full_sign", ["source_logo_halo", "zone_logo"]), false);
+    assert.equal(explicitClipTargetSelectionSettled(clips, "clip_full_sign", []), true);
+    assert.equal(explicitClipTargetSelectionSettled(clips, "clip_zone", ["source_logo_halo", "zone_logo"]), true);
+  });
+});
+
+describe("work lines", () => {
+  it("persists open construction geometry without invalidating electrical compilation", () => {
+    const document = createNewPartituraDocument("work_lines");
+    const before = designerCompileSignature(normalizeDefaultSignLayout(document).designer);
+    const normalized = normalizeDefaultSignLayout({
+      ...document,
+      designer: {
+        ...document.designer,
+        workLinesVisible: false,
+        workLines: [{ id: "work_line_1", name: "Baseline", layer: "faceGraphic", points: [{ x: 2, y: 3 }, { x: 9, y: 3 }] }]
+      }
+    });
+
+    assert.equal(normalized.designer.workLinesVisible, false);
+    assert.deepEqual(normalized.designer.workLines, [{ id: "work_line_1", name: "Baseline", layer: "faceGraphic", points: [{ x: 2, y: 3 }, { x: 9, y: 3 }] }]);
+    assert.equal(designerCompileSignature(normalized.designer), before);
+  });
+
+  it("moves every point by one snapped delta and keeps individual nodes editable", () => {
+    const line = { id: "work_line_1", name: "Angle", points: [{ x: 0.13, y: 0.17 }, { x: 2.63, y: 1.67 }, { x: 4.13, y: 1.67 }] };
+    const moved = movedWorkLine(line, 1.11, 0.91, 0.5);
+    assert.deepEqual(moved.points.map((point) => ({ x: point.x - moved.points[0].x, y: point.y - moved.points[0].y })), [
+      { x: 0, y: 0 },
+      { x: 2.5, y: 1.5 },
+      { x: 4, y: 1.5 }
+    ]);
+    assert.deepEqual(updateWorkLinePoint(moved, 1, { x: 8.2, y: 7.8 }, 0.5).points[1], { x: 8, y: 8 });
+  });
+
+  it("keeps productive geometry ahead of work lines in canvas hit priority", () => {
+    const designer = createNewPartituraDocument("work_line_hits").designer;
+    designer.workLines = [{ id: "work_line_1", name: "Reference", points: [{ x: 10, y: 15 }, { x: 20, y: 15 }] }];
+    designer.zones = [{ id: "zone_1", name: "Zone", shape: "rect", x: 10, y: 10, width: 20, height: 20, visible: true, locked: false, opacity: 1 }];
+    const viewport = { x: 0, y: 0, width: 100, height: 50 };
+    const canvas = { width: 1000, height: 500 };
+
+    assert.deepEqual(pickDesignerHit(designer, "zones", { x: 15, y: 15 }, viewport, canvas), { type: "zone", id: "zone_1" });
+    assert.deepEqual(pickDesignerHit(designer, "artwork", { x: 15, y: 15 }, viewport, canvas), { type: "work_line", id: "work_line_1" });
+    designer.workLinesVisible = false;
+    assert.equal(pickDesignerHit(designer, "artwork", { x: 15, y: 15 }, viewport, canvas), null);
   });
 });
 
@@ -1443,6 +2436,40 @@ describe("designer layer selection", () => {
       pickDesignerHit(designer, "artwork", { x: 15, y: 15 }, { x: 0, y: 0, width: 100, height: 50 }, { width: 1000, height: 500 }),
       null
     );
+  });
+});
+
+describe("dense polygon node interaction", () => {
+  it("selects the nearest node instead of the last node inside the hit radius", () => {
+    const points = [{ x: 0, y: 0 }, { x: 0.12, y: 0 }, { x: 5, y: 5 }];
+
+    assert.deepEqual(
+      pickPolygonPointHit("face", points, { x: 0.02, y: 0 }, 0.15, "face_graphic_point"),
+      { type: "face_graphic_point", id: "face", pointIndex: 0 }
+    );
+  });
+
+  it("keeps hit tolerance screen-sized at high zoom", () => {
+    assert.equal(
+      worldHitTolerance({ x: 0, y: 0, width: 10, height: 5 }, { width: 1000, height: 500 }),
+      0.09
+    );
+  });
+
+  it("inserts only near an edge and never on top of an existing node", () => {
+    const square = {
+      shape: "polygon" as const,
+      x: 0,
+      y: 0,
+      width: 10,
+      height: 10,
+      points: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }],
+      pathMode: "straight" as const
+    };
+
+    assert.equal(shapeInsertIndexAtPoint(square, { x: 0.02, y: 0.02 }, 0.1), null);
+    assert.equal(shapeInsertIndexAtPoint(square, { x: 5, y: 0.05 }, 0.1), 1);
+    assert.equal(shapeInsertIndexAtPoint(square, { x: 5, y: 5 }, 0.1), null);
   });
 });
 

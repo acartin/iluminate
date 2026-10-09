@@ -10,12 +10,17 @@ export {
   channelWidthCm,
   deleteChannelPoint,
   deletePolygonPoint,
+  designerShapePointCount,
+  designerShapePointLocation,
   insertChannelPoint,
   insertPolygonPoint,
   movedChannel,
   movedShape,
+  movedWorkLine,
   nearestChannelInsertIndex,
   nearestShapeInsertIndex,
+  pickPolygonPointHit,
+  pickShapePointHit,
   pickBezierHandle,
   pointInsideDesignerShape,
   pointNearShapeStroke,
@@ -24,6 +29,7 @@ export {
   rectanglePoints,
   resizedBuildArea,
   resizedZone,
+  shapeInsertIndexAtPoint,
   setChannelNodeType,
   setPolygonNodeType,
   smoothBezierPoints,
@@ -31,7 +37,8 @@ export {
   updateBezierHandle,
   updateChannelBezierHandle,
   updateChannelPoint,
-  updatePolygonPoint
+  updatePolygonPoint,
+  updateWorkLinePoint
 } from "../designer-geometry";
 export {
   applyDesignerBooleanOperation,

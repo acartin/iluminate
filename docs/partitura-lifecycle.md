@@ -65,8 +65,9 @@ Fabrication SVG/DXF export is separate from firmware generation and does not
 consume or mutate `compiledLayout`. It reads canonical Designer geometry,
 validates the selected fabrication categories, outlines controlled text in
 memory and downloads a 1:1 vector interchange file. Electrical routes,
-controller graphics, pixelMap and linked construction projections are not part
-of these files.
+controller graphics, pixelMap, linked construction projections and persistent
+work lines are not part of these files. Work lines are editable Designer-only
+references and do not invalidate electrical Compile.
 
 Designer Setup persists a CNC cutter diameter canonically in millimeters plus
 an independent display unit. The default is 3.175 mm (1/8 in). This value only
@@ -116,14 +117,18 @@ The firmware appends the fixed path above when it downloads the partitura.
 
 ### Default Template
 
-New partituras are initialized from:
+New persisted partituras are initialized from:
 
 ```text
 services/web/iluminate/lib/lighting/partitura-model.ts
-createDefaultPartituraDocument()
+createNewPartituraDocument()
 ```
 
-This is a product template, not the live source of truth. Changing it affects newly created partituras only. Existing partituras live in Postgres and must be migrated or updated explicitly when needed.
+The new-partitura template contains the base project settings, one empty scene
+and the hardware controller. Artwork, build areas, zones, channels, light
+sources, routes and clips start empty. `createDefaultPartituraDocument()` keeps
+the populated demo/test fixture and is not used by the persistence creation
+flow. Changing either template does not rewrite existing partituras in Postgres.
 
 ### Removed Firmware Spike
 

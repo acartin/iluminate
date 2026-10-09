@@ -104,8 +104,14 @@ const projectSelect = `select project.id,
 from iluminate.projects project
 join public.auth_clients client on client.id = project.client_id`;
 
-export async function listProjects() {
-  const result = await getPool().query<ProjectRow>(`${projectSelect} where project.deleted_at is null order by project.updated_at desc, project.id desc`);
+export async function listProjects(trustedClientId: string) {
+  const result = await getPool().query<ProjectRow>(
+    `${projectSelect}
+      where project.deleted_at is null
+        and (client.id::text = $1 or client.client_key = $1)
+      order by project.updated_at desc, project.id desc`,
+    [trustedClientId]
+  );
   return result.rows.map(mapProject);
 }
 

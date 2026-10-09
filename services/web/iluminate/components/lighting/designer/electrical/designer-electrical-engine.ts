@@ -5,6 +5,7 @@ export {
   controllerConnectedPorts,
   controllerPortPoint,
   createRouteFromDraft,
+  deleteDesignerRoute,
   detachSolderedRoutePoint,
   findJointGroup,
   findMatchingControllerPort,
@@ -24,7 +25,7 @@ export {
   routePointFill,
   routeSelectedColor,
   sampleRouteLedDots,
+  sameTerminalPoint,
   sameSnapPoint,
   summarizeRoute
 } from "../designer-geometry";
-
