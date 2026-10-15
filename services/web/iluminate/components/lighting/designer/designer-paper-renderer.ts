@@ -1,10 +1,11 @@
 import type { DesignerBuildAreaForm, DesignerChannelForm, DesignerContour, DesignerControllerForm, DesignerFaceGraphicForm, DesignerForm, DesignerPoint, DesignerRouteForm, DesignerRouteKind, DesignerWorkLineForm, DesignerZoneForm } from "@/lib/lighting/partitura-model";
-import { designerGeometryAsShape, resolveDesignerDerivedGeometry, resolveDesignerProjectionGeometry } from "@/lib/lighting/partitura-model";
+import { designerGeometryAsShape, resolveDesignerDerivedGeometry } from "@/lib/lighting/partitura-model";
+import { resolveDesignerProjectionGeometry } from "./geometry/designer-projected-geometry";
 import { designerFontResource } from "@/lib/lighting/designer-font-catalog";
 import { designerFilletCornerIsEligible } from "@/lib/lighting/designer-derived-geometry";
 import { estimateDesignerTextBounds } from "@/lib/lighting/designer-text-geometry";
 import type { DesignerActiveLayer, DesignerMeasurement, DesignerPrimitiveDraft, DesignerRouteDraft, DesignerShapeDraft, DesignerViewport, PaperApi, PaperPoint, PaperRectangle } from "./types";
-import { channelCenterPolyline, channelContainsPoint, channelIsClosed, channelTightBend, channelWidthCm, controllerConnectedPorts, controllerPortPoint, formatDecimal, formatMeasure, pointInsideDesignerShape, routeColor, routeDirectionMarkers, routePointFill, routeSelectedColor, sampleRouteLedDots, smoothOpenBezierPoints, type ChannelBendMeasurement } from "./designer-geometry";
+import { channelCenterPolyline, channelContainsPoint, channelIsClosed, channelWidthCm, controllerConnectedPorts, controllerPortPoint, formatDecimal, formatMeasure, pointInsideDesignerShape, routeColor, routeDirectionMarkers, routePointFill, routeSelectedColor, sampleRouteLedDots, smoothOpenBezierPoints } from "./designer-geometry";
 import type { CompiledDesignerLayout } from "./designer-compiler";
 import type { DesignerPathTrimPreview } from "./geometry/designer-path-trim";
 import { resolveChannelOutlineContours } from "./rendering/channel-swept-outline";
@@ -534,7 +535,6 @@ function drawPaperShapeDraft(draft: DesignerShapeDraft | null, toScreen: (point:
     locked: false,
     opacity: 1
   } : null;
-  const tightDraft = draftChannel ? channelTightBend(draftChannel) : null;
   const draftTrace = draftChannel ? channelCenterPolyline(draftChannel) : draft.points;
   const draftColor = draft.target === "work_line" ? "#14b8a6" : draft.target === "build_area" ? "#a78bfa" : draft.target === "channel" ? "#f59e0b" : draft.target === "face_graphic" ? "#f472b6" : "#38bdf8";
   if (draft.target === "channel") {
@@ -571,7 +571,6 @@ function drawPaperShapeDraft(draft: DesignerShapeDraft | null, toScreen: (point:
       strokeWidth: 1.3
     });
   });
-  if (tightDraft) drawPaperChannelBendMarker(tightDraft, toScreen);
 }
 
 function drawPaperWorkLine(line: DesignerWorkLineForm, options: { selected: boolean; selectedPointIndex?: number; toScreen: (point: DesignerPoint) => PaperPoint }) {
@@ -670,7 +669,6 @@ function drawPaperChannel(channel: DesignerChannelForm, options: {
   lengthToScreen: (cm: number) => number;
 }) {
   const center = channelCenterPolyline(channel);
-  const tightBend = options.interactive ? null : channelTightBend(channel);
   if (center.length >= 2) {
     const channelStrokeWidth = Math.max(1, options.lengthToScreen(channelWidthCm(channel)));
     // Draw the band by stroking the center path with the channel width. This is
@@ -725,29 +723,10 @@ function drawPaperChannel(channel: DesignerChannelForm, options: {
       opacity: Math.max(0.5, options.opacity)
     });
   }
-  if (tightBend) drawPaperChannelBendMarker(tightBend, options.toScreen);
   if (options.selected && channel.points.length) {
     drawPaperPolygonNodes(channel.id, channel.points, options.selectedPointIndex, "#b45309", options.toScreen, options.filletCandidateIndices);
     if (channel.pathMode === "bezier") drawPaperBezierHandles(channel.id, channel.points, options.selectedPointIndex, "#f59e0b", options.toScreen);
   }
-}
-
-function drawPaperChannelBendMarker(measurement: ChannelBendMeasurement, toScreen: (point: DesignerPoint) => PaperPoint) {
-  const center = toScreen(measurement.point);
-  new paperScope.Path.Circle({
-    center,
-    radius: 8,
-    fillColor: "rgba(239,68,68,0.22)",
-    strokeColor: "#ef4444",
-    strokeWidth: 2
-  });
-  new paperScope.PointText({
-    point: new paperScope.Point(center.x + 11, center.y - 10),
-    content: `R ${formatDecimal(measurement.radiusMm)} / ${formatDecimal(measurement.requiredRadiusMm)} mm`,
-    fillColor: "#f87171",
-    fontFamily: "monospace",
-    fontSize: 10
-  });
 }
 
 function drawPaperFaceGraphic(element: DesignerFaceGraphicForm, options: {

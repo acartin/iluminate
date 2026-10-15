@@ -117,27 +117,30 @@ graphic is opaque; the topmost persisted object wins overlaps. Compound holes
 remain openings according to their enclosing region. Object visibility controls
 membership in both the vinyl preview and the optical transmission mask; layer
 visibility and opacity remain editor aids.
+Named `designer.faceGraphicVisibilityPresets` persist snapshots of individual
+Face Graphic eye states using typed stable object keys. The compact Layers row
+provides `All on`, `All off`, create, apply, update and delete; applying a preset
+only changes visibility and never exports automatically or affects electrical
+Compile.
 Direct-mounted Front pixels participate in this pass. `LED map` bypasses it and
 continues to show raw mapped output. Never replace this with a top-level
 multiply overlay: it would incorrectly affect Halo, Wall Wash and the workspace
 background.
 
-### Associative Project Geometry
+### Project Geometry and legacy projections
 
-`designer.projections` stores linked, read-only references to canonical source
-geometry. A projection has its own stable ID and presentation geometry ID, a
-`sourceGeometryId`, and a `targetLayer` (`reference`, `zones` or
-`faceGraphic`). Resolve it through `resolveDesignerProjectionGeometry`; never
-copy source coordinates into a second authoritative record.
+The contextual `Project Geometry` command resolves the selected canonical
+source once and immediately creates an independent native build area, Zone or
+Face Graphic object. It does not add a `designer.projections` record, expose a
+`Break Link` step, activate the target layer or replace the current selection.
+The operator therefore remains on the source plane while making successive
+projections.
 
-The contextual `Project Geometry` command is available when a geometric object
-is selected. Projected objects render cyan/dashed in their target layer and are
-selectable but not directly editable. Source edits update them immediately.
-`Break Link` materializes the resolved profile as a native build area, zone or
-Face Graphic object. Missing sources remain persisted as recoverable broken
-references and can be relinked from the contextual source selector. Direct and
-chained cycles are invalid and must be rejected with
-`wouldCreateDesignerProjectionCycle`.
+`designer.projections` remains supported for legacy documents as linked,
+read-only references with stable IDs, `sourceGeometryId` and `targetLayer`.
+Resolve those records through `resolveDesignerProjectionGeometry`; missing
+sources remain recoverable through the contextual source selector and cycles
+remain invalid. New authoring must not create more linked projection records.
 
 ### Fabrication export
 
@@ -237,10 +240,20 @@ with the legacy `points` projection.
 
 ### Derived offset and fillet geometry
 
-`designer.derivedGeometries` persists non-destructive `offset` and `fillet`
-operations. Each record points to canonical geometry, a projection or an
-earlier derived result through `sourceGeometryId`, keeps its target layer, and
-stores only operation parameters. Resolve it through
+New `Offset Path` operations resolve once and immediately materialize an
+independent native object in the source target layer. The signed
+`offsetDistanceMm` and `offsetJoin` authoring defaults are persisted on
+`DesignerForm`, shown before execution and reused by the next operation. New
+offsets never add a `designer.derivedGeometries` record or require `Break Link`.
+While a newly created native offset remains selected, changing either setting
+recalculates that same object directly from an in-memory snapshot of its
+creation profile. This transient editing aid is not a persisted source link;
+the saved object remains independent native geometry.
+
+`designer.derivedGeometries` remains compatible with legacy non-destructive
+`offset` and `fillet` operations. Each record points to canonical geometry, a
+projection or an earlier derived result through `sourceGeometryId`, keeps its
+target layer, and stores only operation parameters. Resolve it through
 `resolveDesignerGeometryReference` / `resolveDesignerDerivedGeometry`; do not
 snapshot source coordinates into the operation record.
 
@@ -249,12 +262,23 @@ The shared calculation is in
 distances and `round`, `miter` or `bevel` joins. Miter joins retain the exact
 angular intersection; the legacy persisted miter limit remains readable for
 document compatibility but must not silently replace an acute corner with a
-bevel segment. Whole-profile Fillets persist a millimeter radius and may persist a
-canonical corner-index selection as a live derived profile. Their contextual
-radius field recalculates immediately. Channels instead keep an optional
-`radiusMm` on the selected canonical corner node; the contextual `Fillet` field
-updates the center trace directly with no tool-activation step or derived
-record. The engine emits cubic Bezier arc segments
+bevel segment. Fillets on linked/read-only sources persist a millimeter radius
+and may persist a canonical corner-index selection as a live derived profile.
+Native Reference, Zone and Face Graphic paths instead reuse the existing
+`Fillet` command as a direct node tool: every corner click mutates the same
+native object, records one Undo step and leaves the tool active until `Esc` or
+another tool. No preview, Apply, derived object or Break Link participates in
+that native workflow. A corner selected before tool activation receives the
+current radius immediately and remains selected. After applying a fillet,
+changing `Radius` while that exact node remains selected recalculates it from its
+pre-fillet geometry; it does not stack another fillet, and zero restores the
+corner. This edit context is transient and creates no persisted link. When the
+requested radius does not fit, the engine
+applies the greatest smaller radius tangent to both adjacent segments and
+reports the clamp; an unusable node remains unchanged. Channels instead keep
+an optional `radiusMm` on the selected canonical corner node; the contextual
+`Fillet` field updates the center trace directly with no tool-activation step
+or derived record. The engine emits cubic Bezier arc segments
 instead of fixed-angle straight chords. It trims line–Bezier or Bezier–Bezier
 cusps at numerically solved tangent points, preserves the unaffected curve
 segments, and skips joins whose tangents are already continuous. SVG therefore
@@ -269,12 +293,13 @@ to 3.175 mm; `fabricationCutterUnit` (`mm`, `in` or `cm`) controls only Setup
 display/input. These are contour-design constraints, not CAM settings: they do
 not affect Compile, offset the exported contour or generate toolpaths.
 
-Derived chains are live and acyclic. A source edit must immediately recalculate
+Legacy derived chains are live and acyclic. A source edit must immediately recalculate
 projection → offset → fillet descendants. Use
 `wouldCreateDesignerDerivedGeometryCycle` before relinking. Derived profiles
-are amber and read-only on canvas; `Break Link` materializes the current result
-as a native object. They remain outside the electrical Compile signature and
-pixelMap until materialized.
+are amber and read-only on canvas; `Break Link` is retained only for a valid
+legacy live Fillet. Legacy offsets can be copied into native geometry with the
+normal `Project Geometry` command. They remain outside the electrical Compile
+signature and pixelMap until materialized.
 
 When a derived profile targets Face Graphic it also owns only `passMode` and
 `filterColor`, with translucent white defaults. Those values follow chained
@@ -413,10 +438,11 @@ modal button; it shows read-only mounting/material status icons. Only enabled
 setups with at least one assigned LED string count as configured. Enabled
 records without strings show an incomplete warning instead of pretending that
 Front/Halo/Wall Washer is installed. Zone/channel rows omit their geometry
-description because shape, dimensions and path properties already live in the
-contextual bar.
+description. Zone geometry is edited on the canvas and its contextual bar
+exposes only selected-node properties; Channel path properties remain
+contextual.
 
-Each layer has `visible`, `locked` and `opacity`. Hidden layers do not render or receive selection. Locked layers remain visible and selectable for inspection, but cannot be moved, resized, deleted or edited from the canvas/toolbox/contextual properties. A locked selection is identified as `Locked · inspect only`. Each object row also exposes a per-object visibility eye (like the layer header): hidden objects do not render and are not hit-tested. Per-object lock and opacity remain layer-level only.
+Each layer has `visible`, `locked` and `opacity`. Hidden layers do not render or receive selection. Locked layers remain visible and selectable for inspection, but cannot be moved, resized, deleted or edited from the canvas/toolbox/contextual properties. The contextual bar does not repeat the selected object name, active category or locked state; Layers remains the source of that context. Each object row also exposes a per-object visibility eye (like the layer header): hidden objects do not render and are not hit-tested. Per-object lock and opacity remain layer-level only.
 
 `Groups` are not a canvas layer and have no geometry. They are authored in the `Zones Groups` folder of the `Diffusors` category: a named, cycle-free composition of zones and/or other groups. A clip that targets a group applies its effect to the union of the member zones' pixels, respecting each zone's geometry, and behaves as one composition across the group's bounds. Whole-sign composition is achieved by grouping the desired zones (a group of all zones spans the sign). The clip `coordinateSpace` control was removed from the UI; clips are authored as `"local"` and the core still accepts/validates `serial`/`local`/`global`. Groups persist in `designer.groups` and compile into `compiledLayout.groups`.
 
@@ -427,6 +453,15 @@ center line exactly like the Bezier zone tool, then finishes with a double-click
 or `Enter` (open ends) or by clicking the first node (closed loop). The operator
 only edits the center nodes and Bezier handles; the two parallel borders are
 derived and are never manipulated separately.
+
+Manual tracing remains the default. The active Channel context can also create
+independent Channels from selected canonical profiles, aligned on the source
+center, left edge or right edge. Open profiles are joined only when endpoints
+coincide within the fixed geometry tolerance; disconnected components become
+separate Channels. A node with more than two incident paths is a branch and is
+rejected rather than guessing fabrication intent. The operator traces each
+branch as a separate Channel. The contextual action is labeled `Generate
+Channel`, and a Channel generated from one Zone inherits that Zone's name.
 
 - Persisted form is `designer.channels` with the center `points`, `pathMode`,
   `widthMm` (3-20 mm), explicit `closed` topology and endpoint `cap`
@@ -457,19 +492,15 @@ derived and are never manipulated separately.
   router-bit diameter through one selector of common metric and fractional-inch
   sizes. Every option shows both units and millimeters remain canonical. The
   draft renders at that physical width and a finished channel copies it into
-  `widthMm`; the CNC cutter setting remains independent.
+  `widthMm`; the CNC cutter setting remains independent. Changing the diameter
+  on either the active tool or a selected Channel persists it as the last-used
+  value for the next manual or generated Channel.
 - New open channels default to `cap: "round"`, matching the semicircular end
   left by a single center-line router pass (`radius = widthMm / 2`). `Butt`
   remains an explicit edit for workflows that trim or extend the groove.
-- Channel bend validation uses `widthMm / 2`, so the router-bit diameter is the
-  single source of truth. Drafts and saved channels below that radius receive a
-  local red marker with measured/required radii instead of recoloring the whole
-  channel. Handle dragging remains free and is frame-batched. There is no
-  automatic `Adjust tight curves` action; the warning is diagnostic and the
-  designer corrects the curve explicitly.
-- A corner/straight node with a real direction change is an intentional,
-  machinable discontinuity and does not participate in continuous-curve radius
-  warnings. Selecting that node exposes one numeric `Fillet` field in
+- Designer performs no generic Channel bend-radius estimation or warning.
+  Handle dragging remains free and is frame-batched. Selecting a corner node
+  exposes one numeric `Fillet` field in
   millimeters; changing it redraws the Channel center trace immediately and
   zero removes it. Do not add a second Fillet activation button, a passive
   Fillet badge, a Setup radius or a separate `Round corner` control.
@@ -477,6 +508,11 @@ derived and are never manipulated separately.
   authoritative center path. At a sharp turn the outer side is a bit-radius arc
   and the inner side is the intersection of the two offset legs. Do not round,
   miter or otherwise edit both borders independently.
+- `Project Geometry` accepts a selected Channel without introducing another
+  command. The Channel remains the centerline object; the generated independent
+  native object receives the same swept outline used by Designer and Animate.
+  Projecting to Face Graphic supplies the perimeter without changing the active
+  layer or current selection.
 
 ### Artwork Tool
 
@@ -515,7 +551,12 @@ per-folder eye/lock/opacity: the `Artwork` category header owns the plane
 visibility/lock, and the `Reference` folder is standardized to per-object eyes
 only.
 
-The right Layers panel is the active-plane selector. Exactly one layer is active at a time, and the active layer must have a clearly different background. **On open no plane is active** (all categories collapsed): the canvas must not select, drag or draw any object until the operator activates a category. Clicking a category label, disclosure arrow or folder activates it immediately and returns the pointer to Select; zoom/pan must never be needed to complete activation. Visibility and lock buttons are secondary controls, not the active selection state. Canvas editing only applies to the active plane: `Artwork` is the umbrella plane for image placement **and** build-area/reference editing; `Diffusors` (internal `zones`) edits zones, channels and groups; `Strings` edits routes (data cables/LED strings); `Hardware` selects the controller. Selecting an object on the canvas opens Layers, expands its category and exact folder, scrolls its row into view and keeps that layer active. Tools must not switch the active plane. The toolbox shows only pointer-interaction tools that apply to the active plane, plus Select, Pan and Measure. Commands such as Delete, Fit, Copy/Paste, Save and Compile never belong in the toolbox. See `.agent/DESIGNER_UX_CONTRACT.md`.
+The right Layers panel is the active-plane selector. Exactly one layer is active at a time, and the active layer must have a clearly different background. **On open no plane is active** (all categories collapsed): the canvas must not select, drag or draw any object until the operator activates a category. Clicking a category label, disclosure arrow or folder activates it immediately and returns the pointer to Select; zoom/pan must never be needed to complete activation. Visibility and lock buttons are secondary controls, not the active selection state. Canvas editing only applies to the active plane: `Artwork` is the umbrella plane for image placement **and** build-area/reference editing; `Diffusors` (internal `zones`) edits zones, channels and groups; `Strings` edits routes (data cables/LED strings); `Hardware` selects the controller. Selecting an object on the canvas opens Layers, expands its category and exact folder, scrolls its row into view and keeps that layer active. Tools must not switch the active plane. The toolbox shows only pointer-interaction tools that apply to the active plane, plus Select, Move, Pan and Measure. Move acts on the complete object, fixes the drag to the contextual X or Y axis and uses Ctrl/Command as a temporary two-axis override; it never converts a node or resize-handle hit into a geometry edit. Select does not start whole-object movement, and node/resize hits on an unselected object are promoted to an object-selection click. Commands such as Delete, Fit, Copy/Paste, Save and Compile never belong in the toolbox. See `.agent/DESIGNER_UX_CONTRACT.md`.
+
+Zones, Channels and Face Graphic objects use the same trailing contextual
+`Copy` and destructive `Delete` buttons as Artwork. The buttons remain
+available for an object selected in Layers even when its geometry is locked;
+the lock still blocks canvas/property mutation and movement.
 
 `Build Areas` are editable reference geometries. They are not containers and do not own/delete zones or strings. Multiple build areas may exist. They currently support rectangle, ellipse and polygon. The overall canvas can be larger to leave room for controller, cables and notes. Artwork image references should be positioned/scaled into a build area, not forced to occupy the whole canvas.
 
@@ -623,6 +664,8 @@ Detach behavior:
 Left toolbox:
 
 - Select.
+- Move: whole-object movement constrained to contextual X or Y; Ctrl/Command
+  temporarily permits both axes.
 - Pan.
 - Measure.
 - Rectangle zone.
@@ -688,6 +731,12 @@ The mandatory placement rules live in `.agent/DESIGNER_UX_CONTRACT.md`.
   selected, or the selected object's properties and actions. Lighting, node
   controls, Copy/Paste and Delete belong here. Animate omits this row because
   calibration is in the right panel and timeline controls are below the canvas.
+- A selected Face Graphic keeps only its pass, translucent filter and
+  selected-node controls in this row. Locking remains exclusively in Layers;
+  the row does not repeat object/category/lock labels or expose Shape,
+  width/height or compound-contour summaries.
+- A selected Zone likewise omits Shape and width/height; only a selected
+  node's relevant controls precede its geometry commands and trailing actions.
 - Design has exactly two horizontal command/property bars; Animate has one. Do
   not add a third.
 - `Add clip` uses the last empty timeline track. If none is empty, it appends a
@@ -725,8 +774,11 @@ Layer panel:
   `Strings` covers routes, and `Hardware` covers the controller. A hidden
   category hides all of its objects regardless of their own eye; when the
   category is visible, only objects whose own row eye is on are drawn and
-  hit-tested. Lock and opacity stay category-level. Folders have no eye of their
-  own.
+  hit-tested. Lock and opacity stay category-level. As a Diffusors-specific
+  convenience, the `Zones` and `Channels` folder headers have master eyes that
+  atomically set every child object's persisted eye to the same state. `Zones
+  Groups` remains organizational and has no visibility eye because groups have
+  no canvas geometry.
 - Lock is consistent with the toolbox: a locked category grays out (disables)
   its toolbox tools. The `Artwork` category lock gates all of its tools (Images
   and Reference). Folders have no lock of their own. A hidden layer does not

@@ -4,10 +4,13 @@ import { cloneElement, isValidElement, useEffect, useRef, useState, type ReactEl
 import { DndContext, KeyboardSensor, PointerSensor, closestCenter, type DragEndEvent, useSensor, useSensors } from "@dnd-kit/core";
 import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { Cable, ChevronDown, ChevronRight, CircleDot, Contrast, CornerDownRight, Cpu, Eye, EyeOff, Folder, GripVertical, ImageIcon, Info, Layers, Lightbulb, Lock, Minus, Pencil, Plus, Search, Spline, Trash2, Type, Unlock, Upload, Waves, X } from "lucide-react";
+import { Cable, ChevronDown, ChevronRight, CircleDot, Contrast, CornerDownRight, Cpu, Eye, EyeOff, Folder, GripVertical, ImageIcon, Info, Layers, Lightbulb, Lock, Minus, Pencil, Plus, Save, Search, Spline, Trash2, Type, Unlock, Upload, Waves, X } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Modal } from "@/components/ui/modal";
 import type { DesignerArtworkForm, DesignerBuildAreaForm, DesignerChannelForm, DesignerFaceGraphicForm, DesignerForm, DesignerGroupForm, DesignerLayerSettings, DesignerLayersForm, DesignerPointNodeType, DesignerText, DesignerWorkLineForm, DesignerZoneForm } from "@/lib/lighting/partitura-model";
 import { resolveDesignerDerivedGeometry, resolveDesignerProjectionGeometry, type DesignerDerivedGeometry, type DesignerProjection, type DesignerProjectionLayer } from "@/lib/lighting/partitura-model";
 import { formatDecimal, rulerTicks } from "./designer-geometry";
+import { faceGraphicObjectKeys, sameFaceGraphicVisibility, visibleFaceGraphicObjectKeys } from "./designer-face-graphic-visibility";
 import { designerAdditiveSelectionRequested, designerLayerForSelection, routeMatchesSurfaceView, type DesignerActiveLayer, type DesignerRouteSummary, type DesignerRouteSurfaceView, type DesignerSelection, type DesignerViewport } from "./types";
 
 export function ToolButton({
@@ -67,10 +70,15 @@ export function DesignerLayersPanel({
   onPatchArtwork,
   onPatchBuildArea,
   onPatchZone,
+  onSetDiffusorFolderVisibility,
   onPatchFaceGraphic,
   onPatchProjection,
   onPatchDerivedGeometry,
   onPatchText,
+  onApplyFaceGraphicVisibility,
+  onCreateFaceGraphicVisibilityPreset,
+  onUpdateFaceGraphicVisibilityPreset,
+  onDeleteFaceGraphicVisibilityPreset,
   onAddGroup,
   onPatchGroup,
   onRemoveGroup,
@@ -103,10 +111,15 @@ export function DesignerLayersPanel({
   onPatchArtwork: (artworkId: string, patch: Partial<DesignerArtworkForm>) => void;
   onPatchBuildArea: (buildAreaId: string, patch: Partial<Pick<DesignerBuildAreaForm, "name" | "visible" | "locked" | "opacity">>) => void;
   onPatchZone: (zoneId: string, patch: Partial<Pick<DesignerZoneForm, "name" | "visible" | "locked" | "opacity">>) => void;
+  onSetDiffusorFolderVisibility: (folder: "zones" | "channels", visible: boolean) => void;
   onPatchFaceGraphic: (elementId: string, patch: Partial<DesignerFaceGraphicForm>) => void;
   onPatchProjection: (projectionId: string, patch: Partial<DesignerProjection>) => void;
   onPatchDerivedGeometry: (derivedId: string, patch: Partial<DesignerDerivedGeometry>) => void;
   onPatchText: (textId: string, patch: Partial<DesignerText>) => void;
+  onApplyFaceGraphicVisibility: (visibleObjectKeys: string[]) => void;
+  onCreateFaceGraphicVisibilityPreset: (name: string) => string;
+  onUpdateFaceGraphicVisibilityPreset: (presetId: string) => void;
+  onDeleteFaceGraphicVisibilityPreset: (presetId: string) => void;
   onAddGroup: () => void;
   onPatchGroup: (groupId: string, patch: Partial<Pick<DesignerGroupForm, "name" | "members">>) => void;
   onRemoveGroup: (groupId: string) => void;
@@ -354,6 +367,8 @@ export function DesignerLayersPanel({
           <RouteFolder
             label="Zones"
             count={designer.zones.length}
+            visible={designer.zones.every((zone) => zone.visible !== false)}
+            onToggleVisible={() => onSetDiffusorFolderVisibility("zones", !designer.zones.every((zone) => zone.visible !== false))}
             expanded={expandedDiffusorGroups.zones}
             onToggle={() => setExpandedDiffusorGroups((current) => ({ ...current, zones: !current.zones }))}
           >
@@ -388,6 +403,8 @@ export function DesignerLayersPanel({
           <RouteFolder
             label="Channels"
             count={(designer.channels ?? []).length}
+            visible={designer.channels.every((channel) => channel.visible !== false)}
+            onToggleVisible={() => onSetDiffusorFolderVisibility("channels", !designer.channels.every((channel) => channel.visible !== false))}
             expanded={expandedDiffusorGroups.channels}
             onToggle={() => setExpandedDiffusorGroups((current) => ({ ...current, channels: !current.channels }))}
           >
@@ -593,6 +610,13 @@ export function DesignerLayersPanel({
             </IconToggle>
           )}
         >
+          <FaceGraphicVisibilityBar
+            designer={designer}
+            onApply={onApplyFaceGraphicVisibility}
+            onCreate={onCreateFaceGraphicVisibilityPreset}
+            onUpdate={onUpdateFaceGraphicVisibilityPreset}
+            onDelete={onDeleteFaceGraphicVisibilityPreset}
+          />
           <SortableLayerList
             ids={designer.faceGraphics.map((element) => element.id)}
             sensors={sensors}
@@ -640,6 +664,128 @@ export function DesignerLayersPanel({
         />
       ) : null}
     </aside>
+  );
+}
+
+function FaceGraphicVisibilityBar({ designer, onApply, onCreate, onUpdate, onDelete }: {
+  designer: DesignerForm;
+  onApply: (visibleObjectKeys: string[]) => void;
+  onCreate: (name: string) => string;
+  onUpdate: (presetId: string) => void;
+  onDelete: (presetId: string) => void;
+}) {
+  const [selection, setSelection] = useState("");
+  const [dialog, setDialog] = useState<"create" | "delete" | null>(null);
+  const [presetName, setPresetName] = useState("");
+  const allKeys = faceGraphicObjectKeys(designer);
+  const visibleKeys = visibleFaceGraphicObjectKeys(designer);
+  const selectedPreset = designer.faceGraphicVisibilityPresets.find((preset) => preset.id === selection) ?? null;
+  const expectedKeys = selection === "__all_on__" ? allKeys : selection === "__all_off__" ? [] : selectedPreset?.visibleObjectKeys ?? visibleKeys;
+  const modified = Boolean(selection) && !sameFaceGraphicVisibility(visibleKeys, expectedKeys);
+
+  useEffect(() => {
+    if (selection && selection !== "__all_on__" && selection !== "__all_off__" && !designer.faceGraphicVisibilityPresets.some((preset) => preset.id === selection)) setSelection("");
+  }, [designer.faceGraphicVisibilityPresets, selection]);
+
+  function choose(next: string) {
+    setSelection(next);
+    if (next === "__all_on__") onApply(allKeys);
+    else if (next === "__all_off__") onApply([]);
+    else {
+      const preset = designer.faceGraphicVisibilityPresets.find((entry) => entry.id === next);
+      if (preset) onApply(preset.visibleObjectKeys);
+    }
+  }
+
+  function create() {
+    const name = presetName.trim();
+    if (!name) return;
+    setSelection(onCreate(name));
+    setDialog(null);
+    setPresetName("");
+  }
+
+  function remove() {
+    if (!selectedPreset) return;
+    onDelete(selectedPreset.id);
+    setSelection("");
+    setDialog(null);
+  }
+
+  return (
+    <>
+      <div className="mb-1 flex items-center gap-1 rounded border border-border-2 bg-surface-2 p-1" aria-label="Face Graphic visibility presets">
+        <select
+          className="h-7 min-w-0 flex-1 rounded border border-input bg-card px-1.5 text-[11px] text-foreground"
+          title="Face Graphic visibility preset"
+          value={selection}
+          onChange={(event) => choose(event.target.value)}
+        >
+          <option value="">Current visibility</option>
+          <option value="__all_on__">All on{selection === "__all_on__" && modified ? " · Modified" : ""}</option>
+          <option value="__all_off__">All off{selection === "__all_off__" && modified ? " · Modified" : ""}</option>
+          {designer.faceGraphicVisibilityPresets.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}{selection === preset.id && modified ? " · Modified" : ""}</option>)}
+        </select>
+        <button type="button" title="Create preset from current visibility" aria-label="Create Face Graphic visibility preset" className="flex h-7 w-7 items-center justify-center rounded border border-blue-400 bg-blue-50 text-blue-700 hover:bg-blue-100 dark:bg-blue-950/40 dark:text-blue-300" onClick={() => {
+          setPresetName(`Preset ${designer.faceGraphicVisibilityPresets.length + 1}`);
+          setDialog("create");
+        }}>
+          <Plus className="h-3.5 w-3.5" />
+        </button>
+        <button type="button" disabled={!selectedPreset} title="Update selected preset" aria-label="Update Face Graphic visibility preset" className="flex h-7 w-7 items-center justify-center rounded border border-emerald-500 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-35 dark:bg-emerald-950/40 dark:text-emerald-300" onClick={() => selectedPreset && onUpdate(selectedPreset.id)}>
+          <Save className="h-3.5 w-3.5" />
+        </button>
+        <Button type="button" variant="destructive" disabled={!selectedPreset} title="Delete selected preset" aria-label="Delete Face Graphic visibility preset" className="!h-7 w-7 p-0" onClick={() => setDialog("delete")}>
+          <Trash2 className="h-3.5 w-3.5" />
+        </Button>
+      </div>
+
+      <Modal
+        open={dialog === "create"}
+        title="Create visibility preset"
+        description="Save the current Face Graphic eye states as a reusable preset."
+        onClose={() => setDialog(null)}
+        className="max-w-md"
+      >
+        <form className="space-y-5" onSubmit={(event) => { event.preventDefault(); create(); }}>
+          <label className="block space-y-2 text-body-sm font-medium">
+            <span>Preset name</span>
+            <input
+              autoFocus
+              value={presetName}
+              onChange={(event) => setPresetName(event.target.value)}
+              className="h-control w-full rounded-md border border-input bg-card px-3 text-body-sm text-foreground outline-none transition focus:border-primary focus:ring-2 focus:ring-ring"
+              maxLength={80}
+              placeholder="e.g. Hand-cut stencil"
+            />
+          </label>
+          <div className="flex justify-end gap-2 border-t pt-4">
+            <Button type="button" variant="outline" onClick={() => setDialog(null)}>Cancel</Button>
+            <Button type="submit" disabled={!presetName.trim()}><Save className="h-4 w-4" />Create preset</Button>
+          </div>
+        </form>
+      </Modal>
+
+      <Modal
+        open={dialog === "delete" && selectedPreset !== null}
+        title="Delete visibility preset?"
+        description="This removes the preset only. Your current object visibility will not change."
+        onClose={() => setDialog(null)}
+        className="max-w-md"
+      >
+        <div className="space-y-5">
+          <div className="rounded-md border border-destructive/30 bg-[var(--red-bg)] px-3 py-3 text-body-sm text-[var(--red-text)]">
+            <span className="font-medium">{selectedPreset?.name}</span> will no longer be available in the preset list.
+          </div>
+          <div className="flex justify-end gap-2 border-t pt-4">
+            <Button type="button" variant="outline" onClick={() => setDialog(null)}>Cancel</Button>
+            <Button type="button" variant="destructive" onClick={remove}>
+              <Trash2 className="h-4 w-4" />Delete preset
+            </Button>
+          </div>
+        </div>
+      </Modal>
+    </>
   );
 }
 
@@ -731,6 +877,8 @@ function RouteFolder({
   expanded,
   children,
   onToggle,
+  visible,
+  onToggleVisible,
   action
 }: {
   label: string;
@@ -740,6 +888,8 @@ function RouteFolder({
   expanded: boolean;
   children: React.ReactNode;
   onToggle: () => void;
+  visible?: boolean;
+  onToggleVisible?: () => void;
   action?: React.ReactNode;
 }) {
   return (
@@ -755,6 +905,11 @@ function RouteFolder({
           <span className="min-w-0 flex-1 truncate">{label}</span>
           <span className="font-mono text-[10px]">{count}</span>
         </button>
+        {typeof visible === "boolean" && onToggleVisible ? (
+          <IconToggle active={visible} label={visible ? `Hide all ${label}` : `Show all ${label}`} onClick={onToggleVisible}>
+            {visible ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
+          </IconToggle>
+        ) : null}
         {action ? <div className="flex shrink-0 items-center gap-1 pr-1">{action}</div> : null}
       </div>
       {expanded ? <div className="pl-2">{children}</div> : null}
@@ -805,9 +960,9 @@ function GroupPanelSection({
                   onChange={(event) => onPatchGroup(group.id, { name: event.target.value })}
                 />
                 <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{members.length}</span>
-                <button type="button" title="Delete group" className="flex h-6 w-6 shrink-0 items-center justify-center rounded border border-transparent text-muted-foreground hover:border-border-2 hover:bg-surface-hover hover:text-red-600" onClick={() => onRemoveGroup(group.id)}>
+                <Button type="button" variant="destructive" title="Delete group" className="!h-6 w-6 shrink-0 p-0" onClick={() => onRemoveGroup(group.id)}>
                   <Trash2 className="h-3.5 w-3.5" />
-                </button>
+                </Button>
               </div>
               {expanded ? (
                 <div className="max-h-56 space-y-0.5 overflow-auto border-t border-border px-2 py-1.5">
@@ -1202,7 +1357,7 @@ function LayerChildRow({
             type="button"
             title={visible === false ? `Show ${label}` : `Hide ${label}`}
             aria-pressed={visible !== false}
-            className={`flex h-6 w-6 shrink-0 items-center justify-center rounded border border-transparent ${selected ? "text-white/80 hover:bg-white/15 hover:text-white" : "text-muted-foreground hover:border-border-2 hover:bg-card hover:text-foreground"}`}
+            className={`flex h-6 w-6 shrink-0 items-center justify-center rounded border transition ${layerVisibilityStateClass(visible !== false)}`}
             onClick={(event) => {
               event.stopPropagation();
               onToggleVisible();
@@ -1216,7 +1371,7 @@ function LayerChildRow({
             type="button"
             title={locked ? `Unlock ${label}` : `Lock ${label}`}
             aria-pressed={locked === true}
-            className={`flex h-6 w-6 shrink-0 items-center justify-center rounded border border-transparent ${selected ? "text-white/80 hover:bg-white/15 hover:text-white" : "text-muted-foreground hover:border-border-2 hover:bg-card hover:text-foreground"}`}
+            className={`flex h-6 w-6 shrink-0 items-center justify-center rounded border transition ${layerLockStateClass(locked === true)}`}
             onClick={(event) => { event.stopPropagation(); onToggleLocked(); }}
           >
             {locked ? <Lock className="h-3.5 w-3.5" /> : <Unlock className="h-3.5 w-3.5" />}
@@ -1347,7 +1502,6 @@ function detailFields(
     return [
       { label: "Type", value: "Artwork reference" },
       { label: "Asset", value: asset?.fileName ?? "Missing asset" },
-      { label: "Position", value: `${formatDecimal(artwork?.x ?? 0)}, ${formatDecimal(artwork?.y ?? 0)} cm` },
       { label: "Size", value: `${formatDecimal(artwork?.width ?? 0)} x ${formatDecimal(artwork?.height ?? 0)} cm` }
     ];
   }
@@ -1356,7 +1510,6 @@ function detailFields(
     return [
       { label: "Type", value: "Reference geometry" },
       { label: "Shape", value: buildArea?.shape ?? "" },
-      { label: "Position", value: `${formatDecimal(buildArea?.x ?? 0)}, ${formatDecimal(buildArea?.y ?? 0)} cm` },
       { label: "Size", value: `${formatDecimal(buildArea?.width ?? 0)} x ${formatDecimal(buildArea?.height ?? 0)} cm` },
       { label: "Points", value: String(buildArea?.points?.length ?? 0) }
     ];
@@ -1366,7 +1519,6 @@ function detailFields(
     return [
       { label: "Type", value: "Effect target zone" },
       { label: "Shape", value: zone?.shape ?? "" },
-      { label: "Position", value: `${formatDecimal(zone?.x ?? 0)}, ${formatDecimal(zone?.y ?? 0)} cm` },
       { label: "Size", value: `${formatDecimal(zone?.width ?? 0)} x ${formatDecimal(zone?.height ?? 0)} cm` },
       { label: "Points", value: String(zone?.points?.length ?? 0) }
     ];
@@ -1374,8 +1526,7 @@ function detailFields(
   if (details.type === "controller") {
     return [
       { label: "Type", value: "Controller" },
-      { label: "Outputs", value: String(designer.controller.dataOutputs) },
-      { label: "Position", value: `${formatDecimal(designer.controller.x)}, ${formatDecimal(designer.controller.y)} cm` }
+      { label: "Outputs", value: String(designer.controller.dataOutputs) }
     ];
   }
   const route = designer.routes[routeIndex];
@@ -1392,14 +1543,12 @@ function detailFields(
 
 function IconToggle({ active, selected, compact, stateTone, label, children, onClick }: { active: boolean; selected?: boolean; compact?: boolean; stateTone?: "danger" | "success"; label: string; children: React.ReactNode; onClick: () => void }) {
   const stateClass = stateTone === "danger"
-    ? "border-red-500 bg-red-50 text-red-700 hover:bg-red-100 dark:bg-red-950/40 dark:text-red-300"
+    ? layerLockStateClass(true)
     : stateTone === "success"
-      ? "border-emerald-500 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:text-emerald-300"
+      ? layerLockStateClass(false)
       : selected
         ? "border-white/20 bg-white/10 text-white hover:bg-white/20"
-        : active
-          ? "border-blue-300 bg-card text-blue-700"
-          : "border-border-2 bg-surface-2 text-muted-foreground hover:bg-card";
+        : layerVisibilityStateClass(active);
   return (
     <button
       type="button"
@@ -1414,6 +1563,18 @@ function IconToggle({ active, selected, compact, stateTone, label, children, onC
       {children}
     </button>
   );
+}
+
+function layerVisibilityStateClass(visible: boolean) {
+  return visible
+    ? "border-blue-300 bg-card text-blue-700 hover:bg-blue-50 dark:bg-blue-950/40 dark:text-blue-300"
+    : "border-border-2 bg-surface-2 text-muted-foreground hover:bg-card";
+}
+
+function layerLockStateClass(locked: boolean) {
+  return locked
+    ? "border-red-500 bg-red-50 text-red-700 hover:bg-red-100 dark:bg-red-950/40 dark:text-red-300"
+    : "border-emerald-500 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:text-emerald-300";
 }
 
 export function LayerToggle({
@@ -1448,7 +1609,7 @@ export function LayerToggle({
         type="button"
         title={layer.visible ? `Hide ${label}` : `Show ${label}`}
         aria-pressed={layer.visible}
-        className={`flex h-6 w-6 items-center justify-center rounded border transition ${layer.visible ? active ? "border-white/60 bg-white/20 text-white" : "border-blue-500 bg-blue-50 text-blue-700" : "border-slate-200 bg-slate-100 text-slate-400"}`}
+        className={`flex h-6 w-6 items-center justify-center rounded border transition ${layerVisibilityStateClass(layer.visible)}`}
         onClick={(event) => {
           event.stopPropagation();
           onChange({ visible: !layer.visible });
@@ -1460,7 +1621,7 @@ export function LayerToggle({
         type="button"
         title={layer.locked ? `Unlock ${label}` : `Lock ${label}`}
         aria-pressed={layer.locked}
-        className={`flex h-6 w-6 items-center justify-center rounded border transition ${layer.locked ? "border-red-500 bg-red-50 text-red-700 hover:bg-red-100" : "border-emerald-500 bg-emerald-50 text-emerald-700 hover:bg-emerald-100"}`}
+        className={`flex h-6 w-6 items-center justify-center rounded border transition ${layerLockStateClass(layer.locked)}`}
         onClick={(event) => {
           event.stopPropagation();
           onChange({ locked: !layer.locked });

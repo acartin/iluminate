@@ -9,6 +9,7 @@ import { HorizontalRuler, VerticalRuler } from "./designer-ui";
 import {
   clamp,
   clampViewport,
+  designerFilletCornerForHit,
   distanceToPolyline,
   nextDesignerItemNumber,
   pickDesignerHit,
@@ -53,7 +54,7 @@ import {
   sameSnapPoint
 } from "./electrical/designer-electrical-engine";
 import { canvasInteractionSnapCm, channelWidthForRouterDiameter, ELECTRICAL_TOOLS, geometryToolAllowedOnLayer, geometryToolPolicy, POINTER_DRAG_THRESHOLD_PX, TERMINAL_SOLDER_CAPTURE_RADIUS_PX } from "./canvas/designer-tool-policy";
-import { routeMatchesSurfaceView, type DesignerActiveLayer, type DesignerDrag, type DesignerMeasurement, type DesignerPrimitiveDraft, type DesignerRouteDraft, type DesignerRouteSurfaceView, type DesignerRouteTerminal, type DesignerSelection, type DesignerShapeDraft, type DesignerTool, type DesignerViewport, type PaperApi, type ResizeHandle } from "./types";
+import { designerConstrainedMoveDelta, designerWholeObjectHit, routeMatchesSurfaceView, type DesignerActiveLayer, type DesignerDrag, type DesignerFilletCornerTarget, type DesignerMeasurement, type DesignerMoveAxis, type DesignerPrimitiveDraft, type DesignerRouteDraft, type DesignerRouteSurfaceView, type DesignerRouteTerminal, type DesignerSelection, type DesignerShapeDraft, type DesignerTool, type DesignerViewport, type PaperApi, type ResizeHandle } from "./types";
 import { DESIGNER_FONT_CATALOG, designerFontUrl } from "@/lib/lighting/designer-font-catalog";
 import { trimDesignerPathAtPoint, type DesignerPathTrimPreview } from "./geometry/designer-path-trim";
 
@@ -91,6 +92,7 @@ export function DesignerStudioCanvas({
   activeLayer,
   tool,
   onToolChange,
+  moveAxis,
   nodeCreationType,
   channelRouterDiameterMm,
   viewport,
@@ -122,6 +124,7 @@ export function DesignerStudioCanvas({
   onInsertChannelPoint,
   onPlaceImage,
   onCreateText,
+  onFilletCorner,
   onInsertRoutePoint,
   onCutRoutePoint,
   onRoutePointDragEnd,
@@ -140,6 +143,7 @@ export function DesignerStudioCanvas({
   activeLayer: DesignerActiveLayer | null;
   tool: DesignerTool;
   onToolChange: (tool: DesignerTool) => void;
+  moveAxis: DesignerMoveAxis;
   nodeCreationType: DesignerPointNodeType;
   channelRouterDiameterMm: number;
   viewport: DesignerViewport;
@@ -171,6 +175,7 @@ export function DesignerStudioCanvas({
   onInsertChannelPoint: (channelId: string, insertIndex: number, point: DesignerPoint) => void;
   onPlaceImage: (point: DesignerPoint) => void;
   onCreateText: (point: DesignerPoint) => void;
+  onFilletCorner: (target: DesignerFilletCornerTarget) => void;
   onInsertRoutePoint: (routeId: string, point: DesignerPoint) => void;
   onCutRoutePoint: (routeId: string, pointIndex: number) => void;
   onRoutePointDragEnd: (routeId: string, pointIndex: number, finalPoint: DesignerPoint, allowSolder: boolean) => void;
@@ -389,6 +394,7 @@ export function DesignerStudioCanvas({
         setShapeDraft(null);
         setPrimitiveDraft(null);
         setMeasurement(null);
+        if (tool === "fillet") onToolChange("select");
         return;
       }
       if (event.key === "Enter" && shapeDraft?.target === "channel" && shapeDraft.points.length >= 2) {
@@ -687,6 +693,14 @@ export function DesignerStudioCanvas({
     }
     if (!drag) return;
     const point = eventPoint(event);
+    const movement = "start" in drag
+      ? designerConstrainedMoveDelta(
+          moveAxis,
+          point.x - drag.start.x,
+          point.y - drag.start.y,
+          tool !== "move" || event.ctrlKey || event.metaKey
+        )
+      : { x: 0, y: 0 };
     if (drag.type === "pan") {
       const scaleX = viewport.width / Math.max(1, canvasRef.current?.clientWidth ?? 1);
       const scaleY = viewport.height / Math.max(1, canvasRef.current?.clientHeight ?? 1);
@@ -703,14 +717,14 @@ export function DesignerStudioCanvas({
         ...designer,
         alignmentMarks: {
           ...drag.original,
-          originXcm: clamp(snapValue(drag.original.originXcm + point.x - drag.start.x, interactionSnapCm), 0, Math.max(0, designer.canvasWidthCm - spacingCm)),
-          originYcm: clamp(snapValue(drag.original.originYcm + point.y - drag.start.y, interactionSnapCm), 0, Math.max(0, designer.canvasHeightCm - spacingCm))
+          originXcm: clamp(snapValue(drag.original.originXcm + movement.x, interactionSnapCm), 0, Math.max(0, designer.canvasWidthCm - spacingCm)),
+          originYcm: clamp(snapValue(drag.original.originYcm + movement.y, interactionSnapCm), 0, Math.max(0, designer.canvasHeightCm - spacingCm))
         }
       });
       return;
     }
     if (drag.type === "artwork-move") {
-      patchArtwork(drag.artworkId, movedShape(drag.original, point.x - drag.start.x, point.y - drag.start.y, interactionSnapCm));
+      patchArtwork(drag.artworkId, movedShape(drag.original, movement.x, movement.y, interactionSnapCm));
       return;
     }
     if (drag.type === "artwork-resize") {
@@ -720,7 +734,7 @@ export function DesignerStudioCanvas({
     if (drag.type === "build-area-move") {
       onChange({
         ...designer,
-        buildAreas: designer.buildAreas.map((buildArea) => (buildArea.id === drag.buildAreaId ? movedShape(drag.original, point.x - drag.start.x, point.y - drag.start.y, interactionSnapCm) : buildArea))
+        buildAreas: designer.buildAreas.map((buildArea) => (buildArea.id === drag.buildAreaId ? movedShape(drag.original, movement.x, movement.y, interactionSnapCm) : buildArea))
       });
       return;
     }
@@ -744,7 +758,7 @@ export function DesignerStudioCanvas({
       return;
     }
     if (drag.type === "work-line-move") {
-      onChange({ ...designer, workLines: designer.workLines.map((line) => line.id === drag.workLineId ? movedWorkLine(drag.original, point.x - drag.start.x, point.y - drag.start.y, interactionSnapCm) : line) });
+      onChange({ ...designer, workLines: designer.workLines.map((line) => line.id === drag.workLineId ? movedWorkLine(drag.original, movement.x, movement.y, interactionSnapCm) : line) });
       return;
     }
     if (drag.type === "work-line-point") {
@@ -754,14 +768,14 @@ export function DesignerStudioCanvas({
     if (drag.type === "controller-move") {
       const nextController = {
         ...designer.controller,
-        x: snapValue(drag.original.x + point.x - drag.start.x, interactionSnapCm),
-        y: snapValue(drag.original.y + point.y - drag.start.y, interactionSnapCm)
+        x: snapValue(drag.original.x + movement.x, interactionSnapCm),
+        y: snapValue(drag.original.y + movement.y, interactionSnapCm)
       };
       onChange(moveControllerWithSolderedCables(designer, drag.original, nextController, drag.originalRoutes, designer.snapCm));
       return;
     }
     if (drag.type === "zone-move") {
-      patchZone(drag.zoneId, movedShape(drag.original, point.x - drag.start.x, point.y - drag.start.y, interactionSnapCm));
+      patchZone(drag.zoneId, movedShape(drag.original, movement.x, movement.y, interactionSnapCm));
       return;
     }
     if (drag.type === "zone-resize") {
@@ -779,7 +793,7 @@ export function DesignerStudioCanvas({
       return;
     }
     if (drag.type === "face-graphic-move") {
-      patchFaceGraphic(drag.elementId, movedShape(drag.original, point.x - drag.start.x, point.y - drag.start.y, interactionSnapCm));
+      patchFaceGraphic(drag.elementId, movedShape(drag.original, movement.x, movement.y, interactionSnapCm));
       return;
     }
     if (drag.type === "face-graphic-resize") {
@@ -801,14 +815,14 @@ export function DesignerStudioCanvas({
         ...designer,
         texts: designer.texts.map((text) => text.id === drag.textId ? {
           ...text,
-          x: snapValue(drag.original.x + point.x - drag.start.x, interactionSnapCm),
-          y: snapValue(drag.original.y + point.y - drag.start.y, interactionSnapCm)
+          x: snapValue(drag.original.x + movement.x, interactionSnapCm),
+          y: snapValue(drag.original.y + movement.y, interactionSnapCm)
         } : text)
       });
       return;
     }
     if (drag.type === "channel-move") {
-      patchChannel(drag.channelId, movedChannel(drag.original, point.x - drag.start.x, point.y - drag.start.y, interactionSnapCm));
+      patchChannel(drag.channelId, movedChannel(drag.original, movement.x, movement.y, interactionSnapCm));
       return;
     }
     if (drag.type === "channel-point") {
@@ -827,7 +841,7 @@ export function DesignerStudioCanvas({
         : interactionSnapCm;
       onChange({
         ...designer,
-        routes: moveRouteWithSolderedTerminals(designer, drag.routeId, drag.original, point.x - drag.start.x, point.y - drag.start.y, routeMovementSnapCm)
+        routes: moveRouteWithSolderedTerminals(designer, drag.routeId, drag.original, movement.x, movement.y, routeMovementSnapCm)
       });
       return;
     }
@@ -985,7 +999,7 @@ export function DesignerStudioCanvas({
 
     const point = eventPoint(event);
     const tolerance = worldHitTolerance(viewport, canvasSize);
-    if (tool === "select" && designer.alignmentMarks.enabled && !designer.alignmentMarks.locked && pointNearAlignmentMarks(designer, point, tolerance)) {
+    if (tool === "move" && designer.alignmentMarks.enabled && !designer.alignmentMarks.locked && pointNearAlignmentMarks(designer, point, tolerance)) {
       onSelect(null);
       event.stopPropagation();
       event.currentTarget.setPointerCapture(event.pointerId);
@@ -1068,7 +1082,32 @@ export function DesignerStudioCanvas({
                 return buildArea?.shape === "polygon" && buildArea.points ? pickShapePointHit(buildArea.id, buildArea, point, tolerance, "build_area_point") : null;
               })()
             : null;
-    const hit = selectedShapePointHit ?? pickDesignerHit(displayedDesigner, activeLayer, point, viewport, canvasSize);
+    const pickedHit = pickDesignerHit(displayedDesigner, activeLayer, point, viewport, canvasSize);
+    const pickedOwner = designerWholeObjectHit(pickedHit);
+    const pickedOwnerIsSelected = Boolean(pickedOwner && (
+      pickedOwner.type === "artwork" && pickedOwner.id === selectedArtworkId
+      || pickedOwner.type === "build_area" && pickedOwner.id === selectedBuildAreaId
+      || pickedOwner.type === "work_line" && pickedOwner.id === selectedWorkLineId
+      || pickedOwner.type === "zone" && pickedOwner.id === selectedZoneId
+      || pickedOwner.type === "face_graphic" && pickedOwner.id === selectedFaceGraphicId
+      || pickedOwner.type === "text" && pickedOwner.id === selectedTextId
+      || pickedOwner.type === "channel" && pickedOwner.id === selectedChannelId
+      || pickedOwner.type === "route" && pickedOwner.id === selectedRouteId
+      || pickedOwner.type === "controller" && selectedController
+    ));
+    const rawHit = (tool === "select" ? selectedShapePointHit : null)
+      ?? (tool === "select" && !pickedOwnerIsSelected ? pickedOwner : pickedHit);
+    const hit = tool === "move" ? designerWholeObjectHit(rawHit) : rawHit;
+    if (tool === "fillet") {
+      const target = designerFilletCornerForHit(designer, hit);
+      const targetsSelectedObject = target && (
+        target.type === "build_area" && target.id === selectedBuildAreaId
+        || target.type === "zone" && target.id === selectedZoneId
+        || target.type === "face_graphic" && target.id === selectedFaceGraphicId
+      );
+      if (target && targetsSelectedObject) onFilletCorner(target);
+      return;
+    }
     if (tool === "pan" || (tool === "select" && !hit)) {
       onSelect(null);
       startPanDrag(event);
@@ -1099,14 +1138,14 @@ export function DesignerStudioCanvas({
       const buildArea = designer.buildAreas.find((entry) => entry.id === hit.id);
       if (!buildArea) return;
       onSelect({ type: "build_area", id: buildArea.id });
-      if (designer.layers.artwork.locked) return;
+      if (tool !== "move" || designer.layers.artwork.locked) return;
       setDrag({ type: "build-area-move", buildAreaId: buildArea.id, start: point, original: buildArea });
     }
     if (hit.type === "artwork") {
       const artwork = designer.artwork.find((entry) => entry.id === hit.id);
       if (!artwork) return;
       onSelect({ type: "artwork", id: artwork.id });
-      if (designer.layers.artwork.locked) return;
+      if (tool !== "move" || designer.layers.artwork.locked) return;
       setDrag({ type: "artwork-move", artworkId: artwork.id, start: point, original: artwork });
     }
     if (hit.type === "artwork_resize") {
@@ -1132,6 +1171,7 @@ export function DesignerStudioCanvas({
       const line = designer.workLines.find((entry) => entry.id === hit.id);
       if (!line) return;
       onSelect({ type: "work_line", id: line.id });
+      if (tool !== "move") return;
       setDrag({ type: "work-line-move", workLineId: line.id, start: point, original: line });
     }
     if (hit.type === "work_line_point") {
@@ -1142,7 +1182,7 @@ export function DesignerStudioCanvas({
       const zone = designer.zones.find((entry) => entry.id === hit.id);
       if (!zone) return;
       onSelect({ type: "zone", id: zone.id });
-      if (designer.layers.zones.locked) return;
+      if (tool !== "move" || designer.layers.zones.locked) return;
       setDrag({ type: "zone-move", zoneId: zone.id, start: point, original: zone });
     }
     if (hit.type === "zone_resize") {
@@ -1161,7 +1201,7 @@ export function DesignerStudioCanvas({
       const element = designer.faceGraphics.find((entry) => entry.id === hit.id);
       if (!element) return;
       onSelect({ type: "face_graphic", id: element.id });
-      if (designer.layers.faceGraphic.locked || element.locked) return;
+      if (tool !== "move" || designer.layers.faceGraphic.locked || element.locked) return;
       setDrag({ type: "face-graphic-move", elementId: element.id, start: point, original: element });
     }
     if (hit.type === "face_graphic_resize") {
@@ -1189,7 +1229,7 @@ export function DesignerStudioCanvas({
       const text = designer.texts.find((entry) => entry.id === hit.id);
       if (!text) return;
       onSelect({ type: "text", id: text.id });
-      if (designer.layers[text.targetLayer].locked || text.locked) return;
+      if (tool !== "move" || designer.layers[text.targetLayer].locked || text.locked) return;
       setDrag({ type: "text-move", textId: text.id, start: point, original: text });
       return;
     }
@@ -1197,7 +1237,7 @@ export function DesignerStudioCanvas({
       const channel = designer.channels.find((entry) => entry.id === hit.id);
       if (!channel) return;
       onSelect({ type: "channel", id: channel.id });
-      if (designer.layers.zones.locked) return;
+      if (tool !== "move" || designer.layers.zones.locked) return;
       setDrag({ type: "channel-move", channelId: channel.id, start: point, original: channel });
     }
     if (hit.type === "channel_point") {
@@ -1209,7 +1249,7 @@ export function DesignerStudioCanvas({
       const route = designer.routes.find((entry) => entry.id === hit.id);
       if (!route) return;
       onSelect({ type: "route", id: route.id });
-      if (designer.layers.strings.locked) return;
+      if (tool !== "move" || designer.layers.strings.locked) return;
       setDrag({ type: "route-move", routeId: route.id, start: point, original: route });
     }
     if (hit.type === "route_point") {
@@ -1233,7 +1273,7 @@ export function DesignerStudioCanvas({
     }
     if (hit.type === "controller") {
       onSelect({ type: "controller", id: designer.controller.id });
-      if (designer.layers.hardware.locked) return;
+      if (tool !== "move" || designer.layers.hardware.locked) return;
       setDrag({ type: "controller-move", start: point, original: designer.controller, originalRoutes: designer.routes });
     }
   }
@@ -1301,7 +1341,7 @@ export function DesignerStudioCanvas({
       <div ref={canvasHostRef} className={`relative min-h-0 min-w-0 overflow-hidden ${colorMode === "night" ? "bg-slate-950" : "bg-slate-100"}`}>
         <canvas
           ref={canvasRef}
-          className={`absolute inset-0 block h-full w-full ${colorMode === "night" ? "bg-slate-950" : "bg-slate-100"} ${drag?.type === "pan" ? "cursor-grabbing" : tool === "pan" ? "cursor-grab" : tool !== "select" && tool !== "cut" ? "cursor-crosshair" : "cursor-default"}`}
+          className={`absolute inset-0 block h-full w-full ${colorMode === "night" ? "bg-slate-950" : "bg-slate-100"} ${drag?.type === "pan" ? "cursor-grabbing" : tool === "pan" ? "cursor-grab" : tool === "move" ? "cursor-move" : tool !== "select" && tool !== "cut" ? "cursor-crosshair" : "cursor-default"}`}
           role="img"
           aria-label="Designer studio canvas"
           onPointerDown={handleCanvasPointerDown}

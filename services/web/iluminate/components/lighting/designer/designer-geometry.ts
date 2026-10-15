@@ -4,6 +4,26 @@ import { filletDesignerGeometry } from "@/lib/lighting/designer-derived-geometry
 import { estimateDesignerTextBounds } from "@/lib/lighting/designer-text-geometry";
 import type { DesignerActiveLayer, DesignerCanvasHit, DesignerFilletCornerTarget, DesignerRouteTerminal, DesignerViewport, ResizeHandle } from "./types";
 
+export function designerProjectionName(sourceName: string) {
+  return sourceName;
+}
+
+export function designerDerivedGeometryName(sourceName: string, operation: "offset" | "fillet", distanceMm?: number) {
+  if (operation !== "offset") return `${sourceName} fillet`;
+  const formattedDistance = Number((distanceMm ?? 0).toFixed(6)).toString();
+  return `${sourceName} offset ${formattedDistance} mm`;
+}
+
+export function updatedDesignerOffsetName(sourceName: string, currentName: string, currentDistanceMm: number | undefined, nextDistanceMm: number) {
+  return currentName === designerDerivedGeometryName(sourceName, "offset", currentDistanceMm)
+    ? designerDerivedGeometryName(sourceName, "offset", nextDistanceMm)
+    : currentName;
+}
+
+export function designerBooleanResultName(sourceName: string, operation: "union" | "subtract" | "intersect" | "exclude") {
+  return `${sourceName} ${operation}`;
+}
+
 export function primitiveShapeBounds(
   start: DesignerPoint,
   end: DesignerPoint,
@@ -455,6 +475,8 @@ export function pickDesignerHit(designer: DesignerForm, activeLayer: DesignerAct
         ? activeLayer === "artwork" || activeLayer === "reference"
         : projection.targetLayer === activeLayer;
       if (!projection.visible || !targetsActiveLayer) continue;
+      const sourceChannel = designer.channels.find((channel) => channel.geometryId === projection.sourceGeometryId);
+      if (sourceChannel && channelContainsPoint(sourceChannel, point, tolerance)) return { type: "projection", id: projection.id };
       const resolved = resolveDesignerProjectionGeometry(designer, projection.id);
       if (!resolved.geometry) continue;
       const shape = designerGeometryAsShape(resolved.geometry);
@@ -787,75 +809,6 @@ export function shapeInsertIndexAtPoint(shape: Pick<DesignerZoneForm, "shape" | 
 
 export function channelWidthCm(channel: DesignerChannelForm) {
   return Math.max(0.1, (Number.isFinite(channel.widthMm) ? channel.widthMm : 10) / 10);
-}
-
-export function channelAllowedBendRadiusMm(channel: Pick<DesignerChannelForm, "widthMm">) {
-  return Math.max(3, channel.widthMm) / 2;
-}
-
-function circumradiusCm(a: DesignerPoint, b: DesignerPoint, c: DesignerPoint) {
-  const ab = Math.hypot(b.x - a.x, b.y - a.y);
-  const bc = Math.hypot(c.x - b.x, c.y - b.y);
-  const ca = Math.hypot(a.x - c.x, a.y - c.y);
-  const twiceArea = Math.abs((b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x));
-  if (ab < 1e-6 || bc < 1e-6 || ca < 1e-6 || twiceArea < 1e-7) return Number.POSITIVE_INFINITY;
-  return (ab * bc * ca) / (2 * twiceArea);
-}
-
-export type ChannelBendMeasurement = {
-  radiusMm: number;
-  requiredRadiusMm: number;
-  point: DesignerPoint;
-  segmentIndex: number;
-};
-
-/** Smallest resolved center-line bend radius and its visible location. */
-export function channelMinimumBendMeasurement(channel: DesignerChannelForm): ChannelBendMeasurement | null {
-  const closed = channelIsClosed(channel);
-  let minimum: ChannelBendMeasurement | null = null;
-  const start = closed ? 0 : 1;
-  const end = closed ? channel.points.length : channel.points.length - 1;
-  channel.points.slice(start, end).forEach((point, offset) => {
-    if (!Number.isFinite(point.radiusMm) || point.radiusMm! <= 0) return;
-    const radiusMm = point.radiusMm!;
-    if (!minimum || radiusMm < minimum.radiusMm) {
-      minimum = { radiusMm, requiredRadiusMm: channelAllowedBendRadiusMm(channel), point: { x: point.x, y: point.y }, segmentIndex: start + offset };
-    }
-  });
-  if (channel.pathMode !== "bezier") return minimum;
-  const segmentCount = closed ? channel.points.length : channel.points.length - 1;
-  for (let segmentIndex = 0; segmentIndex < segmentCount; segmentIndex += 1) {
-    const segmentStart = channel.points[segmentIndex];
-    const segmentEnd = channel.points[(segmentIndex + 1) % channel.points.length];
-    if (!segmentStart.handleOut && !segmentEnd.handleIn) continue;
-    const samples = Array.from({ length: 49 }, (_, index) => cubicBezierPoint(segmentStart, segmentEnd, index / 48));
-    for (let index = 1; index < samples.length - 1; index += 1) {
-      const radiusMm = circumradiusCm(samples[index - 1], samples[index], samples[index + 1]) * 10;
-      if (Number.isFinite(radiusMm) && (!minimum || radiusMm < minimum.radiusMm)) {
-        minimum = {
-          radiusMm,
-          requiredRadiusMm: channelAllowedBendRadiusMm(channel),
-          point: { x: samples[index].x, y: samples[index].y },
-          segmentIndex
-        };
-      }
-    }
-  }
-  return minimum;
-}
-
-/** Smallest resolved center-line bend radius, in millimeters. */
-export function channelMinimumBendRadiusMm(channel: DesignerChannelForm) {
-  return channelMinimumBendMeasurement(channel)?.radiusMm ?? Number.POSITIVE_INFINITY;
-}
-
-export function channelTightBend(channel: DesignerChannelForm) {
-  const measurement = channelMinimumBendMeasurement(channel);
-  return measurement && measurement.radiusMm + 0.05 < measurement.requiredRadiusMm ? measurement : null;
-}
-
-export function channelHasTightBends(channel: DesignerChannelForm) {
-  return channelTightBend(channel) !== null;
 }
 
 export function channelIsClosed(channel: DesignerChannelForm) {

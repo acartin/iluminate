@@ -170,13 +170,13 @@ function collectFabricationPaths(designer: DesignerForm, fontDataById: Map<strin
     };
   };
   if (enabled("reference")) {
-    designer.buildAreas.forEach((item) => paths.push({ id: item.id, name: item.name, layer: "reference", groupName: "REFERENCE", geometry: nativeGeometry(item, "geometry_build_area") }));
+    designer.buildAreas.filter((item) => item.visible !== false).forEach((item) => paths.push({ id: item.id, name: item.name, layer: "reference", groupName: "REFERENCE", geometry: nativeGeometry(item, "geometry_build_area") }));
   }
   if (enabled("zones")) {
-    designer.zones.forEach((item) => paths.push({ id: item.id, name: item.name, layer: "zones", groupName: "DIFFUSORS_ZONES", geometry: nativeGeometry(item, "geometry_zone") }));
+    designer.zones.filter((item) => item.visible !== false).forEach((item) => paths.push({ id: item.id, name: item.name, layer: "zones", groupName: "DIFFUSORS_ZONES", geometry: nativeGeometry(item, "geometry_zone") }));
   }
   if (enabled("channels")) {
-    designer.channels.forEach((channel) => {
+    designer.channels.filter((channel) => channel.visible !== false).forEach((channel) => {
       const geometry = channel.geometryId ? canonical.get(channel.geometryId) : null;
       if (!geometry?.points?.length && channel.points.length < 2) {
         issues.push({ severity: "error", code: "empty-toolpath", objectId: channel.id, message: `${channel.name} cannot produce a router centerline toolpath.` });
@@ -192,7 +192,7 @@ function collectFabricationPaths(designer: DesignerForm, fontDataById: Map<strin
     });
   }
   if (enabled("faceGraphic")) {
-    designer.faceGraphics.forEach((item) => paths.push({
+    designer.faceGraphics.filter((item) => item.visible !== false).forEach((item) => paths.push({
       id: item.id,
       name: item.name,
       layer: "faceGraphic",
@@ -202,7 +202,7 @@ function collectFabricationPaths(designer: DesignerForm, fontDataById: Map<strin
       filterColor: normalizeColor(item.filterColor)
     }));
   }
-  designer.derivedGeometries.filter((operation) => enabled(operation.targetLayer)).forEach((operation) => {
+  designer.derivedGeometries.filter((operation) => enabled(operation.targetLayer) && operation.visible !== false).forEach((operation) => {
     const resolved = resolveDesignerDerivedGeometry(designer, operation.id);
     if (!resolved.geometry) {
       issues.push({ severity: "error", code: `derived-${resolved.issue ?? "broken"}`, objectId: operation.id, message: `${operation.name} cannot be resolved for fabrication.` });
@@ -221,7 +221,7 @@ function collectFabricationPaths(designer: DesignerForm, fontDataById: Map<strin
     const resolved = resolveDesignerProjectionGeometry(designer, projection.id);
     if (resolved.issue) issues.push({ severity: "warning", code: `projection-${resolved.issue}`, objectId: projection.id, message: `${projection.name} is a broken construction reference and was excluded.` });
   });
-  designer.texts.filter((text) => enabled(text.targetLayer)).forEach((text) => {
+  designer.texts.filter((text) => enabled(text.targetLayer) && text.visible !== false).forEach((text) => {
     const resource = designerFontResource(text.fontId);
     const fontData = fontDataById.get(text.fontId);
     if (!resource || resource.hash !== text.fontHash || !fontData) {

@@ -13,6 +13,7 @@ const buttonVariants = cva(
       },
       variant: {
         default: "bg-primary text-primary-foreground shadow-[0_1px_2px_var(--shadow-color)] hover:bg-[var(--primary-hover)]",
+        destructive: "border border-destructive bg-destructive text-destructive-foreground shadow-[0_1px_2px_var(--shadow-color)] hover:bg-destructive/90",
         outline: "border border-border-2 bg-card text-ink-secondary hover:border-border-strong hover:bg-surface-hover hover:text-foreground data-[active=true]:border-primary data-[active=true]:bg-surface-selected data-[active=true]:text-foreground",
         chip: "h-control-sm rounded-[6px] border border-border-2 bg-card px-3 text-label font-medium text-ink-secondary hover:border-border-strong hover:bg-surface-hover hover:text-foreground data-[active=true]:border-primary data-[active=true]:bg-surface-selected data-[active=true]:text-foreground",
         ghost: "border border-transparent bg-transparent px-2 text-ink-secondary hover:bg-surface-hover hover:text-foreground data-[active=true]:border-primary data-[active=true]:bg-surface-selected data-[active=true]:text-foreground"

@@ -16,7 +16,8 @@ import type {
   DesignerZoneForm
 } from "@/lib/lighting/partitura-model";
 
-export type DesignerTool = "select" | "path_trim" | "measure" | "work_line" | "image_place" | "build_area_rect" | "build_area_ellipse" | "build_area_polygon" | "build_area_bezier" | "reference_text" | "zone_rect" | "zone_ellipse" | "zone_polygon" | "zone_bezier" | "zone_text" | "channel_bezier" | "face_graphic_rect" | "face_graphic_ellipse" | "face_graphic_polygon" | "face_graphic_bezier" | "face_graphic_text" | "led_string" | "data_cable" | "cut" | "pan";
+export type DesignerTool = "select" | "move" | "path_trim" | "fillet" | "measure" | "work_line" | "image_place" | "build_area_rect" | "build_area_ellipse" | "build_area_polygon" | "build_area_bezier" | "reference_text" | "zone_rect" | "zone_ellipse" | "zone_polygon" | "zone_bezier" | "zone_text" | "channel_bezier" | "face_graphic_rect" | "face_graphic_ellipse" | "face_graphic_polygon" | "face_graphic_bezier" | "face_graphic_text" | "led_string" | "data_cable" | "cut" | "pan";
+export type DesignerMoveAxis = "x" | "y";
 export type DesignerFilletCornerTarget = { type: "build_area" | "zone" | "channel" | "face_graphic"; id: string; cornerIndex: number };
 export type DesignerRouteTerminal = { routeId: string; pointIndex: number };
 export type DesignerSelection =
@@ -129,6 +130,24 @@ export type DesignerCanvasHit =
   | { type: "route_point"; id: string; pointIndex: number }
   | { type: "controller"; id: string }
   | null;
+
+export function designerConstrainedMoveDelta(axis: DesignerMoveAxis, deltaX: number, deltaY: number, unconstrained: boolean) {
+  if (unconstrained) return { x: deltaX, y: deltaY };
+  return axis === "x" ? { x: deltaX, y: 0 } : { x: 0, y: deltaY };
+}
+
+/** Converts node/handle hits into their owner so Move never edits geometry. */
+export function designerWholeObjectHit(hit: DesignerCanvasHit): DesignerCanvasHit {
+  if (!hit) return null;
+  if (hit.type === "artwork_resize") return { type: "artwork", id: hit.id };
+  if (hit.type === "build_area_point" || hit.type === "build_area_handle" || hit.type === "build_area_resize") return { type: "build_area", id: hit.id };
+  if (hit.type === "work_line_point") return { type: "work_line", id: hit.id };
+  if (hit.type === "zone_point" || hit.type === "zone_handle" || hit.type === "zone_resize") return { type: "zone", id: hit.id };
+  if (hit.type === "face_graphic_point" || hit.type === "face_graphic_resize") return { type: "face_graphic", id: hit.id };
+  if (hit.type === "channel_point") return { type: "channel", id: hit.id };
+  if (hit.type === "route_point") return { type: "route", id: hit.id };
+  return hit;
+}
 export type DesignerRouteSummary = { lengthCm: number; pixels: number; leds: number };
 export type PaperApi = typeof import("paper");
 export type PaperPoint = InstanceType<PaperApi["Point"]>;

@@ -20,7 +20,7 @@ export type DesignerContour = {
   closed: true;
 };
 
-export const DESIGNER_SCHEMA_VERSION = 11 as const;
+export const DESIGNER_SCHEMA_VERSION = 12 as const;
 export const DEFAULT_CHANNEL_ROUTER_DIAMETER_MM = 10;
 
 /**
@@ -308,6 +308,12 @@ export type DesignerAlignmentMarksForm = {
   spacingMm: number;
 };
 
+export type DesignerFaceGraphicVisibilityPreset = {
+  id: string;
+  name: string;
+  visibleObjectKeys: string[];
+};
+
 export type DesignerForm = {
   /** Missing on legacy documents; normalization always writes the current version. */
   designerSchemaVersion?: typeof DESIGNER_SCHEMA_VERSION;
@@ -316,6 +322,8 @@ export type DesignerForm = {
   projections: DesignerProjection[];
   derivedGeometries: DesignerDerivedGeometry[];
   texts: DesignerText[];
+  /** Named snapshots of Face Graphic object-eye states. */
+  faceGraphicVisibilityPresets: DesignerFaceGraphicVisibilityPreset[];
   canvasWidthCm: number;
   canvasHeightCm: number;
   addressablePixelsPerMeter: number;
@@ -329,6 +337,10 @@ export type DesignerForm = {
   fabricationCutterUnit: "mm" | "in" | "cm";
   /** Transitional schema-9 Fillet value retained only for saved-document compatibility. */
   filletRadiusMm: number;
+  /** Signed distance reused by subsequent native Offset Path operations. */
+  offsetDistanceMm: number;
+  /** Join style reused by subsequent native Offset Path operations. */
+  offsetJoin: "round" | "miter" | "bevel";
   /** Router-bit diameter used as the width of newly traced neon-flex channels. */
   channelRouterDiameterMm: number;
   alignmentMarks: DesignerAlignmentMarksForm;
@@ -609,6 +621,8 @@ export function createDefaultDesigner(): DesignerForm {
     fabricationCutterDiameterMm: 3.175,
     fabricationCutterUnit: "mm",
     filletRadiusMm: 3.175,
+    offsetDistanceMm: 2,
+    offsetJoin: "miter",
     channelRouterDiameterMm: DEFAULT_CHANNEL_ROUTER_DIAMETER_MM,
     alignmentMarks: { enabled: false, locked: false, originXcm: 2, originYcm: 2, spacingMm: 100 },
     rulerVisible: true,
@@ -620,6 +634,7 @@ export function createDefaultDesigner(): DesignerForm {
     projections: [],
     derivedGeometries: [],
     texts: [],
+    faceGraphicVisibilityPresets: [],
     buildAreas: [
       { id: "build_area_main", name: "Main Sign Face", shape: "rect", x: 40, y: 0, width: 120, height: 40, visible: true, locked: false, opacity: 1 },
       { id: "build_area_logo", name: "Round Logo Reference", shape: "ellipse", x: 108, y: 2, width: 18, height: 18, visible: true, locked: false, opacity: 0.9 },
@@ -720,6 +735,8 @@ function normalizeDesigner(designer?: DesignerForm, compiledLayout?: PartituraDo
     fabricationCutterDiameterMm: positiveNumber(designer.fabricationCutterDiameterMm, fallback.fabricationCutterDiameterMm),
     fabricationCutterUnit: designer.fabricationCutterUnit === "in" || designer.fabricationCutterUnit === "cm" ? designer.fabricationCutterUnit : "mm",
     filletRadiusMm: positiveNumber(designer.filletRadiusMm, positiveNumber(designer.fabricationCutterDiameterMm, fallback.fabricationCutterDiameterMm) / 2),
+    offsetDistanceMm: finiteNumber(designer.offsetDistanceMm, fallback.offsetDistanceMm),
+    offsetJoin: designer.offsetJoin === "round" || designer.offsetJoin === "bevel" ? designer.offsetJoin : "miter",
     channelRouterDiameterMm: Math.max(3, Math.min(20, positiveNumber(designer.channelRouterDiameterMm, fallback.channelRouterDiameterMm))),
     alignmentMarks: {
       enabled: designer.alignmentMarks?.enabled === true,
@@ -737,6 +754,7 @@ function normalizeDesigner(designer?: DesignerForm, compiledLayout?: PartituraDo
     projections: normalizeDesignerProjections(designer.projections),
     derivedGeometries: normalizeDesignerDerivedGeometries(designer.derivedGeometries),
     texts: normalizeDesignerTexts(designer.texts),
+    faceGraphicVisibilityPresets: normalizeFaceGraphicVisibilityPresets(designer.faceGraphicVisibilityPresets),
     buildAreas: normalizeBuildAreas(designer, fallback.buildAreas),
     controller: normalizeController(designer.controller, fallback.controller),
     zones: Array.isArray(designer.zones) ? designer.zones.map(normalizeDesignerZone) : fallback.zones,
@@ -1253,6 +1271,22 @@ function normalizeDesignerTexts(texts: DesignerText[] | undefined): DesignerText
       locked: entry.locked === true,
       opacity: clampNumber(finiteNumber(entry.opacity, 1), 0.05, 1)
     }];
+  });
+}
+
+function normalizeFaceGraphicVisibilityPresets(presets: DesignerFaceGraphicVisibilityPreset[] | undefined): DesignerFaceGraphicVisibilityPreset[] {
+  if (!Array.isArray(presets)) return [];
+  const usedIds = new Set<string>();
+  return presets.flatMap((preset, index) => {
+    if (!preset) return [];
+    const id = typeof preset.id === "string" && preset.id.trim() ? preset.id.trim() : `face_graphic_visibility_${index + 1}`;
+    if (usedIds.has(id)) return [];
+    usedIds.add(id);
+    const name = typeof preset.name === "string" && preset.name.trim() ? preset.name.trim() : `Preset ${index + 1}`;
+    const visibleObjectKeys = Array.isArray(preset.visibleObjectKeys)
+      ? Array.from(new Set(preset.visibleObjectKeys.filter((key): key is string => typeof key === "string" && /^(faceGraphic|projection|derived|text):[^:]+$/.test(key))))
+      : [];
+    return [{ id, name, visibleObjectKeys }];
   });
 }
 

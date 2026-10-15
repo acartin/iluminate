@@ -47,6 +47,7 @@ export type DesignerNativeFilletTarget = {
 export type DesignerNativeFilletResult = {
   designer: DesignerForm;
   applied: boolean;
+  appliedRadiusMm?: number;
   issue: "missing-source" | "collapsed" | "invalid-topology" | null;
   warnings: string[];
 };
@@ -92,5 +93,5 @@ export function applyDesignerNativeFillet(
             } : entry)
           }
         : { ...canonical, faceGraphics: canonical.faceGraphics.map((entry) => entry.id === target.id ? { ...entry, ...shape } : entry) };
-  return { designer: canonicalizeDesignerGeometry(nextDesigner), applied: true, issue: result.issue, warnings: result.warnings };
+  return { designer: canonicalizeDesignerGeometry(nextDesigner), applied: true, appliedRadiusMm: result.appliedFilletRadiiMm?.[0], issue: result.issue, warnings: result.warnings };
 }

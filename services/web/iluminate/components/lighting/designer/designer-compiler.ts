@@ -1,5 +1,5 @@
 import { DESIGNER_GLOBAL_LIGHT_SOURCE_TARGETS, type DesignerForm, type DesignerPoint, type DesignerRouteForm, type PartituraDocument } from "@/lib/lighting/partitura-model";
-import { channelContainsPoint, channelWidthCm, pointInsideDesignerShape, pointNearShapeStroke, validateDesignerGeometryTopology } from "./geometry/designer-geometry-engine";
+import { channelContainsPoint, pointInsideDesignerShape, pointNearShapeStroke, validateDesignerGeometryTopology } from "./geometry/designer-geometry-engine";
 import { controllerPortPoint, sameTerminalPoint, sampleRouteLedDots } from "./electrical/designer-electrical-engine";
 
 export type CompiledDesignerLayout = {
@@ -105,15 +105,6 @@ export function compileDesignerLayout(designer: DesignerForm): CompiledDesignerL
   });
   const allZones = [...zones, ...channelZones, ...sourceZones];
   allZones.filter((zone) => !zone.pixelIds.length).forEach((zone) => warnings.push(`${zone.name} contains no mapped pixels.`));
-  designer.channels.forEach((channel) => {
-    const halfWidthCm = channelWidthCm(channel) / 2;
-    channel.points.forEach((point, index) => {
-      const radiusCm = (point.radiusMm ?? 0) / 10;
-      if (radiusCm > 0 && radiusCm < halfWidthCm) {
-        warnings.push(`${channel.name}: fillet at node ${index + 1} (${point.radiusMm} mm) is smaller than half the channel width (${(halfWidthCm * 10).toFixed(1)} mm); the inner edge may pinch.`);
-      }
-    });
-  });
   const globalLightSourceGroups = DESIGNER_GLOBAL_LIGHT_SOURCE_TARGETS.flatMap((target) => {
     const members = designer.lightSources
       .filter((source) => source.enabled && source.stringIds.length > 0 && source.mode === target.mode)

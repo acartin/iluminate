@@ -80,14 +80,16 @@ this geometric node-type contract.
 
 With an object selected it shows:
 
-- object name/identity;
-- only properties relevant to that object or selected node;
+- only properties relevant to that object or selected node, without repeating
+  its name, active category or locked status;
 - contextual actions such as Lighting, Configure source, Copy, Paste and
   Delete.
 
 Examples:
 
-- Zone: shape, position/size and selected-node fields.
+- Zone: selected-node type only. Shape conversion and width/height stay out of
+  the contextual bar along with element and node X/Y coordinates; canvas
+  manipulation is the geometry editing surface.
 - Channel: router-bit diameter, open/closed path, ends and node type. Channel
   node coordinates stay off the contextual bar. When a corner node is selected,
   one numeric `Fillet` field in millimeters edits that node directly and redraws
@@ -97,16 +99,20 @@ Examples:
   fractional-inch diameters; every option shows both units. The diameter is the
   live trace width and the width of the created channel. Millimeters remain the
   canonical stored value.
+  Manual tracing remains the primary interaction. When geometric profiles were
+  selected before activating Channel, the same context also offers `Left edge`,
+  `Center` or `Right edge` alignment and `Generate Channel`. Endpoint-
+  connected profiles are ordered into independent chains; branching selections
+  are rejected with guidance to trace each physical route manually. Generated
+  Channels are independent editable copies. A Channel generated from one Zone
+  inherits that Zone's name. The most recently selected router-bit diameter is
+  persisted and reused by both manual and generated Channels.
   New open channels use round ends with an implicit radius of half that
   diameter; a flat end remains an explicit per-channel choice.
-  The allowed center-line radius is half the router-bit diameter. A tight curve
-  keeps its normal channel styling and receives a local red marker showing the
-  measured and required radii. Bezier handles remain freely draggable;
-  validation is guidance rather than a drag constraint and exposes no automatic
-  adjustment command. An intentional
-  corner/straight discontinuity is machinable and is excluded from continuous-
-  curve radius warnings; the designer may apply the shared `Fillet` explicitly.
-- Artwork/reference: position, size, shape and node fields. A selected SVG
+  Bezier handles remain freely draggable. Designer does not estimate or warn
+  about Channel bend radii; the operator may apply `Fillet` explicitly where a
+  manufactured corner needs it.
+- Artwork/reference: size, shape and node-type fields. A selected SVG
   Artwork exposes `Create Zones`; it creates one editable Zone per closed SVG
   filled region at the Artwork's displayed position and scale, separates
   disconnected subpaths into independently selectable Zones, preserves nested
@@ -116,23 +122,39 @@ Examples:
 - Route: route type and editing actions. Delete removes the selected route even
   when it is the final route in the document; an empty Strings collection is a
   valid authored state.
-- Controller: position and port count.
+- Controller: port count.
 - Light source: source type and Configure source.
-- Face Graphic: pass mode, translucent filter color, shape, geometry/node
-  fields and object lock.
-- Projected geometry: linked/broken status, source selector, `Break Link` and
-  Delete. It has no editable shape or node fields while linked.
-- Derived offset/fillet geometry: a fixed-width status indicator, source
-  selector, signed offset distance plus join control or fillet radius plus
-  corner list, `Break Link` and Delete. Warnings use the same status slot and
-  must not insert text capsules that shift numeric controls while editing. It
-  remains read-only on canvas while live.
+- Face Graphic: pass mode, translucent filter color and selected-node type.
+  Locking remains exclusively in Layers; shape conversion, width/height and
+  compound-contour summary stay out of the contextual bar.
+- Legacy projected geometry: linked/broken status, source selector and Delete.
+  It has no editable shape or node fields while linked. New `Project Geometry`
+  operations do not create linked projection records.
+- Legacy derived offset/fillet geometry: a fixed-width status indicator,
+  source selector, signed offset distance plus join control or fillet radius
+  plus corner list and Delete. Only a legacy live Fillet retains `Break Link`;
+  new offsets are native and independent from creation. Warnings use the same
+  status slot and must not insert text capsules that shift numeric controls
+  while editing. A newly generated native offset may be recalculated directly
+  by its distance/join controls while it remains selected; this does not persist
+  a source link. Legacy derived results remain read-only on canvas while live.
 - Editable text: content, controlled font, size/tracking in millimeters, line
-  height, alignment, X/Y and `Convert to paths`.
+  height, alignment and `Convert to paths`.
 - Work line: optional organizational owner (`Global`, `Artwork`, `Diffusors` or
-  `Face Graphic`) and selected-node X/Y. Nodes and the complete open polyline
-  remain directly movable; Delete removes a selected node when at least two
-  nodes remain, or removes the selected line.
+  `Face Graphic`) and selected-node identity. Nodes and the complete open
+  polyline remain directly movable; Delete removes a selected node when at
+  least two nodes remain, or removes the selected line.
+
+Delete is one consistently destructive red action at the end of the contextual
+bar. Selecting a node reuses that same action instead of inserting a second
+Delete button beside node properties. Other destructive controls in Designer
+use the same shared destructive button treatment.
+
+Zone, Channel and Face Graphic objects selected from Layers reuse the exact
+Artwork `Copy` and `Delete` buttons at the end of all contextual controls.
+Those object-level actions remain available when the category or Face Graphic
+object is locked; locking prevents geometry edits and movement, not explicit
+copying or deletion from the contextual bar.
 
 The contextual bar may scroll horizontally when an object genuinely has many
 properties. It must not absorb document-wide configuration merely because
@@ -156,6 +178,12 @@ on the canvas.
 Always-available tools:
 
 - Select.
+- Move. It moves the complete object without exposing node or resize-handle
+  editing. Its contextual control fixes movement to X or Y; holding Ctrl (or
+  Command on macOS) temporarily releases the constraint and permits movement
+  on both axes. Escape returns to Select. Select never starts whole-object
+  movement, and an initial object click cannot accidentally drag one of its
+  nodes or resize handles.
 - Pan.
 - Measure.
 - Work line. It creates a straight, open, dashed construction polyline and
@@ -173,6 +201,15 @@ Its Layers category header owns a transient black/white vinyl-preview toggle:
 opaque and uncovered face material render black, while clear and translucent
 regions render white. The mode remains local to Design, does not persist or
 affect Compile/export/Animate, and keeps selected geometry and nodes visible.
+When expanded, Face Graphic also exposes one compact visibility-preset row.
+`All on` and `All off` apply immediately; named presets can be created from the
+current object-eye state, reapplied, updated and deleted. Applying a preset only
+changes individual Face Graphic eyes (native objects, projections, derived
+profiles and compatible text). It does not run export or change geometry.
+
+Across the entire Layers panel, visibility and lock controls use one state
+language: visible is blue, hidden is neutral gray, locked is red and unlocked
+is green. The same colors apply to category headers and object rows.
 
 In Animate `As built`, the first Face Graphic object in layer order is the
 frontmost physical filter. Defined `clear`, `opaque` and `translucent` regions
@@ -199,11 +236,19 @@ may immediately participate in Project Geometry, booleans, offsets and fillets.
 
 `Project Geometry` is a contextual object command, not a rail tool. With a
 geometric source selected, the contextual bar exposes a target selector
-(`Face Graphic`, `Diffusors` or `Reference`) and the command. A linked
-projection is cyan/dashed, selectable and read-only. Its contextual controls
-allow changing the source to repair a broken reference or using `Break Link`
-to create an independent native object in its target layer. Cyclic references
-must never be accepted.
+(`Face Graphic`, `Diffusors` or `Reference`) and the command. It immediately
+creates an independent native object in the target layer; there is no new live
+link or `Break Link` step. The active layer, selected source and contextual
+focus remain unchanged so the operator can project several objects quickly.
+Legacy linked projections remain readable and repairable through their source
+selector.
+
+A selected Channel uses this same `Project Geometry` command. The original
+Channel remains the editable and exportable centerline object; the generated
+native object receives the complete swept perimeter, including width, ends and
+corner fillets. Projecting to Face Graphic therefore creates the second,
+independently visible perimeter object without adding another command or
+changing the current focus.
 
 Boolean geometry is also contextual, not a rail mode. Select the first/base
 profile normally, then use Shift/Ctrl/Command-click to add profiles from the
@@ -213,12 +258,13 @@ selection from the first selection. The command produces one selected native
 object and is one Undo/Redo transaction. A linked projection may participate as
 a construction operand without being consumed.
 
-Compound results display `Compound · N contours · even-odd`. Their holes must
-remain visibly empty and must not receive canvas hits or zone pixels. The whole
-profile may be moved/resized. When selected, every contour exposes its native
-nodes; node selection uses one stable flattened index internally while the UI
-identifies the local contour and point. Moving a node or Bezier handle updates
-only that contour and preserves the other contours and the compound fill.
+Compound results do not add a contour-summary capsule to the contextual bar.
+Their holes must remain visibly empty and must not receive canvas hits or zone
+pixels. The whole profile may be moved/resized. When selected, every contour
+exposes its native nodes; node selection uses one stable flattened index
+internally while the UI identifies the local contour and point. Moving a node
+or Bezier handle updates only that contour and preserves the other contours and
+the compound fill.
 Node hit-testing is screen-sized and always chooses the nearest visible node,
 with the currently selected object's nodes taking precedence over overlapping
 objects. A double-click on or near a node selects it; it must not insert another
@@ -235,23 +281,36 @@ becomes compound. Invalid/open outcomes must not be committed. The same
 interaction applies to Reference, Zones and Face Graphic and preserves native
 Bezier segments.
 
-`Offset Path` and whole-profile `Fillet` are contextual object commands, not
-permanent rail modes. Each creates a new amber live result in the same target
-layer. Offset distance is signed and uses millimeters, with Round, Miter or
-Bevel joins and a Miter Limit only when applicable. A live Fillet result exposes
-its radius and corner selection in the same contextual bar and recalculates
-immediately when either changes. Channels are the semantic center-line
-exception: select a canonical Channel corner node and edit its inline `Fillet`
-radius directly. The Channel redraws on every numeric change, preserves the
-original anchor and creates no derived profile. A zero radius removes the
-fillet. Neither workflow takes its radius from the cutter or router-bit
-diameter.
+`Offset Path` is a contextual object command that creates a new independent
+native result in the same target layer. Its signed millimeter distance and
+Round, Miter or Bevel join are selected before executing the command. The last
+distance and join are persisted with the Designer document and reused by the
+next operation. It creates no live link and requires no `Break Link` step.
+For native Reference, Zone and Face Graphic paths, the existing
+`Fillet` command instead activates direct node editing: the contextual radius
+stays active while each corner click mutates that same native object, remains
+active for subsequent nodes and records one Undo step per click. If a corner
+node is already selected, activating `Fillet` applies the current radius to it
+immediately and keeps that node visibly selected. Changing the radius then
+recalculates that same selected corner from its
+pre-fillet geometry instead of stacking another fillet; zero restores the
+corner. `Esc` exits.
+There is no preview, Apply step, derived object or Break Link in this native
+workflow. If the requested radius does not fit, Designer applies the greatest
+smaller radius that remains tangent to both adjacent straight or Bezier
+segments and reports requested versus applied values. A node without a usable
+tangent solution remains unchanged. Linked/read-only geometry retains the live
+derived Fillet workflow until materialized. Channels remain the semantic
+center-line exception: select a canonical Channel corner node and edit its
+inline `Fillet` radius directly. The Channel redraws on every numeric change,
+preserves the original anchor and creates no derived profile. A zero radius
+removes the fillet. Neither workflow takes its radius from the cutter or
+router-bit diameter.
 
-The Layers panel shows derived profiles in their persisted target category.
-Broken, cyclic, collapsed and invalid-topology results remain selectable and
-must show a repairable status. Radius clamps and join fallbacks show warnings.
-`Break Link` converts the resolved result to independent native geometry; it is
-disabled while no valid result exists.
+The Layers panel shows legacy derived profiles in their persisted target
+category. Broken, cyclic, collapsed and invalid-topology results remain
+selectable and must show a repairable status. Radius clamps and join fallbacks
+show warnings. `Break Link` remains only for valid legacy live Fillet results.
 
 A live derived profile whose target is Face Graphic exposes the same `Pass` and
 translucent `Filter color` controls as a native Face Graphic object. These are
@@ -288,13 +347,19 @@ Category activation must be immediate and deterministic:
   activation.
 - Hidden layers and hidden objects are not selectable.
 - Locked layers remain selectable for identification and inspection, but no
-  geometry, property, delete or drawing mutation is allowed. The contextual
-  bar must identify the selection as `Locked · inspect only`. Lock means
-  immutable, not invisible and not uninspectable.
+  geometry, property or drawing mutation is allowed. Layers communicates the
+  locked state; the contextual bar does not add a locked-status capsule. Lock
+  means immutable, not invisible and not uninspectable. Explicit contextual
+  Copy/Delete exceptions are defined above for Zone, Channel and Face Graphic.
 - Zone and Channel rows are ordered front-to-back: the first row is the topmost
   object and wins selection when objects of the same kind overlap. Channels
   are foreground diffuser paths and therefore win over an overlapping Zone.
   Dragging a row changes this persisted drawing and hit-test order.
+- The Diffusors `Zones` and `Channels` folder headers each expose a master eye.
+  Switching it writes the same visibility state to every native object in that
+  folder in one transaction, so all child eyes immediately match. The
+  `Zones Groups` folder remains organizational because groups have no canvas
+  geometry or independent visibility state.
 
 Canvas selection and Layers navigation are one synchronized state:
 

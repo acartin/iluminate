@@ -4,6 +4,7 @@ export type DesignerDerivedOperationResult = {
   geometry: DesignerGeometry | null;
   issue: "collapsed" | "invalid-topology" | null;
   warnings: string[];
+  appliedFilletRadiiMm?: number[];
 };
 
 export function applyDesignerDerivedOperation(source: DesignerGeometry, operation: DesignerDerivedGeometry, resultId = operation.geometryId): DesignerDerivedOperationResult {
@@ -59,6 +60,7 @@ export function filletDesignerGeometry(
   if (!contours.length || radiusCm < 1e-7) return { geometry: cloneGeometry(source, resultId), issue: null, warnings: [] };
   if (source.kind === "ellipse") return { geometry: cloneGeometry(source, resultId), issue: null, warnings: ["Ellipses have no discrete corners to fillet."] };
   const warnings = new Set<string>();
+  const appliedFilletRadiiMm: number[] = [];
   let flatCornerIndex = 0;
   const selected = cornerIndices?.length ? new Set(cornerIndices.map((index) => Math.max(0, Math.round(index)))) : null;
   const resultContours = contours.map((contour) => {
@@ -72,9 +74,10 @@ export function filletDesignerGeometry(
     const filleted = curvedSelection
       ? filletBezierCorner(contour.points, selectedLocalIndices[0], closed, radiusCm, contourStartIndex + selectedLocalIndices[0], warnings)
       : filletContour(contour, closed, radiusCm, selected, (() => { let index = contourStartIndex; return () => index++; })(), warnings);
+    appliedFilletRadiiMm.push(...filleted.appliedRadiiCm.map((radius) => radius * 10));
     return {
-      points: filleted,
-      pathMode: filleted.some((point) => point.handleIn || point.handleOut) ? "bezier" as const : contour.pathMode,
+      points: filleted.points,
+      pathMode: filleted.points.some((point) => point.handleIn || point.handleOut) ? "bezier" as const : contour.pathMode,
       closed: true as const
     };
   });
@@ -82,7 +85,7 @@ export function filletDesignerGeometry(
   if (resultContours.some((contour) => contour.points.length < (closed ? 3 : 2) || polylineSelfIntersects(flattenContour(contour, closed), closed))) {
     return { geometry: null, issue: "invalid-topology", warnings: [...Array.from(warnings), "Fillet produced invalid topology."] };
   }
-  return { geometry: geometryFromContours(resultId, resultContours, source.closed !== false), issue: null, warnings: Array.from(warnings) };
+  return { geometry: geometryFromContours(resultId, resultContours, source.closed !== false), issue: null, warnings: Array.from(warnings), appliedFilletRadiiMm };
 }
 
 /** Structural eligibility only; the configured radius is validated when the operator clicks. */
@@ -114,7 +117,7 @@ function cornerHasCurvedSegment(points: DesignerPoint[], index: number, closed: 
 }
 
 function filletBezierCorner(points: DesignerPoint[], index: number, closed: boolean, radius: number, cornerIndex: number, warnings: Set<string>) {
-  if (!closed && (index === 0 || index === points.length - 1)) return points.map(clonePoint);
+  if (!closed && (index === 0 || index === points.length - 1)) return { points: points.map(clonePoint), appliedRadiiCm: [] };
   const previousIndex = (index - 1 + points.length) % points.length;
   const nextIndex = (index + 1) % points.length;
   const incoming = cubicForSegment(points[previousIndex], points[index]);
@@ -124,7 +127,7 @@ function filletBezierCorner(points: DesignerPoint[], index: number, closed: bool
   const turn = Math.acos(clamp(dot(incomingTangent, outgoingTangent), -1, 1));
   if (turn < 1e-3 || Math.PI - turn < 1e-3) {
     warnings.add(`Fillet ${cornerIndex + 1} was skipped because its Bezier tangents do not form a usable corner.`);
-    return points.map(clonePoint);
+    return { points: points.map(clonePoint), appliedRadiiCm: [] };
   }
   const cross = incomingTangent.x * outgoingTangent.y - incomingTangent.y * outgoingTangent.x;
   let effectiveRadius = radius;
@@ -145,7 +148,7 @@ function filletBezierCorner(points: DesignerPoint[], index: number, closed: bool
     }
     if (!solution || effectiveRadius < 1e-5) {
       warnings.add(`Fillet ${cornerIndex + 1} was skipped because no usable radius fits the adjacent Bezier segments.`);
-      return points.map(clonePoint);
+      return { points: points.map(clonePoint), appliedRadiiCm: [] };
     }
     warnings.add(`Fillet ${cornerIndex + 1} was clamped to fit its neighboring legs.`);
   }
@@ -159,7 +162,7 @@ function filletBezierCorner(points: DesignerPoint[], index: number, closed: bool
   arc[0] = withHandle(arc[0], "handleIn", subtract(incomingSplit.left[2], incomingSplit.left[3]));
   arc[arc.length - 1] = withHandle(arc[arc.length - 1], "handleOut", subtract(outgoingSplit.right[1], outgoingSplit.right[0]));
   result.splice(index, 1, ...arc);
-  return result;
+  return { points: result, appliedRadiiCm: [effectiveRadius] };
 }
 
 type Cubic = [DesignerPoint, DesignerPoint, DesignerPoint, DesignerPoint];
@@ -442,6 +445,7 @@ function distanceToSegment(point: DesignerPoint, start: DesignerPoint, end: Desi
 function filletContour(contour: DesignerContour, closed: boolean, radius: number, selected: Set<number> | null, nextIndex: () => number, warnings: Set<string>) {
   const points = contour.points;
   const result: DesignerPoint[] = [];
+  const appliedRadiiCm: number[] = [];
   points.forEach((point, index) => {
     const cornerIndex = nextIndex();
     const endpoint = !closed && (index === 0 || index === points.length - 1);
@@ -470,6 +474,7 @@ function filletContour(contour: DesignerContour, closed: boolean, radius: number
     const tangent = Math.min(requestedTangent, incomingLength * 0.499, outgoingLength * 0.499);
     if (tangent < requestedTangent - 1e-6) warnings.add(`Fillet ${cornerIndex + 1} was clamped to fit its neighboring legs.`);
     const effectiveRadius = tangent / Math.tan(turn / 2);
+    appliedRadiiCm.push(effectiveRadius);
     const start = { x: point.x - incoming.x * tangent, y: point.y - incoming.y * tangent };
     const end = { x: point.x + outgoing.x * tangent, y: point.y + outgoing.y * tangent };
     const bisector = normalize({ x: -incoming.x + outgoing.x, y: -incoming.y + outgoing.y });
@@ -477,7 +482,7 @@ function filletContour(contour: DesignerContour, closed: boolean, radius: number
     const cross = incoming.x * outgoing.y - incoming.y * outgoing.x;
     appendBezierArc(result, center, start, end, cross >= 0 ? 1 : -1);
   });
-  return result;
+  return { points: result, appliedRadiiCm };
 }
 
 function appendBezierArc(result: DesignerPoint[], center: DesignerPoint, start: DesignerPoint, end: DesignerPoint, direction: number) {
