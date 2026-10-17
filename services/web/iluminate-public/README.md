@@ -1,7 +1,7 @@
 # Iluminate Public
 
 Public experience for `iluminate.space`. This application owns the editorial
-site, concept projects, reusable template discovery and learning content. The
+site, product-led simulator entry, concept projects, reusable template discovery and learning content. The
 authenticated authoring application remains in `services/web/iluminate`.
 
 ## Local development
@@ -47,3 +47,14 @@ snapshots when interactive public playback is implemented. That playback must
 consume immutable published bundles and reuse the contract implemented under
 `services/web/iluminate/components/lighting/player`; it must not create a
 second simulator or authoring model in the public application.
+
+The project and template components currently read local typed records from
+`content/site.ts`. This is a temporary content source, not a requirement to
+hand-author a page per project. The public routes and components are intended to
+consume a curated publication feed when the persistent publishing workflow is
+introduced in its owning service.
+
+Customer share links are not automatically showroom entries. A future catalog
+manager must create a separate publication record with explicit authorization,
+curated metadata and an approved poster image. Video is optional; YouTube is a
+distribution destination rather than the canonical media store.

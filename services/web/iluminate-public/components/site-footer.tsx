@@ -42,6 +42,7 @@ export function SiteFooter() {
         </div>
         <div>
           <span className="eyebrow">Explorar</span>
+          <Link href="/simulator">Simulador</Link>
           <Link href="/projects">Proyectos</Link>
           <Link href="/templates">Templates</Link>
           <Link href="/learn">Aprender</Link>

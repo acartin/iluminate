@@ -1,7 +1,12 @@
 import type { Metadata } from "next";
 import { LessonList } from "@/components/lesson-list";
+import { createPageMetadata } from "@/lib/seo";
 
-export const metadata: Metadata = { title: "Aprender Animate" };
+export const metadata: Metadata = createPageMetadata({
+  title: "Aprender Animate",
+  description: "Próximas lecciones para componer escenas, efectos, paletas, ritmo y transiciones en Iluminate Animate.",
+  path: "/learn/animate",
+});
 
 export default function AnimateLearnPage() {
   return (

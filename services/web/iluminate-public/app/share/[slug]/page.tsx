@@ -26,11 +26,13 @@ export async function generateMetadata({ params }: SharePageProps): Promise<Meta
   return {
     title: manifest.title,
     description: manifest.description ?? "Escena de luz creada con Iluminate.",
+    alternates: { canonical: `/share/${manifest.slug}` },
     robots: manifest.policy === "public" ? { index: true, follow: true } : { index: false, follow: false },
     openGraph: {
       type: "video.other",
       title: manifest.title,
       description: manifest.description,
+      url: `/share/${manifest.slug}`,
       images: [{ url: manifest.posterUrl, width: manifest.width, height: manifest.height }],
       videos: [{ url: manifest.videoUrl, width: manifest.width, height: manifest.height }]
     }

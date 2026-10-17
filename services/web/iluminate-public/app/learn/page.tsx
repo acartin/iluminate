@@ -1,11 +1,13 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { LessonList } from "@/components/lesson-list";
+import { createPageMetadata } from "@/lib/seo";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = createPageMetadata({
   title: "Aprender",
   description: "Tutoriales de Designer y Animate para llevar una idea de la geometría a la luz.",
-};
+  path: "/learn",
+});
 
 export default function LearnPage() {
   return (

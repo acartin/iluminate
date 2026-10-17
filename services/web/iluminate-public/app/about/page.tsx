@@ -1,7 +1,12 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { createPageMetadata } from "@/lib/seo";
 
-export const metadata: Metadata = { title: "Estudio", description: "La visión detrás de Iluminate." };
+export const metadata: Metadata = createPageMetadata({
+  title: "Estudio",
+  description: "La visión detrás de Iluminate y sus herramientas para trabajar con luz direccionable desde el inicio del proyecto.",
+  path: "/about",
+});
 
 export default function AboutPage() {
   return (

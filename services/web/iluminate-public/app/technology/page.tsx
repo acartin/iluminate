@@ -1,10 +1,12 @@
 import type { Metadata } from "next";
 import { appStartUrl } from "@/content/site";
+import { createPageMetadata } from "@/lib/seo";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = createPageMetadata({
   title: "Tecnología",
   description: "El sistema Iluminate conecta diseño físico, coreografía, simulación y control.",
-};
+  path: "/technology",
+});
 
 export default function TechnologyPage() {
   return (
