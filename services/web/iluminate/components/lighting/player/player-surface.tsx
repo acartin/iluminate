@@ -2,7 +2,6 @@
 
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import type { Partitura } from "@iluminate/lighting-core";
-import { recordClientDebug } from "@/lib/client-debug";
 import type { DesignerForm } from "@/lib/lighting/partitura-model";
 import { clamp, pickAnimationTarget, worldHitTolerance } from "../designer/designer-geometry";
 import type { CompiledDesignerLayout } from "../designer/designer-compiler";
@@ -132,10 +131,8 @@ export const PlayerSurface = forwardRef<PlayerSurfaceHandle, PlayerSurfaceProps>
       event.preventDefault();
       const state = controller.getStatus().state;
       if (state === "ready" || state === "playing" || state === "paused") controller.pause();
-      recordClientDebug("webgl_context_lost", { path: window.location.pathname, runtime: "player-v2" });
     };
     const handleContextRestored = () => {
-      recordClientDebug("webgl_context_restored", { path: window.location.pathname, runtime: "player-v2" });
       restoreRenderer();
       if (desiredPlayingRef.current) controller.play();
     };
@@ -207,9 +204,7 @@ export const PlayerSurface = forwardRef<PlayerSurfaceHandle, PlayerSurfaceProps>
       if (cancelled) return;
       if (activeSceneId !== partitura.defaultScene) controller.setScene(activeSceneId);
       if (desiredPlayingRef.current) controller.play();
-    }).catch((error) => {
-      if (!cancelled) recordClientDebug("player_runtime_load_error", { message: error instanceof Error ? error.message : String(error) });
-    });
+    }).catch(() => undefined);
     return () => { cancelled = true; };
   }, [partitura]);
 

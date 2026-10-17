@@ -11,8 +11,10 @@ import {
   clampViewport,
   designerFilletCornerForHit,
   distanceToPolyline,
+  moveDesignerVectorGroupMember,
   nextDesignerItemNumber,
   pickDesignerHit,
+  pickResizeHandleHit,
   pickRouteSegmentHit,
   snapValue,
   worldHitTolerance,
@@ -56,7 +58,7 @@ import {
 import { canvasInteractionSnapCm, channelWidthForRouterDiameter, ELECTRICAL_TOOLS, geometryToolAllowedOnLayer, geometryToolPolicy, POINTER_DRAG_THRESHOLD_PX, TERMINAL_SOLDER_CAPTURE_RADIUS_PX } from "./canvas/designer-tool-policy";
 import { designerConstrainedMoveDelta, designerWholeObjectHit, routeMatchesSurfaceView, type DesignerActiveLayer, type DesignerDrag, type DesignerFilletCornerTarget, type DesignerMeasurement, type DesignerMoveAxis, type DesignerPrimitiveDraft, type DesignerRouteDraft, type DesignerRouteSurfaceView, type DesignerRouteTerminal, type DesignerSelection, type DesignerShapeDraft, type DesignerTool, type DesignerViewport, type PaperApi, type ResizeHandle } from "./types";
 import { DESIGNER_FONT_CATALOG, designerFontUrl } from "@/lib/lighting/designer-font-catalog";
-import { trimDesignerPathAtPoint, type DesignerPathTrimPreview } from "./geometry/designer-path-trim";
+import { trimDesignerChannelPathAtPoint, trimDesignerPathAtPoint, type DesignerPathTrimPreview } from "./geometry/designer-path-trim";
 
 export type DesignerAnimationPixel = {
   output: number;
@@ -478,11 +480,10 @@ export function DesignerStudioCanvas({
   function finishWorkLineDraft() {
     if (!shapeDraft || shapeDraft.target !== "work_line" || shapeDraft.points.length < 2) return;
     const next = nextDesignerItemNumber(designer.workLines, "work_line_");
-    const layer = activeLayer === "artwork" || activeLayer === "reference" ? "artwork" : activeLayer === "zones" || activeLayer === "faceGraphic" ? activeLayer : undefined;
     const line: DesignerWorkLineForm = {
       id: `work_line_${next}`,
       name: `Work line ${next}`,
-      ...(layer ? { layer } : {}),
+      layer: "artwork",
       points: shapeDraft.points.map(({ x, y }) => ({ x, y }))
     };
     onChange({ ...designer, workLines: [...designer.workLines, line] });
@@ -667,7 +668,7 @@ export function DesignerStudioCanvas({
         return;
       }
       paper.activate();
-      setPathTrimPreview(trimDesignerPathAtPoint(
+      setPathTrimPreview((selectedChannelId ? trimDesignerChannelPathAtPoint : trimDesignerPathAtPoint)(
         paper,
         geometry,
         eventPoint(event),
@@ -732,10 +733,7 @@ export function DesignerStudioCanvas({
       return;
     }
     if (drag.type === "build-area-move") {
-      onChange({
-        ...designer,
-        buildAreas: designer.buildAreas.map((buildArea) => (buildArea.id === drag.buildAreaId ? movedShape(drag.original, movement.x, movement.y, interactionSnapCm) : buildArea))
-      });
+      onChange(moveDesignerVectorGroupMember(designer, { type: "build_area", id: drag.buildAreaId }, movedShape(drag.original, movement.x, movement.y, interactionSnapCm)));
       return;
     }
     if (drag.type === "build-area-resize") {
@@ -775,7 +773,7 @@ export function DesignerStudioCanvas({
       return;
     }
     if (drag.type === "zone-move") {
-      patchZone(drag.zoneId, movedShape(drag.original, movement.x, movement.y, interactionSnapCm));
+      onChange(moveDesignerVectorGroupMember(designer, { type: "zone", id: drag.zoneId }, movedShape(drag.original, movement.x, movement.y, interactionSnapCm)));
       return;
     }
     if (drag.type === "zone-resize") {
@@ -793,7 +791,7 @@ export function DesignerStudioCanvas({
       return;
     }
     if (drag.type === "face-graphic-move") {
-      patchFaceGraphic(drag.elementId, movedShape(drag.original, movement.x, movement.y, interactionSnapCm));
+      onChange(moveDesignerVectorGroupMember(designer, { type: "face_graphic", id: drag.elementId }, movedShape(drag.original, movement.x, movement.y, interactionSnapCm)));
       return;
     }
     if (drag.type === "face-graphic-resize") {
@@ -923,7 +921,7 @@ export function DesignerStudioCanvas({
       const geometry = selectedPathTrimGeometry();
       if (!paper || !geometry) return;
       paper.activate();
-      const preview = trimDesignerPathAtPoint(
+      const preview = (selectedChannelId ? trimDesignerChannelPathAtPoint : trimDesignerPathAtPoint)(
         paper,
         geometry,
         eventPoint(event),
@@ -937,6 +935,16 @@ export function DesignerStudioCanvas({
         onChange({ ...designer, zones: designer.zones.map((entry) => entry.id === selectedZoneId ? { ...entry, ...shape } : entry) });
       } else if (selectedFaceGraphicId) {
         onChange({ ...designer, faceGraphics: designer.faceGraphics.map((entry) => entry.id === selectedFaceGraphicId ? { ...entry, ...shape } : entry) });
+      } else if (selectedChannelId && preview.geometry.points?.length) {
+        onChange({
+          ...designer,
+          channels: designer.channels.map((entry) => entry.id === selectedChannelId ? {
+            ...entry,
+            points: preview.geometry.points!,
+            pathMode: preview.geometry.pathMode ?? "straight",
+            closed: preview.geometry.closed !== false
+          } : entry)
+        });
       }
       setPathTrimPreview(null);
       onToolChange("select");
@@ -1082,6 +1090,25 @@ export function DesignerStudioCanvas({
                 return buildArea?.shape === "polygon" && buildArea.points ? pickShapePointHit(buildArea.id, buildArea, point, tolerance, "build_area_point") : null;
               })()
             : null;
+    const selectedFilletHit = tool === "fillet"
+      ? selectedShapePointHit
+        ?? (activeLayer === "faceGraphic" && selectedFaceGraphicId
+          ? (() => {
+              const element = designer.faceGraphics.find((entry) => entry.id === selectedFaceGraphicId);
+              return element?.shape === "rect" ? pickResizeHandleHit(element, point, tolerance, "face_graphic_resize") : null;
+            })()
+          : activeLayer === "zones" && selectedZoneId
+            ? (() => {
+                const zone = designer.zones.find((entry) => entry.id === selectedZoneId);
+                return zone?.shape === "rect" ? pickResizeHandleHit(zone, point, tolerance, "zone_resize") : null;
+              })()
+            : (activeLayer === "reference" || activeLayer === "artwork") && selectedBuildAreaId
+              ? (() => {
+                  const buildArea = designer.buildAreas.find((entry) => entry.id === selectedBuildAreaId);
+                  return buildArea?.shape === "rect" ? pickResizeHandleHit(buildArea, point, tolerance, "build_area_resize") : null;
+                })()
+              : null)
+      : null;
     const pickedHit = pickDesignerHit(displayedDesigner, activeLayer, point, viewport, canvasSize);
     const pickedOwner = designerWholeObjectHit(pickedHit);
     const pickedOwnerIsSelected = Boolean(pickedOwner && (
@@ -1095,7 +1122,8 @@ export function DesignerStudioCanvas({
       || pickedOwner.type === "route" && pickedOwner.id === selectedRouteId
       || pickedOwner.type === "controller" && selectedController
     ));
-    const rawHit = (tool === "select" ? selectedShapePointHit : null)
+    const rawHit = selectedFilletHit
+      ?? (tool === "select" ? selectedShapePointHit : null)
       ?? (tool === "select" && !pickedOwnerIsSelected ? pickedOwner : pickedHit);
     const hit = tool === "move" ? designerWholeObjectHit(rawHit) : rawHit;
     if (tool === "fillet") {
@@ -1285,6 +1313,8 @@ export function DesignerStudioCanvas({
         ? designer.zones.find((entry) => entry.id === selectedZoneId)
         : selectedFaceGraphicId
           ? designer.faceGraphics.find((entry) => entry.id === selectedFaceGraphicId)
+          : selectedChannelId
+            ? designer.channels.find((entry) => entry.id === selectedChannelId)
           : null;
     return owner?.geometryId ? designer.geometries?.find((geometry) => geometry.id === owner.geometryId) ?? null : null;
   }

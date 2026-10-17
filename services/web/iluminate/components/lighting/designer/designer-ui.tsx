@@ -10,6 +10,7 @@ import { Modal } from "@/components/ui/modal";
 import type { DesignerArtworkForm, DesignerBuildAreaForm, DesignerChannelForm, DesignerFaceGraphicForm, DesignerForm, DesignerGroupForm, DesignerLayerSettings, DesignerLayersForm, DesignerPointNodeType, DesignerText, DesignerWorkLineForm, DesignerZoneForm } from "@/lib/lighting/partitura-model";
 import { resolveDesignerDerivedGeometry, resolveDesignerProjectionGeometry, type DesignerDerivedGeometry, type DesignerProjection, type DesignerProjectionLayer } from "@/lib/lighting/partitura-model";
 import { formatDecimal, rulerTicks } from "./designer-geometry";
+import { diffusorObjectKeys, sameDiffusorVisibility, visibleDiffusorObjectKeys } from "./designer-diffusor-visibility";
 import { faceGraphicObjectKeys, sameFaceGraphicVisibility, visibleFaceGraphicObjectKeys } from "./designer-face-graphic-visibility";
 import { designerAdditiveSelectionRequested, designerLayerForSelection, routeMatchesSurfaceView, type DesignerActiveLayer, type DesignerRouteSummary, type DesignerRouteSurfaceView, type DesignerSelection, type DesignerViewport } from "./types";
 
@@ -63,6 +64,8 @@ export function DesignerLayersPanel({
   onActivateLayer,
   onPatchLayer,
   onPatchLayers,
+  onSetArtworkVisibility,
+  onSetArtworkFolderVisibility,
   onPatchWorkLine,
   onToggleFaceGraphicVinylPreview,
   onRouteSurfaceViewChange,
@@ -71,6 +74,10 @@ export function DesignerLayersPanel({
   onPatchBuildArea,
   onPatchZone,
   onSetDiffusorFolderVisibility,
+  onApplyDiffusorVisibility,
+  onCreateDiffusorVisibilityPreset,
+  onUpdateDiffusorVisibilityPreset,
+  onDeleteDiffusorVisibilityPreset,
   onPatchFaceGraphic,
   onPatchProjection,
   onPatchDerivedGeometry,
@@ -104,6 +111,8 @@ export function DesignerLayersPanel({
   onActivateLayer: (layer: DesignerActiveLayer) => void;
   onPatchLayer: (layer: keyof DesignerLayersForm, patch: Partial<DesignerLayerSettings>) => void;
   onPatchLayers: (layers: Array<keyof DesignerLayersForm>, patch: Partial<DesignerLayerSettings>) => void;
+  onSetArtworkVisibility: (visible: boolean) => void;
+  onSetArtworkFolderVisibility: (folder: "images" | "reference" | "workLines", visible: boolean) => void;
   onPatchWorkLine: (workLineId: string, patch: Partial<Pick<DesignerWorkLineForm, "name" | "layer" | "points">>) => void;
   onToggleFaceGraphicVinylPreview: () => void;
   onRouteSurfaceViewChange: (view: DesignerRouteSurfaceView) => void;
@@ -112,6 +121,10 @@ export function DesignerLayersPanel({
   onPatchBuildArea: (buildAreaId: string, patch: Partial<Pick<DesignerBuildAreaForm, "name" | "visible" | "locked" | "opacity">>) => void;
   onPatchZone: (zoneId: string, patch: Partial<Pick<DesignerZoneForm, "name" | "visible" | "locked" | "opacity">>) => void;
   onSetDiffusorFolderVisibility: (folder: "zones" | "channels", visible: boolean) => void;
+  onApplyDiffusorVisibility: (visibleObjectKeys: string[]) => void;
+  onCreateDiffusorVisibilityPreset: (name: string) => string;
+  onUpdateDiffusorVisibilityPreset: (presetId: string) => void;
+  onDeleteDiffusorVisibilityPreset: (presetId: string) => void;
   onPatchFaceGraphic: (elementId: string, patch: Partial<DesignerFaceGraphicForm>) => void;
   onPatchProjection: (projectionId: string, patch: Partial<DesignerProjection>) => void;
   onPatchDerivedGeometry: (derivedId: string, patch: Partial<DesignerDerivedGeometry>) => void;
@@ -153,7 +166,7 @@ export function DesignerLayersPanel({
   const [expandedStringGroups, setExpandedStringGroups] = useState({ data_cables: false, led_strings: false });
   const [expandedControllerGroup, setExpandedControllerGroup] = useState(false);
   const [expandedDiffusorGroups, setExpandedDiffusorGroups] = useState({ zones: false, channels: false, groups: false });
-  const [expandedArtworkGroups, setExpandedArtworkGroups] = useState({ images: false, reference: false });
+  const [expandedArtworkGroups, setExpandedArtworkGroups] = useState({ images: false, reference: false, workLines: false });
 
   function activateLayer(layer: DesignerActiveLayer) {
     setExpandedLayers((current) => ({ ...current, [layer]: true }));
@@ -166,6 +179,11 @@ export function DesignerLayersPanel({
   }
 
   const selectedArtwork = selection?.type === "artwork" ? designer.artwork.find((artwork) => artwork.id === selection.id) ?? null : null;
+  const imagesVisible = designer.artwork.every((artwork) => artwork.visible !== false);
+  const referenceVisible = designer.buildAreas.every((buildArea) => buildArea.visible !== false)
+    && designer.texts.filter((text) => text.targetLayer === "reference").every((text) => text.visible)
+    && designer.projections.filter((projection) => projection.targetLayer === "reference").every((projection) => projection.visible)
+    && designer.derivedGeometries.filter((operation) => operation.targetLayer === "reference").every((operation) => operation.visible);
   const normalizedSearch = searchTerm.trim().toLowerCase();
   const matchesSearch = (label: string, detail = "") => !normalizedSearch || `${label} ${detail}`.toLowerCase().includes(normalizedSearch);
 
@@ -183,8 +201,8 @@ export function DesignerLayersPanel({
   useEffect(() => {
     if (!selection) return;
     if (selection.type === "work_line") {
-      const owner = designer.workLines.find((line) => line.id === selection.id)?.layer;
-      if (owner) setExpandedLayers((current) => ({ ...current, [owner]: true }));
+      setExpandedLayers((current) => ({ ...current, artwork: true }));
+      setExpandedArtworkGroups((current) => ({ ...current, workLines: true }));
       return;
     }
     if (selection.type === "build_area") {
@@ -195,6 +213,18 @@ export function DesignerLayersPanel({
     if (selection.type === "artwork") {
       setExpandedLayers((current) => ({ ...current, artwork: true }));
       setExpandedArtworkGroups((current) => ({ ...current, images: true }));
+      return;
+    }
+    const referenceTarget = selection.type === "text"
+      ? designer.texts.find((entry) => entry.id === selection.id)?.targetLayer
+      : selection.type === "projection"
+        ? designer.projections.find((entry) => entry.id === selection.id)?.targetLayer
+        : selection.type === "derived_geometry"
+          ? designer.derivedGeometries.find((entry) => entry.id === selection.id)?.targetLayer
+          : null;
+    if (referenceTarget === "reference") {
+      setExpandedLayers((current) => ({ ...current, artwork: true }));
+      setExpandedArtworkGroups((current) => ({ ...current, reference: true }));
       return;
     }
     const layer = designerLayerForSelection(selection);
@@ -249,11 +279,13 @@ export function DesignerLayersPanel({
           layer={designer.layers.artwork}
           onActivate={() => activateLayer("artwork")}
           onToggle={() => toggleLayer("artwork")}
-          onChange={(patch) => onPatchLayer("artwork", patch)}
+          onChange={(patch) => typeof patch.visible === "boolean" ? onSetArtworkVisibility(patch.visible) : onPatchLayer("artwork", patch)}
         >
           <RouteFolder
             label="Images"
             count={designer.artwork.length}
+            visible={imagesVisible}
+            onToggleVisible={() => onSetArtworkFolderVisibility("images", !imagesVisible)}
             expanded={expandedArtworkGroups.images}
             onToggle={() => {
               activateLayer("artwork");
@@ -315,7 +347,12 @@ export function DesignerLayersPanel({
 
           <RouteFolder
             label="Reference"
-            count={designer.buildAreas.length}
+            count={designer.buildAreas.length
+              + designer.texts.filter((text) => text.targetLayer === "reference").length
+              + designer.projections.filter((projection) => projection.targetLayer === "reference").length
+              + designer.derivedGeometries.filter((operation) => operation.targetLayer === "reference").length}
+            visible={referenceVisible}
+            onToggleVisible={() => onSetArtworkFolderVisibility("reference", !referenceVisible)}
             expanded={expandedArtworkGroups.reference}
             onToggle={() => {
               activateLayer("artwork");
@@ -347,11 +384,23 @@ export function DesignerLayersPanel({
                 </SortableLayerChildRow>
               ))}
             </SortableLayerList>
+            <TextRows designer={designer} targetLayer="reference" selection={selection} onActivate={() => activateLayer("artwork")} onSelect={onSelect} onPatch={onPatchText} />
+            <ProjectionRows designer={designer} targetLayer="reference" selection={selection} selectedGeometryKeys={selectedGeometryKeys} onActivate={() => activateLayer("artwork")} onSelect={onSelect} onPatch={onPatchProjection} />
+            <DerivedGeometryRows designer={designer} targetLayer="reference" selection={selection} selectedGeometryKeys={selectedGeometryKeys} onActivate={() => activateLayer("artwork")} onSelect={onSelect} onPatch={onPatchDerivedGeometry} />
           </RouteFolder>
-          <TextRows designer={designer} targetLayer="reference" selection={selection} onActivate={() => activateLayer("artwork")} onSelect={onSelect} onPatch={onPatchText} />
-          <ProjectionRows designer={designer} targetLayer="reference" selection={selection} selectedGeometryKeys={selectedGeometryKeys} onActivate={() => activateLayer("artwork")} onSelect={onSelect} onPatch={onPatchProjection} />
-          <DerivedGeometryRows designer={designer} targetLayer="reference" selection={selection} selectedGeometryKeys={selectedGeometryKeys} onActivate={() => activateLayer("artwork")} onSelect={onSelect} onPatch={onPatchDerivedGeometry} />
-          <WorkLineRows designer={designer} layer="artwork" selection={selection} matchesSearch={matchesSearch} onActivate={() => activateLayer("artwork")} onSelect={onSelect} onPatch={onPatchWorkLine} />
+          <RouteFolder
+            label="Work Lines"
+            count={designer.workLines.length}
+            expanded={expandedArtworkGroups.workLines}
+            onToggle={() => {
+              activateLayer("artwork");
+              setExpandedArtworkGroups((current) => ({ ...current, workLines: !current.workLines }));
+            }}
+            visible={designer.workLinesVisible}
+            onToggleVisible={() => onSetArtworkFolderVisibility("workLines", !designer.workLinesVisible)}
+          >
+            <WorkLineRows designer={designer} selection={selection} matchesSearch={matchesSearch} onActivate={() => activateLayer("artwork")} onSelect={onSelect} onPatch={onPatchWorkLine} />
+          </RouteFolder>
         </LayerPanelSection>
 
         <LayerPanelSection
@@ -364,6 +413,13 @@ export function DesignerLayersPanel({
           onToggle={() => toggleLayer("zones")}
           onChange={(patch) => onPatchLayer("zones", patch)}
         >
+          <DiffusorVisibilityBar
+            designer={designer}
+            onApply={onApplyDiffusorVisibility}
+            onCreate={onCreateDiffusorVisibilityPreset}
+            onUpdate={onUpdateDiffusorVisibilityPreset}
+            onDelete={onDeleteDiffusorVisibilityPreset}
+          />
           <RouteFolder
             label="Zones"
             count={designer.zones.length}
@@ -463,7 +519,6 @@ export function DesignerLayersPanel({
           <TextRows designer={designer} targetLayer="zones" selection={selection} onActivate={() => activateLayer("zones")} onSelect={onSelect} onPatch={onPatchText} />
           <ProjectionRows designer={designer} targetLayer="zones" selection={selection} selectedGeometryKeys={selectedGeometryKeys} onActivate={() => activateLayer("zones")} onSelect={onSelect} onPatch={onPatchProjection} />
           <DerivedGeometryRows designer={designer} targetLayer="zones" selection={selection} selectedGeometryKeys={selectedGeometryKeys} onActivate={() => activateLayer("zones")} onSelect={onSelect} onPatch={onPatchDerivedGeometry} />
-          <WorkLineRows designer={designer} layer="zones" selection={selection} matchesSearch={matchesSearch} onActivate={() => activateLayer("zones")} onSelect={onSelect} onPatch={onPatchWorkLine} />
         </LayerPanelSection>
 
         <LayerPanelSection
@@ -645,7 +700,6 @@ export function DesignerLayersPanel({
           <TextRows designer={designer} targetLayer="faceGraphic" selection={selection} onActivate={() => activateLayer("faceGraphic")} onSelect={onSelect} onPatch={onPatchText} />
           <ProjectionRows designer={designer} targetLayer="faceGraphic" selection={selection} selectedGeometryKeys={selectedGeometryKeys} onActivate={() => activateLayer("faceGraphic")} onSelect={onSelect} onPatch={onPatchProjection} />
           <DerivedGeometryRows designer={designer} targetLayer="faceGraphic" selection={selection} selectedGeometryKeys={selectedGeometryKeys} onActivate={() => activateLayer("faceGraphic")} onSelect={onSelect} onPatch={onPatchDerivedGeometry} />
-          <WorkLineRows designer={designer} layer="faceGraphic" selection={selection} matchesSearch={matchesSearch} onActivate={() => activateLayer("faceGraphic")} onSelect={onSelect} onPatch={onPatchWorkLine} />
         </LayerPanelSection>
       </div>
       {details ? (
@@ -667,8 +721,54 @@ export function DesignerLayersPanel({
   );
 }
 
-function FaceGraphicVisibilityBar({ designer, onApply, onCreate, onUpdate, onDelete }: {
+type VisibilityPreset = DesignerForm["faceGraphicVisibilityPresets"][number];
+
+function FaceGraphicVisibilityBar({ designer, ...actions }: {
   designer: DesignerForm;
+  onApply: (visibleObjectKeys: string[]) => void;
+  onCreate: (name: string) => string;
+  onUpdate: (presetId: string) => void;
+  onDelete: (presetId: string) => void;
+}) {
+  return <VisibilityPresetBar
+    scopeLabel="Face Graphic"
+    presets={designer.faceGraphicVisibilityPresets}
+    allKeys={faceGraphicObjectKeys(designer)}
+    visibleKeys={visibleFaceGraphicObjectKeys(designer)}
+    sameVisibility={sameFaceGraphicVisibility}
+    createDescription="Save the current Face Graphic eye states as a reusable preset."
+    createPlaceholder="e.g. Hand-cut stencil"
+    {...actions}
+  />;
+}
+
+function DiffusorVisibilityBar({ designer, ...actions }: {
+  designer: DesignerForm;
+  onApply: (visibleObjectKeys: string[]) => void;
+  onCreate: (name: string) => string;
+  onUpdate: (presetId: string) => void;
+  onDelete: (presetId: string) => void;
+}) {
+  return <VisibilityPresetBar
+    scopeLabel="Diffusors"
+    presets={designer.diffusorVisibilityPresets}
+    allKeys={diffusorObjectKeys(designer)}
+    visibleKeys={visibleDiffusorObjectKeys(designer)}
+    sameVisibility={sameDiffusorVisibility}
+    createDescription="Save the current Diffusors eye states as a reusable preset."
+    createPlaceholder="e.g. Routing view"
+    {...actions}
+  />;
+}
+
+function VisibilityPresetBar({ scopeLabel, presets, allKeys, visibleKeys, sameVisibility, createDescription, createPlaceholder, onApply, onCreate, onUpdate, onDelete }: {
+  scopeLabel: "Diffusors" | "Face Graphic";
+  presets: VisibilityPreset[];
+  allKeys: string[];
+  visibleKeys: string[];
+  sameVisibility: (left: Iterable<string>, right: Iterable<string>) => boolean;
+  createDescription: string;
+  createPlaceholder: string;
   onApply: (visibleObjectKeys: string[]) => void;
   onCreate: (name: string) => string;
   onUpdate: (presetId: string) => void;
@@ -677,22 +777,20 @@ function FaceGraphicVisibilityBar({ designer, onApply, onCreate, onUpdate, onDel
   const [selection, setSelection] = useState("");
   const [dialog, setDialog] = useState<"create" | "delete" | null>(null);
   const [presetName, setPresetName] = useState("");
-  const allKeys = faceGraphicObjectKeys(designer);
-  const visibleKeys = visibleFaceGraphicObjectKeys(designer);
-  const selectedPreset = designer.faceGraphicVisibilityPresets.find((preset) => preset.id === selection) ?? null;
+  const selectedPreset = presets.find((preset) => preset.id === selection) ?? null;
   const expectedKeys = selection === "__all_on__" ? allKeys : selection === "__all_off__" ? [] : selectedPreset?.visibleObjectKeys ?? visibleKeys;
-  const modified = Boolean(selection) && !sameFaceGraphicVisibility(visibleKeys, expectedKeys);
+  const modified = Boolean(selection) && !sameVisibility(visibleKeys, expectedKeys);
 
   useEffect(() => {
-    if (selection && selection !== "__all_on__" && selection !== "__all_off__" && !designer.faceGraphicVisibilityPresets.some((preset) => preset.id === selection)) setSelection("");
-  }, [designer.faceGraphicVisibilityPresets, selection]);
+    if (selection && selection !== "__all_on__" && selection !== "__all_off__" && !presets.some((preset) => preset.id === selection)) setSelection("");
+  }, [presets, selection]);
 
   function choose(next: string) {
     setSelection(next);
     if (next === "__all_on__") onApply(allKeys);
     else if (next === "__all_off__") onApply([]);
     else {
-      const preset = designer.faceGraphicVisibilityPresets.find((entry) => entry.id === next);
+      const preset = presets.find((entry) => entry.id === next);
       if (preset) onApply(preset.visibleObjectKeys);
     }
   }
@@ -714,28 +812,28 @@ function FaceGraphicVisibilityBar({ designer, onApply, onCreate, onUpdate, onDel
 
   return (
     <>
-      <div className="mb-1 flex items-center gap-1 rounded border border-border-2 bg-surface-2 p-1" aria-label="Face Graphic visibility presets">
+      <div className="mb-1 flex items-center gap-1 rounded border border-border-2 bg-surface-2 p-1" aria-label={`${scopeLabel} visibility presets`}>
         <select
           className="h-7 min-w-0 flex-1 rounded border border-input bg-card px-1.5 text-[11px] text-foreground"
-          title="Face Graphic visibility preset"
+          title={`${scopeLabel} visibility preset`}
           value={selection}
           onChange={(event) => choose(event.target.value)}
         >
           <option value="">Current visibility</option>
           <option value="__all_on__">All on{selection === "__all_on__" && modified ? " · Modified" : ""}</option>
           <option value="__all_off__">All off{selection === "__all_off__" && modified ? " · Modified" : ""}</option>
-          {designer.faceGraphicVisibilityPresets.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}{selection === preset.id && modified ? " · Modified" : ""}</option>)}
+          {presets.map((preset) => <option key={preset.id} value={preset.id}>{preset.name}{selection === preset.id && modified ? " · Modified" : ""}</option>)}
         </select>
-        <button type="button" title="Create preset from current visibility" aria-label="Create Face Graphic visibility preset" className="flex h-7 w-7 items-center justify-center rounded border border-blue-400 bg-blue-50 text-blue-700 hover:bg-blue-100 dark:bg-blue-950/40 dark:text-blue-300" onClick={() => {
-          setPresetName(`Preset ${designer.faceGraphicVisibilityPresets.length + 1}`);
+        <button type="button" title="Create preset from current visibility" aria-label={`Create ${scopeLabel} visibility preset`} className="flex h-7 w-7 items-center justify-center rounded border border-blue-400 bg-blue-50 text-blue-700 hover:bg-blue-100 dark:bg-blue-950/40 dark:text-blue-300" onClick={() => {
+          setPresetName(`Preset ${presets.length + 1}`);
           setDialog("create");
         }}>
           <Plus className="h-3.5 w-3.5" />
         </button>
-        <button type="button" disabled={!selectedPreset} title="Update selected preset" aria-label="Update Face Graphic visibility preset" className="flex h-7 w-7 items-center justify-center rounded border border-emerald-500 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-35 dark:bg-emerald-950/40 dark:text-emerald-300" onClick={() => selectedPreset && onUpdate(selectedPreset.id)}>
+        <button type="button" disabled={!selectedPreset} title="Update selected preset" aria-label={`Update ${scopeLabel} visibility preset`} className="flex h-7 w-7 items-center justify-center rounded border border-emerald-500 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 disabled:cursor-not-allowed disabled:opacity-35 dark:bg-emerald-950/40 dark:text-emerald-300" onClick={() => selectedPreset && onUpdate(selectedPreset.id)}>
           <Save className="h-3.5 w-3.5" />
         </button>
-        <Button type="button" variant="destructive" disabled={!selectedPreset} title="Delete selected preset" aria-label="Delete Face Graphic visibility preset" className="!h-7 w-7 p-0" onClick={() => setDialog("delete")}>
+        <Button type="button" variant="destructive" disabled={!selectedPreset} title="Delete selected preset" aria-label={`Delete ${scopeLabel} visibility preset`} className="!h-7 w-7 p-0" onClick={() => setDialog("delete")}>
           <Trash2 className="h-3.5 w-3.5" />
         </Button>
       </div>
@@ -743,7 +841,7 @@ function FaceGraphicVisibilityBar({ designer, onApply, onCreate, onUpdate, onDel
       <Modal
         open={dialog === "create"}
         title="Create visibility preset"
-        description="Save the current Face Graphic eye states as a reusable preset."
+        description={createDescription}
         onClose={() => setDialog(null)}
         className="max-w-md"
       >
@@ -756,7 +854,7 @@ function FaceGraphicVisibilityBar({ designer, onApply, onCreate, onUpdate, onDel
               onChange={(event) => setPresetName(event.target.value)}
               className="h-control w-full rounded-md border border-input bg-card px-3 text-body-sm text-foreground outline-none transition focus:border-primary focus:ring-2 focus:ring-ring"
               maxLength={80}
-              placeholder="e.g. Hand-cut stencil"
+              placeholder={createPlaceholder}
             />
           </label>
           <div className="flex justify-end gap-2 border-t pt-4">
@@ -862,9 +960,31 @@ function RouteSurfaceViewToggle({ value, onChange }: { value: DesignerRouteSurfa
 
 function RouteSurfaceIcon({ view }: { view: DesignerRouteSurfaceView }) {
   return (
-    <svg viewBox="0 0 18 18" aria-hidden="true" className="h-3.5 w-3.5 fill-none stroke-current" strokeWidth="1.5">
-      {view !== "front" ? <path d="M2.5 5.5h9v7h-9z M11.5 8h3.5" strokeDasharray="2 1.5" /> : null}
-      {view !== "rear" ? <path d="M6.5 2.5h9v7h-9z M3 6h3.5" /> : null}
+    <svg viewBox="0 0 24 24" aria-hidden="true" className="h-3.5 w-3.5 fill-none stroke-current" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      {view === "front" ? (
+        <>
+          <path d="M12 12V2" />
+          <path d="M2 17.002a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9a1 1 0 0 0 .59-.92" />
+          <path d="M7.674 8.774 2.58 11.09a1 1 0 0 0 0 1.822l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12a1 1 0 0 0-.59-.922l-5.078-2.308" />
+          <path d="m9 5 3-3 3 3" />
+        </>
+      ) : view === "rear" ? (
+        <>
+          <path d="M12 7v15" />
+          <path d="M2 12a1 1 0 0 0 .58.91l5.093 2.316" />
+          <path d="M22 12a1 1 0 0 1-.59.92l-5.077 2.308" />
+          <path d="M8 10.37 2.6 7.91a1 1 0 0 1 0-1.831l8.57-3.9a2 2 0 0 1 1.66.001l8.59 3.91a1 1 0 0 1 0 1.831l-5.392 2.45" />
+          <path d="m9 19 3 3 3-3" />
+        </>
+      ) : (
+        <>
+          <path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 .83.18 2 2 0 0 0 .83-.18l8.58-3.9a1 1 0 0 0 0-1.831z" />
+          <path d="M16 17h6" />
+          <path d="M19 14v6" />
+          <path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 .825.178" />
+          <path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l2.116-.962" />
+        </>
+      )}
     </svg>
   );
 }
@@ -1056,10 +1176,10 @@ function SortableLayerList({
   );
 }
 
-function WorkLineDashedIcon({ className }: { className?: string }) {
+function WorkLineIcon({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
-      <path d="M3 18 9 10 15 14 21 5" strokeDasharray="2.5 3" />
+      <path d="M3 18 9 10 15 14 21 5" />
       <circle cx="3" cy="18" r="1.25" fill="currentColor" stroke="none" />
       <circle cx="9" cy="10" r="1.25" fill="currentColor" stroke="none" />
       <circle cx="15" cy="14" r="1.25" fill="currentColor" stroke="none" />
@@ -1068,26 +1188,29 @@ function WorkLineDashedIcon({ className }: { className?: string }) {
   );
 }
 
-function WorkLineRows({ designer, layer, selection, matchesSearch, onActivate, onSelect, onPatch }: {
+function WorkLineRows({ designer, selection, matchesSearch, onActivate, onSelect, onPatch }: {
   designer: DesignerForm;
-  layer: NonNullable<DesignerWorkLineForm["layer"]>;
   selection: DesignerSelection;
   matchesSearch: (label: string, detail?: string) => boolean;
   onActivate: () => void;
   onSelect: (selection: DesignerSelection) => void;
   onPatch: (workLineId: string, patch: Partial<Pick<DesignerWorkLineForm, "name" | "layer" | "points">>) => void;
 }) {
-  const lines = designer.workLines.filter((line) => line.layer === layer && matchesSearch(line.name, "work line construction"));
-  if (!lines.length) return null;
+  const lines = designer.workLines.filter((line) => matchesSearch(line.name, "work line construction reference"));
   return (
     <div className="border-t border-border-2 py-1">
+      {!lines.length ? (
+        <p className="px-2 py-1 text-[11px] leading-4 text-muted-foreground">
+          {designer.workLines.length ? "No Work Lines match the search." : "No Work Lines yet."}
+        </p>
+      ) : null}
       {lines.map((line) => <LayerChildRow
         key={line.id}
         label={line.name}
-        detail={`Dashed reference · ${line.points.length} points`}
+        detail={`Continuous reference · ${line.points.length} points`}
         selected={selection?.type === "work_line" && selection.id === line.id}
         color="green"
-        icon={WorkLineDashedIcon}
+        icon={WorkLineIcon}
         onClick={() => { onActivate(); onSelect({ type: "work_line", id: line.id }); }}
         onRename={(name) => onPatch(line.id, { name })}
       />)}
@@ -1553,6 +1676,7 @@ function IconToggle({ active, selected, compact, stateTone, label, children, onC
     <button
       type="button"
       title={label}
+      aria-label={label}
       aria-pressed={active}
       className={`flex ${compact ? "h-6 w-6 opacity-0 group-hover:opacity-100" : "h-7 w-7"} items-center justify-center rounded border transition ${stateClass}`}
       onClick={(event) => {

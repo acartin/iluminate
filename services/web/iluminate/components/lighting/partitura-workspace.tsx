@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Partitura } from "@iluminate/lighting-core";
-import { AlertCircle, ArrowLeft, Cable, Circle, Copy, Download, Hammer, Hand, Image as ImageIcon, Layers, Magnet, Maximize2, MousePointer2, Move, Pause, PenLine, Play, Plus, Redo2, Ruler, Route, RotateCcw, Save, ScanLine, Scissors, Settings2, Share2, Sparkles, Spline, Square, Trash2, Undo2, Waves, X } from "lucide-react";
+import { AlertCircle, ArrowLeft, Cable, Circle, ClipboardPaste, Copy, Download, FlipHorizontal as SquareCenterlineDashedVertical, Group, Hammer, Hand, Image as ImageIcon, Layers, Layers2, Magnet, Maximize2, MousePointer2, Move, Pause, PenLine, Play, Plus, Radius, Redo2, Ruler, Route, RotateCcw, Save, Scissors, Settings2, Share2, Sparkles, Spline, Square, Tally2, Trash2, Undo2, Ungroup, Waves, X } from "lucide-react";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -22,9 +22,11 @@ import {
   designerProjectionName,
   fitViewportToDesigner,
   formatDecimal,
+  missingWorkLineHolePoints,
   nextDesignerItemNumber,
   snapValue,
-  updatedDesignerOffsetName
+  updatedDesignerOffsetName,
+  workLineIntersectionPoints
 } from "./designer/designer-geometry";
 import {
   applyDesignerBooleanOperation,
@@ -65,7 +67,6 @@ import { DEFAULT_DIFFUSER_RENDER_SETTINGS, type DiffuserRenderSettings } from ".
 import { DesignerLayersPanel, NodeTypePicker, ToolbarField, ToolbarNumber, ToolButton } from "./designer/designer-ui";
 import { designerLayerForSelection, designerSelectionForClipTarget, type DesignerActiveLayer, type DesignerFilletCornerTarget, type DesignerMoveAxis, type DesignerRouteSurfaceView, type DesignerRouteTerminal, type DesignerSelection, type DesignerTool, type DesignerViewport } from "./designer/types";
 import type { EffectDefinition, EffectParameterDefinition } from "@/lib/lighting/effect-catalog";
-import { installClientDebugHandlers, recordClientDebug } from "@/lib/client-debug";
 import {
   canonicalizeDesignerGeometry,
   clonePartituraDocument,
@@ -93,6 +94,7 @@ import {
   DesignerRouteKind,
   DesignerRouteForm,
   DesignerText,
+  DesignerVectorGroupMember,
   DesignerWorkLineForm,
   DesignerZoneForm,
   designerGlobalLightSourceMode,
@@ -112,6 +114,7 @@ import type { ArtworkIntrinsicSize } from "@/lib/lighting/artwork-intrinsic-size
 import { importArtworkSvgAsZoneDrafts } from "@/lib/lighting/artwork-svg-zones";
 import { designerTextToGeometry } from "@/lib/lighting/designer-text-geometry";
 import { DEFAULT_FABRICATION_EXPORT_OPTIONS, generateDesignerFabricationExport, sha256Hex, type FabricationExportFormat, type FabricationExportOptions, type FabricationExportResult } from "./designer/fabrication/designer-fabrication-export";
+import { applyDiffusorObjectVisibility, visibleDiffusorObjectKeys } from "./designer/designer-diffusor-visibility";
 import { applyFaceGraphicObjectVisibility, visibleFaceGraphicObjectKeys } from "./designer/designer-face-graphic-visibility";
 import { channelPathsFromGeometries, type ChannelPathAlignment } from "./designer/geometry/designer-channel-from-path";
 import { applyDesignerNativeFillet } from "./designer/geometry/designer-geometry-commands";
@@ -130,6 +133,14 @@ type DesignerGeometrySelection = Extract<Exclude<DesignerSelection, null>, { typ
 
 function isDesignerGeometrySelection(selection: DesignerSelection): selection is DesignerGeometrySelection {
   return selection?.type === "build_area" || selection?.type === "zone" || selection?.type === "face_graphic" || selection?.type === "projection" || selection?.type === "derived_geometry";
+}
+
+function designerGeometrySelectionKey(selection: Pick<DesignerGeometrySelection, "type" | "id">) {
+  return `${selection.type}:${selection.id}`;
+}
+
+function isDesignerVectorGroupMember(selection: DesignerGeometrySelection): selection is DesignerGeometrySelection & DesignerVectorGroupMember {
+  return selection.type === "build_area" || selection.type === "zone" || selection.type === "face_graphic";
 }
 
 type ApiResult = {
@@ -207,7 +218,6 @@ const DESIGNER_TOOL_LABELS: Record<DesignerTool, string> = {
   zone_rect: "Rectangle zone",
   zone_ellipse: "Ellipse zone",
   zone_polygon: "Polygon zone",
-  zone_bezier: "Bezier zone",
   zone_text: "Zone text",
   channel_bezier: "Channel",
   face_graphic_rect: "Rectangle face graphic",
@@ -222,26 +232,113 @@ const DESIGNER_TOOL_LABELS: Record<DesignerTool, string> = {
   cut: "Cut route"
 };
 
-function MeasuringTapeIcon({ className }: { className?: string }) {
+function RulerDimensionLineIcon({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
-      <path d="M4 16V8a5 5 0 0 1 5-5h3a5 5 0 0 1 5 5v8" />
-      <path d="M4 16h13v5H7a3 3 0 0 1-3-3v-2Z" />
-      <circle cx="10.5" cy="10" r="2" />
-      <path d="M17 16h4v5h-4M19 16v2M8 18v3M11 18v2M14 18v3" />
+      <path d="M10 15v-3" />
+      <path d="M14 15v-3" />
+      <path d="M18 15v-3" />
+      <path d="M2 8V4" />
+      <path d="M22 6H2" />
+      <path d="M22 8V4" />
+      <path d="M6 15v-3" />
+      <rect x="2" y="12" width="20" height="8" rx="2" />
     </svg>
   );
 }
 
-function WorkLineIcon({ className }: { className?: string }) {
+function VectorPolygonIcon({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
-      <path d="M3 18 9 10 15 14 21 5" strokeDasharray="2.5 3" />
-      <circle cx="3" cy="18" r="1.25" fill="currentColor" stroke="none" />
-      <circle cx="9" cy="10" r="1.25" fill="currentColor" stroke="none" />
-      <circle cx="15" cy="14" r="1.25" fill="currentColor" stroke="none" />
-      <circle cx="21" cy="5" r="1.25" fill="currentColor" stroke="none" />
+      <path d="m12.828 4.813 5.344 2.375" />
+      <path d="m15.769 18.153 3.461-8.306" />
+      <path d="m5.687 14.074 7.625 4.852" />
+      <path d="M9.772 5.579 5.228 11.42" />
+      <circle cx="11" cy="4" r="2" />
+      <circle cx="15" cy="20" r="2" />
+      <circle cx="20" cy="8" r="2" />
+      <circle cx="4" cy="13" r="2" />
     </svg>
+  );
+}
+
+function BooleanSquaresIcon({ operation, className }: { operation: "union" | "subtract" | "intersect" | "exclude"; className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden="true">
+      {operation === "union" ? (
+        <path d="M4 16a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v3a1 1 0 0 0 1 1h3a2 2 0 0 1 2 2v10a2 2 0 0 1-2 2H10a2 2 0 0 1-2-2v-3a1 1 0 0 0-1-1z" />
+      ) : operation === "subtract" ? (
+        <>
+          <path d="M10 22a2 2 0 0 1-2-2" />
+          <path d="M16 22h-2" />
+          <path d="M16 4a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h3a1 1 0 0 0 1-1v-5a2 2 0 0 1 2-2h5a1 1 0 0 0 1-1z" />
+          <path d="M20 8a2 2 0 0 1 2 2" />
+          <path d="M22 14v2" />
+          <path d="M22 20a2 2 0 0 1-2 2" />
+        </>
+      ) : operation === "intersect" ? (
+        <>
+          <path d="M10 22a2 2 0 0 1-2-2" />
+          <path d="M14 2a2 2 0 0 1 2 2" />
+          <path d="M16 22h-2" />
+          <path d="M2 10V8" />
+          <path d="M2 4a2 2 0 0 1 2-2" />
+          <path d="M20 8a2 2 0 0 1 2 2" />
+          <path d="M22 14v2" />
+          <path d="M22 20a2 2 0 0 1-2 2" />
+          <path d="M4 16a2 2 0 0 1-2-2" />
+          <path d="M8 10a2 2 0 0 1 2-2h5a1 1 0 0 1 1 1v5a2 2 0 0 1-2 2H9a1 1 0 0 1-1-1z" />
+          <path d="M8 2h2" />
+        </>
+      ) : (
+        <>
+          <path d="M16 12v2a2 2 0 0 1-2 2H9a1 1 0 0 0-1 1v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V10a2 2 0 0 0-2-2" />
+          <path d="M4 16a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v3a1 1 0 0 1-1 1h-5a2 2 0 0 0-2 2v2" />
+        </>
+      )}
+    </svg>
+  );
+}
+
+function PrimitiveDimensionNumber({ label, value, onCommit }: { label: string; value: number; onCommit: (value: number) => void }) {
+  const [draft, setDraft] = useState(() => String(value));
+
+  useEffect(() => {
+    setDraft(String(value));
+  }, [value]);
+
+  function commit() {
+    const parsed = Number(draft.trim().replace(",", "."));
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      setDraft(String(value));
+      return;
+    }
+    const next = Math.max(0.1, parsed);
+    setDraft(String(next));
+    onCommit(next);
+  }
+
+  return (
+    <ToolbarField label={label}>
+      <div className="flex h-8 items-center rounded-md border border-input bg-card">
+        <input
+          className="h-full w-20 rounded-md bg-transparent px-2 text-right font-mono text-body-sm outline-none focus:ring-2 focus:ring-blue-500"
+          type="text"
+          inputMode="decimal"
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onBlur={commit}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") event.currentTarget.blur();
+            if (event.key === "Escape") {
+              event.preventDefault();
+              setDraft(String(value));
+            }
+          }}
+        />
+        <span className="pr-2 text-[11px] text-muted-foreground">cm</span>
+      </div>
+    </ToolbarField>
   );
 }
 
@@ -257,7 +354,7 @@ function designerToolInstruction(tool: DesignerTool) {
   if (tool === "reference_text" || tool === "zone_text" || tool === "face_graphic_text") return "Click to place editable text";
   if (tool === "build_area_rect" || tool === "build_area_ellipse" || tool === "zone_rect" || tool === "zone_ellipse" || tool === "face_graphic_rect" || tool === "face_graphic_ellipse") return "Drag on the canvas to create it";
   if (tool === "channel_bezier") return "Click to add nodes, or create from the selected paths";
-  if (tool === "build_area_polygon" || tool === "build_area_bezier" || tool === "zone_polygon" || tool === "zone_bezier" || tool === "face_graphic_polygon" || tool === "face_graphic_bezier") return "Click to add nodes and close the path to finish";
+  if (tool === "build_area_polygon" || tool === "build_area_bezier" || tool === "zone_polygon" || tool === "face_graphic_polygon" || tool === "face_graphic_bezier") return "Click to add nodes and close the path to finish";
   if (tool === "led_string" || tool === "data_cable") return "Click to draw the route";
   return "Click a route point to split it";
 }
@@ -314,7 +411,9 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
   const [routeCreationSurface, setRouteCreationSurface] = useState<"rear" | "front">("rear");
   const [channelPathAlignment, setChannelPathAlignment] = useState<ChannelPathAlignment>("center");
   const [moveAxis, setMoveAxis] = useState<DesignerMoveAxis>("x");
-  const [directFilletRadiusMm, setDirectFilletRadiusMm] = useState(2);
+  const [directFilletRadiusMm, setDirectFilletRadiusMm] = useState(() => Math.max(0, document.designer?.filletRadiusMm ?? 2));
+  const [directFilletRadiusSource, setDirectFilletRadiusSource] = useState<"custom" | "router_bit">("custom");
+  const activeDirectFilletRadiusMmRef = useRef(directFilletRadiusMm);
   // No work plane is active until the operator picks a category in the Layers
   // panel. Until then the canvas must not select or drag any object.
   const [activeLayer, setActiveLayer] = useState<DesignerActiveLayer | null>(null);
@@ -353,8 +452,6 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
   useEffect(() => {
     documentRef.current = document;
   }, [document]);
-
-  useEffect(() => installClientDebugHandlers(), []);
 
   useEffect(() => {
     const beginPointerInteraction = () => {
@@ -410,6 +507,10 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
   if (!designerState) return null;
   const designer: DesignerForm = designerState;
   const interactionSnapCm = canvasInteractionSnapCm(designer.snapCm, snapToGrid);
+  const activeDirectFilletRadiusMm = directFilletRadiusSource === "router_bit"
+    ? designer.fabricationCutterDiameterMm / 2
+    : directFilletRadiusMm;
+  activeDirectFilletRadiusMmRef.current = activeDirectFilletRadiusMm;
   const fabricationCutterPreset = FABRICATION_CUTTER_PRESETS_MM.find((diameter) => Math.abs(diameter - designer.fabricationCutterDiameterMm) < 1e-6);
   const channelRouterPreset = CHANNEL_ROUTER_BIT_PRESETS.find((preset) => Math.abs(preset.diameterMm - designer.channelRouterDiameterMm) < 1e-6);
   const selectedArtwork = selection?.type === "artwork" ? designer.artwork.find((artwork) => artwork.id === selection.id) ?? null : null;
@@ -481,7 +582,10 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
   const selectedGeometryId = selectedBuildArea?.geometryId ?? selectedZone?.geometryId ?? selectedFaceGraphic?.geometryId ?? selectedProjection?.geometryId ?? selectedDerivedGeometry?.geometryId ?? selectedChannel?.geometryId;
   const directFilletAvailable = Boolean(selectedBuildArea || selectedZone || selectedFaceGraphic);
   const selectedNativeShape = selectedBuildArea ?? selectedZone ?? selectedFaceGraphic;
-  const pathTrimAvailable = Boolean(selectedNativeShape?.shape === "polygon" && selectedNativeShape.points?.length);
+  const pathTrimAvailable = Boolean(
+    selectedNativeShape?.shape === "polygon" && selectedNativeShape.points?.length
+    || selection?.type === "channel" && selectedChannel?.points.length
+  );
   const projectionSourceOptions = [
     ...designer.buildAreas.map((entry) => ({ geometryId: entry.geometryId, label: `Reference · ${entry.name}` })),
     ...designer.zones.map((entry) => ({ geometryId: entry.geometryId, label: `Zone · ${entry.name}` })),
@@ -490,7 +594,12 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
     ...designer.projections.map((entry) => ({ geometryId: entry.geometryId, label: `Projection · ${entry.name}` })),
     ...designer.derivedGeometries.map((entry) => ({ geometryId: entry.geometryId, label: `${entry.operation === "offset" ? "Offset" : "Fillet"} · ${entry.name}` }))
   ].filter((entry): entry is { geometryId: string; label: string } => Boolean(entry.geometryId));
-  const selectedGeometryKeys = geometrySelections.map((entry) => `${entry.type}:${entry.id}`);
+  const selectedGeometryKeys = geometrySelections.map(designerGeometrySelectionKey);
+  const hasMultipleGeometrySelection = geometrySelections.length >= 2;
+  const selectedGeometryKeySet = new Set(selectedGeometryKeys);
+  const selectedVectorGroup = designer.vectorGroups.find((group) => group.members.length === selectedGeometryKeySet.size
+    && group.members.every((member) => selectedGeometryKeySet.has(designerGeometrySelectionKey(member)))) ?? null;
+  const canGroupGeometrySelection = hasMultipleGeometrySelection && geometrySelections.every(isDesignerVectorGroupMember);
   const selectedOpticalTarget = selectedZone ? { type: "zone" as const, id: selectedZone.id } : selectedChannel ? { type: "channel" as const, id: selectedChannel.id } : null;
   const selectedOpticalTargets = (opticalTargetSelection.length ? opticalTargetSelection : selectedOpticalTarget ? [selectedOpticalTarget] : [])
     .filter((target) => target.type === "zone" ? designer.zones.some((zone) => zone.id === target.id) : designer.channels.some((channel) => channel.id === target.id));
@@ -607,7 +716,6 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
       if (activeLayer === "zones" && event.key.toLowerCase() === "r") setTool("zone_rect");
       if (activeLayer === "zones" && event.key.toLowerCase() === "e") setTool("zone_ellipse");
       if (activeLayer === "zones" && event.key.toLowerCase() === "p") setTool("zone_polygon");
-      if (activeLayer === "zones" && event.key.toLowerCase() === "b") setTool("zone_bezier");
       if (activeLayer === "zones" && event.key.toLowerCase() === "c" && !event.ctrlKey && !event.metaKey) setTool("channel_bezier");
       if (activeLayer === "faceGraphic" && event.key.toLowerCase() === "r") setTool("face_graphic_rect");
       if (activeLayer === "faceGraphic" && event.key.toLowerCase() === "e") setTool("face_graphic_ellipse");
@@ -832,8 +940,83 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
     setSelection({ type: "work_line", id: workLineId });
   }
 
+  function generateWorkLineHoles() {
+    if (designer.layers.faceGraphic.locked) {
+      setFabricationNotice("Generate Holes blocked: unlock Face Graphic first.");
+      return;
+    }
+    const intersections = workLineIntersectionPoints(designer.workLines);
+    if (!intersections.length) {
+      setFabricationNotice("Generate Holes found no intersections between Work Lines.");
+      return;
+    }
+    const pendingIntersections = missingWorkLineHolePoints(intersections, designer.faceGraphics);
+    if (!pendingIntersections.length) {
+      setFabricationNotice("Generate Holes: every Work Line intersection already has a hole.");
+      return;
+    }
+    const diameterCm = designer.holeDiameterMm / 10;
+    const radiusCm = diameterCm / 2;
+    const firstNumber = nextDesignerItemNumber(designer.faceGraphics, "work_line_hole_");
+    const holes = pendingIntersections.map((point, index): DesignerFaceGraphicForm => {
+      const number = firstNumber + index;
+      return {
+        id: `work_line_hole_${number}`,
+        name: `Hole ${number}`,
+        shape: "ellipse",
+        x: point.x - radiusCm,
+        y: point.y - radiusCm,
+        width: diameterCm,
+        height: diameterCm,
+        passMode: "clear",
+        filterColor: "#FFFFFF",
+        visible: true,
+        locked: false,
+        opacity: 1
+      };
+    });
+    updateDesigner({
+      ...designer,
+      layers: {
+        ...designer.layers,
+        faceGraphic: { ...designer.layers.faceGraphic, visible: true }
+      },
+      faceGraphics: [...designer.faceGraphics, ...holes]
+    });
+    setFabricationNotice(`${holes.length} hole${holes.length === 1 ? "" : "s"} generated directly in Face Graphic at ${designer.holeDiameterMm} mm diameter.`);
+  }
+
   function patchDesignerLayer(layer: keyof DesignerLayersForm, patch: Partial<DesignerLayerSettings>) {
     patchDesignerLayers([layer], patch);
+  }
+
+  function setArtworkVisibility(visible: boolean) {
+    updateDesigner({
+      ...designer,
+      layers: {
+        ...designer.layers,
+        artwork: { ...designer.layers.artwork, visible },
+        reference: { ...designer.layers.reference, visible }
+      }
+    });
+  }
+
+  function setArtworkFolderVisibility(folder: "images" | "reference" | "workLines", visible: boolean) {
+    if (folder === "images") {
+      updateDesigner({ ...designer, artwork: designer.artwork.map((artwork) => ({ ...artwork, visible })) });
+      return;
+    }
+    if (folder === "workLines") {
+      patchDesigner({ workLinesVisible: visible });
+      return;
+    }
+    updateDesigner({
+      ...designer,
+      buildAreas: designer.buildAreas.map((buildArea) => ({ ...buildArea, visible })),
+      texts: designer.texts.map((text) => text.targetLayer === "reference" ? { ...text, visible } : text),
+      projections: designer.projections.map((projection) => projection.targetLayer === "reference" ? { ...projection, visible } : projection),
+      derivedGeometries: designer.derivedGeometries.map((operation) => operation.targetLayer === "reference" ? { ...operation, visible } : operation)
+    });
   }
 
   function patchDesignerLayers(layers: Array<keyof DesignerLayersForm>, patch: Partial<DesignerLayerSettings>) {
@@ -1059,6 +1242,35 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
       : { ...designer, channels: designer.channels.map((channel) => ({ ...channel, visible })) });
   }
 
+  function applyDiffusorVisibility(visibleObjectKeys: string[]) {
+    updateDesigner(applyDiffusorObjectVisibility(designer, visibleObjectKeys));
+  }
+
+  function createDiffusorVisibilityPreset(name: string) {
+    const id = `diffusor_visibility_${nextDesignerItemNumber(designer.diffusorVisibilityPresets, "diffusor_visibility_")}`;
+    updateDesigner({
+      ...designer,
+      diffusorVisibilityPresets: [...designer.diffusorVisibilityPresets, { id, name, visibleObjectKeys: visibleDiffusorObjectKeys(designer) }]
+    });
+    return id;
+  }
+
+  function updateDiffusorVisibilityPreset(presetId: string) {
+    updateDesigner({
+      ...designer,
+      diffusorVisibilityPresets: designer.diffusorVisibilityPresets.map((preset) => preset.id === presetId
+        ? { ...preset, visibleObjectKeys: visibleDiffusorObjectKeys(designer) }
+        : preset)
+    });
+  }
+
+  function deleteDiffusorVisibilityPreset(presetId: string) {
+    updateDesigner({
+      ...designer,
+      diffusorVisibilityPresets: designer.diffusorVisibilityPresets.filter((preset) => preset.id !== presetId)
+    });
+  }
+
   function patchBuildAreaVisual(buildAreaId: string, patch: Partial<Pick<DesignerBuildAreaForm, "name" | "visible" | "locked" | "opacity">>) {
     updateDesigner({ ...designer, buildAreas: designer.buildAreas.map((buildArea) => (buildArea.id === buildAreaId ? { ...buildArea, ...patch } : buildArea)) });
   }
@@ -1138,6 +1350,12 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
       const text = nextSelection?.type === "text" ? designer.texts.find((entry) => entry.id === nextSelection.id) : null;
       const geometryTarget = projection?.targetLayer ?? derived?.targetLayer ?? text?.targetLayer;
       const selectionLayer = geometryTarget ? geometryTarget === "reference" ? "artwork" : geometryTarget : designerLayerForSelection(nextSelection);
+      const selectedAuthoringGroup = isDesignerGeometrySelection(nextSelection)
+        ? designer.vectorGroups.find((group) => group.members.some((member) => designerGeometrySelectionKey(member) === designerGeometrySelectionKey(nextSelection)))
+        : null;
+      const requestedGeometrySelections: DesignerGeometrySelection[] = selectedAuthoringGroup
+        ? selectedAuthoringGroup.members.map((member) => ({ ...member }))
+        : isDesignerGeometrySelection(nextSelection) ? [nextSelection] : [];
       if (additive && isDesignerGeometrySelection(nextSelection) && selectionLayer) {
         const sameLayer = geometrySelections.every((entry) => {
           const selectedProjection = entry.type === "projection" ? designer.projections.find((projectionEntry) => projectionEntry.id === entry.id) : null;
@@ -1147,17 +1365,18 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
           return layer === selectionLayer;
         });
         const base = sameLayer ? geometrySelections : [];
-        const exists = base.some((entry) => entry.type === nextSelection.type && entry.id === nextSelection.id);
-        const nextSelections = exists
-          ? base.filter((entry) => entry.type !== nextSelection.type || entry.id !== nextSelection.id)
-          : [...base, nextSelection];
+        const requestedKeys = new Set(requestedGeometrySelections.map(designerGeometrySelectionKey));
+        const allRequestedSelected = requestedGeometrySelections.every((requested) => base.some((entry) => designerGeometrySelectionKey(entry) === designerGeometrySelectionKey(requested)));
+        const nextSelections = allRequestedSelected
+          ? base.filter((entry) => !requestedKeys.has(designerGeometrySelectionKey(entry)))
+          : [...base, ...requestedGeometrySelections.filter((requested) => !base.some((entry) => designerGeometrySelectionKey(entry) === designerGeometrySelectionKey(requested)))];
         setGeometrySelections(nextSelections);
         setSelection(nextSelections.at(-1) ?? null);
         setActiveLayer(selectionLayer);
         setLayersPanelOpen(true);
         return;
       }
-      setGeometrySelections(isDesignerGeometrySelection(nextSelection) ? [nextSelection] : []);
+      setGeometrySelections(requestedGeometrySelections);
       if (selectionLayer) {
         setActiveLayer(selectionLayer);
         setLayersPanelOpen(true);
@@ -1513,7 +1732,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
       return;
     }
 
-    const requestedRadiusMm = Math.max(0, directFilletRadiusMm);
+    const requestedRadiusMm = Math.max(0, activeDirectFilletRadiusMmRef.current);
     const result = applyDesignerNativeFillet(designer, target, requestedRadiusMm);
     const appliedRadiusMm = result.appliedRadiusMm;
     if (!result.applied || typeof appliedRadiusMm !== "number") {
@@ -1524,26 +1743,43 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
     updateDesigner(result.designer);
     setSelection({ type: target.type, id: target.id, pointIndex: target.cornerIndex });
     setGeometrySelections([{ type: target.type, id: target.id }]);
-    const requested = Number(requestedRadiusMm.toFixed(3));
     const applied = Number(appliedRadiusMm.toFixed(3));
-    setFabricationNotice(applied + 0.001 < requested
-      ? `Fillet requested ${requested} mm · applied maximum tangent radius ${applied} mm.`
-      : `Fillet ${applied} mm applied tangentially to the selected node.`);
+    setFabricationNotice(`Fillet R${applied} mm applied exactly to the selected node.`);
   }
 
   function patchDirectFilletRadius(radiusMm: number) {
     const requestedRadiusMm = Math.max(0, radiusMm);
     setDirectFilletRadiusMm(requestedRadiusMm);
+    setDirectFilletRadiusSource("custom");
+    activeDirectFilletRadiusMmRef.current = requestedRadiusMm;
+    recalculateDirectFilletRadius(requestedRadiusMm, requestedRadiusMm);
+  }
+
+  function selectDirectFilletRadiusSource(source: "custom" | "router_bit") {
+    const requestedRadiusMm = source === "router_bit" ? designer.fabricationCutterDiameterMm / 2 : directFilletRadiusMm;
+    setDirectFilletRadiusSource(source);
+    activeDirectFilletRadiusMmRef.current = requestedRadiusMm;
+    recalculateDirectFilletRadius(requestedRadiusMm);
+  }
+
+  function recalculateDirectFilletRadius(radiusMm: number, customRadiusMm?: number) {
+    const requestedRadiusMm = Math.max(0, radiusMm);
+    const settingsDesigner = typeof customRadiusMm === "number"
+      ? { ...designer, filletRadiusMm: customRadiusMm }
+      : designer;
     const editable = editableNativeFilletRef.current;
-    if (!editable || tool !== "fillet" || selection?.type !== editable.target.type || selection.id !== editable.target.id || selection.pointIndex !== editable.target.cornerIndex) return;
+    if (!editable || tool !== "fillet" || selection?.type !== editable.target.type || selection.id !== editable.target.id || selection.pointIndex !== editable.target.cornerIndex) {
+      if (settingsDesigner !== designer) updateDesigner(settingsDesigner);
+      return;
+    }
 
     if (requestedRadiusMm === 0) {
       const shape = designerGeometryAsShape(editable.sourceGeometry);
       const restored: DesignerForm = editable.target.type === "build_area"
-        ? { ...designer, buildAreas: designer.buildAreas.map((entry) => entry.id === editable.target.id ? { ...entry, ...shape } : entry) }
+        ? { ...settingsDesigner, buildAreas: settingsDesigner.buildAreas.map((entry) => entry.id === editable.target.id ? { ...entry, ...shape } : entry) }
         : editable.target.type === "zone"
-          ? { ...designer, zones: designer.zones.map((entry) => entry.id === editable.target.id ? { ...entry, ...shape } : entry) }
-          : { ...designer, faceGraphics: designer.faceGraphics.map((entry) => entry.id === editable.target.id ? { ...entry, ...shape } : entry) };
+          ? { ...settingsDesigner, zones: settingsDesigner.zones.map((entry) => entry.id === editable.target.id ? { ...entry, ...shape } : entry) }
+          : { ...settingsDesigner, faceGraphics: settingsDesigner.faceGraphics.map((entry) => entry.id === editable.target.id ? { ...entry, ...shape } : entry) };
       updateDesigner(restored);
       setSelection({ type: editable.target.type, id: editable.target.id, pointIndex: editable.target.cornerIndex });
       setFabricationNotice("Fillet removed from the selected node.");
@@ -1552,21 +1788,19 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
 
     const sourceGeometry = editable.sourceGeometry;
     const calculationDesigner: DesignerForm = {
-      ...designer,
-      geometries: [...(designer.geometries ?? []).filter((geometry) => geometry.id !== sourceGeometry.id), sourceGeometry]
+      ...settingsDesigner,
+      geometries: [...(settingsDesigner.geometries ?? []).filter((geometry) => geometry.id !== sourceGeometry.id), sourceGeometry]
     };
     const result = applyDesignerNativeFillet(calculationDesigner, editable.target, requestedRadiusMm);
     if (!result.applied || typeof result.appliedRadiusMm !== "number") {
+      if (settingsDesigner !== designer) updateDesigner(settingsDesigner);
       setFabricationNotice(result.warnings[0] ?? "Fillet could not be recalculated for the selected node.");
       return;
     }
     updateDesigner(result.designer);
     setSelection({ type: editable.target.type, id: editable.target.id, pointIndex: editable.target.cornerIndex });
-    const requested = Number(requestedRadiusMm.toFixed(3));
     const applied = Number(result.appliedRadiusMm.toFixed(3));
-    setFabricationNotice(applied + 0.001 < requested
-      ? `Fillet requested ${requested} mm · applied maximum tangent radius ${applied} mm.`
-      : `Fillet updated to ${applied} mm on the selected node.`);
+    setFabricationNotice(`Fillet updated exactly to R${applied} mm on the selected node.`);
   }
 
   function toggleDirectFilletTool() {
@@ -1710,6 +1944,30 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
     setFabricationNotice(`Independent projection created in ${projectionTargetLayer === "faceGraphic" ? "Face Graphic" : projectionTargetLayer === "zones" ? "Diffusors" : "Reference"}; current layer and selection preserved.`);
   }
 
+  function groupSelectedGeometry() {
+    if (!canGroupGeometrySelection || selectedVectorGroup) return;
+    const memberKeys = new Set(geometrySelections.map(designerGeometrySelectionKey));
+    const next = nextDesignerItemNumber(designer.vectorGroups, "vector_group_");
+    updateDesigner({
+      ...designer,
+      vectorGroups: [
+        ...designer.vectorGroups.filter((group) => !group.members.some((member) => memberKeys.has(designerGeometrySelectionKey(member)))),
+        {
+          id: `vector_group_${next}`,
+          name: `Vector Group ${next}`,
+          members: geometrySelections.filter(isDesignerVectorGroupMember).map((selection) => ({ type: selection.type, id: selection.id }))
+        }
+      ]
+    });
+    setFabricationNotice(`${geometrySelections.length} vectors grouped. Select any member to recover the complete group.`);
+  }
+
+  function ungroupSelectedGeometry() {
+    if (!selectedVectorGroup) return;
+    updateDesigner({ ...designer, vectorGroups: designer.vectorGroups.filter((group) => group.id !== selectedVectorGroup.id) });
+    setFabricationNotice(`${selectedVectorGroup.name} ungrouped; its vectors remain selected and unchanged.`);
+  }
+
   function applyBooleanOperation(operation: DesignerBooleanOperation) {
     if (geometrySelections.length < 2) return;
     const paper = window.paper;
@@ -1768,10 +2026,12 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
     const removedBuildAreas = new Set(geometrySelections.filter((entry) => entry.type === "build_area").map((entry) => entry.id));
     const removedZones = new Set(geometrySelections.filter((entry) => entry.type === "zone").map((entry) => entry.id));
     const removedFaceGraphics = new Set(geometrySelections.filter((entry) => entry.type === "face_graphic").map((entry) => entry.id));
+    const removedSelectionKeys = new Set(geometrySelections.map(designerGeometrySelectionKey));
+    const retainedVectorGroups = designer.vectorGroups.filter((group) => !group.members.some((member) => removedSelectionKeys.has(designerGeometrySelectionKey(member))));
     if (target === "reference") {
       const base = designer.buildAreas.find((entry) => removedBuildAreas.has(entry.id));
       const item: DesignerBuildAreaForm = { ...shape, id: resultObjectId, geometryId, name: `${operationLabel} ${nextNumber}`, visible: true, locked: false, opacity: base?.opacity ?? 1 };
-      updateDesigner({ ...designer, buildAreas: [...designer.buildAreas.filter((entry) => !removedBuildAreas.has(entry.id)), item] });
+      updateDesigner({ ...designer, buildAreas: [...designer.buildAreas.filter((entry) => !removedBuildAreas.has(entry.id)), item], vectorGroups: retainedVectorGroups });
       setSelection({ type: "build_area", id: item.id });
       setGeometrySelections([{ type: "build_area", id: item.id }]);
     } else if (target === "zones") {
@@ -1787,6 +2047,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
       updateDesigner({
         ...designer,
         zones: [...designer.zones.filter((entry) => !removedZones.has(entry.id)), item],
+        vectorGroups: retainedVectorGroups,
         groups,
         lightSources: designer.lightSources.map((source) => source.targetType === "zone" && removedZones.has(source.targetId) ? { ...source, targetId: item.id } : source)
       });
@@ -1795,7 +2056,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
     } else {
       const base = designer.faceGraphics.find((entry) => removedFaceGraphics.has(entry.id));
       const item: DesignerFaceGraphicForm = { ...shape, id: resultObjectId, geometryId, name: designerBooleanResultName(operands[0].name, operation), passMode: base?.passMode ?? "translucent", filterColor: base?.filterColor ?? "#FFFFFF", visible: true, locked: false, opacity: base?.opacity ?? 1 };
-      updateDesigner({ ...designer, faceGraphics: [...designer.faceGraphics.filter((entry) => !removedFaceGraphics.has(entry.id)), item] });
+      updateDesigner({ ...designer, faceGraphics: [...designer.faceGraphics.filter((entry) => !removedFaceGraphics.has(entry.id)), item], vectorGroups: retainedVectorGroups });
       setSelection({ type: "face_graphic", id: item.id });
       setGeometrySelections([{ type: "face_graphic", id: item.id }]);
     }
@@ -2197,6 +2458,33 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
 
   function deleteSelection() {
     if (!selection) return;
+    if (selectedVectorGroup) {
+      const buildAreaIds = new Set(selectedVectorGroup.members.filter((member) => member.type === "build_area").map((member) => member.id));
+      const zoneIds = new Set(selectedVectorGroup.members.filter((member) => member.type === "zone").map((member) => member.id));
+      const faceGraphicIds = new Set(selectedVectorGroup.members.filter((member) => member.type === "face_graphic").map((member) => member.id));
+      const layerLocked = buildAreaIds.size > 0 && designer.layers.artwork.locked
+        || zoneIds.size > 0 && designer.layers.zones.locked
+        || faceGraphicIds.size > 0 && (designer.layers.faceGraphic.locked || designer.faceGraphics.some((entry) => faceGraphicIds.has(entry.id) && entry.locked));
+      if (layerLocked) return;
+      updateDesigner({
+        ...designer,
+        buildAreas: designer.buildAreas.filter((entry) => !buildAreaIds.has(entry.id)),
+        zones: designer.zones.filter((entry) => !zoneIds.has(entry.id)),
+        faceGraphics: designer.faceGraphics.filter((entry) => !faceGraphicIds.has(entry.id)),
+        vectorGroups: designer.vectorGroups.filter((group) => group.id !== selectedVectorGroup.id),
+        groups: designer.groups.map((group) => ({ ...group, members: group.members.filter((member) => !(member.type === "zone" && zoneIds.has(member.id))) })),
+        lightSources: designer.lightSources
+          .filter((source) => !(source.targetType === "zone" && zoneIds.has(source.targetId)))
+          .map((source) => source.receiverType === "build_area" && source.receiverId && buildAreaIds.has(source.receiverId)
+            || source.receiverType === "zone" && source.receiverId && zoneIds.has(source.receiverId)
+            ? { ...source, receiverType: "canvas", receiverId: undefined }
+            : source)
+      });
+      setSelection(null);
+      setGeometrySelections([]);
+      setFabricationNotice(`${selectedVectorGroup.name} and its ${selectedVectorGroup.members.length} vectors deleted.`);
+      return;
+    }
     if (selection.type === "work_line") {
       if (typeof selection.pointIndex === "number") {
         deleteWorkLinePoint(selection.id, selection.pointIndex);
@@ -2531,11 +2819,6 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
   }
 
   function patchOpticalTreatment(treatmentId: string, patch: Partial<DesignerOpticalTreatment>) {
-    recordClientDebug("optical_treatment_patch", {
-      target: selectedOpticalTarget ? `${selectedOpticalTarget.type}:${selectedOpticalTarget.id}` : null,
-      treatmentId,
-      patch
-    });
     updateLiveDocument((current) => {
       const currentDesigner = current.designer ?? designer;
       return {
@@ -2655,6 +2938,12 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
   }
 
   const canCopySelection = Boolean(selection && (selection.type === "artwork" || selection.type === "zone" || selection.type === "channel" || selection.type === "face_graphic" || selection.type === "route"));
+  const canPasteSelection = Boolean(clipboard && (
+    selectedArtwork && clipboard.type === "artwork"
+    || (selectedZone || selectedChannel) && (clipboard.type === "zone" || clipboard.type === "channel")
+    || selectedFaceGraphic && clipboard.type === "face_graphic"
+    || selectedRoute && clipboard.type === "route"
+  ));
   const canDeleteSelection = Boolean(selection)
     && selection?.type !== "controller"
     && !(selection?.type === "artwork" && designer.layers.artwork.locked)
@@ -2664,6 +2953,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
     && !(selection?.type === "text" && selectedText && (designer.layers[selectedText.targetLayer === "reference" ? "artwork" : selectedText.targetLayer].locked || selectedText.locked))
     && !(selection?.type === "light_source" && designer.layers.lightSources.locked)
     && !(selection?.type === "route" && designer.layers.strings.locked);
+  const selectedArtworkCanCreateZones = Boolean(selectedArtwork && selectedArtworkAsset && (selectedArtworkAsset.mimeType.toLowerCase().includes("svg") || selectedArtworkAsset.fileName.toLowerCase().endsWith(".svg")));
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-background text-foreground">
@@ -2737,7 +3027,8 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
                   </>
                 ) : null}
                 <div className="border-t border-border pt-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">CNC fabrication</div>
-                <ToolbarField label="Cutter preset">
+                <ToolbarNumber label="Hole diameter" value={designer.holeDiameterMm} suffix="mm" onChange={(holeDiameterMm) => patchDesigner({ holeDiameterMm: Math.max(0.001, holeDiameterMm) })} />
+                <ToolbarField label="Router bit preset">
                   <select className="h-8 rounded-md border border-input bg-card px-2 text-body-sm" value={fabricationCutterPreset ? String(fabricationCutterPreset) : "custom"} onChange={(event) => {
                     if (event.target.value !== "custom") patchDesigner({ fabricationCutterDiameterMm: Number(event.target.value) });
                   }}>
@@ -2752,8 +3043,8 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
                   </select>
                 </ToolbarField>
                 <div className="flex items-center gap-3">
-                  <ToolbarNumber label="Cutter diameter" value={cutterDiameterForDisplay(designer.fabricationCutterDiameterMm, designer.fabricationCutterUnit)} suffix={designer.fabricationCutterUnit} onChange={(value) => patchDesigner({ fabricationCutterDiameterMm: Math.max(0.001, cutterDiameterFromDisplay(value, designer.fabricationCutterUnit)) })} />
-                  <ToolbarField label="Cutter unit">
+                  <ToolbarNumber label="Router bit diameter" value={cutterDiameterForDisplay(designer.fabricationCutterDiameterMm, designer.fabricationCutterUnit)} suffix={designer.fabricationCutterUnit} onChange={(value) => patchDesigner({ fabricationCutterDiameterMm: Math.max(0.001, cutterDiameterFromDisplay(value, designer.fabricationCutterUnit)) })} />
+                  <ToolbarField label="Router bit unit">
                     <select className="h-8 rounded-md border border-input bg-card px-2 text-body-sm" value={designer.fabricationCutterUnit} onChange={(event) => patchDesigner({ fabricationCutterUnit: event.target.value as DesignerForm["fabricationCutterUnit"] })}>
                       <option value="mm">mm</option>
                       <option value="in">inches</option>
@@ -2858,7 +3149,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
             <div className="h-6 w-px shrink-0 bg-border" />
           </>
         ) : null}
-        {editorMode === "design" && (!selection || nodeCreationToolActive || tool === "move" || tool === "path_trim" || tool === "work_line") ? <span className="text-body-sm text-muted-foreground">{designerToolInstruction(tool)}{tool === "work_line" ? activeLayer ? ` · assigned to ${ACTIVE_LAYER_LABELS[activeLayer]}` : " · global" : activeLayer ? ` · ${ACTIVE_LAYER_LABELS[activeLayer]} layer` : " · Choose a layer to begin"}</span> : null}
+        {editorMode === "design" && (!selection || nodeCreationToolActive || tool === "move" || tool === "path_trim" || tool === "work_line") ? <span className="text-body-sm text-muted-foreground">{designerToolInstruction(tool)}{tool === "work_line" ? " · Artwork / Reference" : activeLayer ? ` · ${ACTIVE_LAYER_LABELS[activeLayer]} layer` : " · Choose a layer to begin"}</span> : null}
         {editorMode === "design" && tool === "move" ? (
           <ToolbarField label="Fixed axis">
             <select className="h-8 rounded-md border border-input bg-card px-2 text-body-sm" value={moveAxis} onChange={(event) => setMoveAxis(event.target.value as DesignerMoveAxis)}>
@@ -2894,18 +3185,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
             </Button>
           </>
         ) : null}
-        {editorMode === "design" && selectedArtwork && selectedArtworkAsset && (selectedArtworkAsset.mimeType.toLowerCase().includes("svg") || selectedArtworkAsset.fileName.toLowerCase().endsWith(".svg")) ? (
-          <Button
-            type="button"
-            variant="outline"
-            density="compact"
-            disabled={importingSvgZones || designer.layers.zones.locked}
-            title={designer.layers.zones.locked ? "Unlock Diffusors before creating Zones" : "Create editable Zones from every closed path in this SVG"}
-            onClick={() => void createZonesFromArtworkSvg(selectedArtwork.id)}
-          >
-            <Spline className="h-4 w-4" /> {importingSvgZones ? "Importing…" : "Create Zones"}
-          </Button>
-        ) : null}
+        {!hasMultipleGeometrySelection ? <>
         <fieldset disabled={editorMode === "design" && selectedObjectLocked} className="contents">
         {editorMode === "design" && selectedWorkLine ? (
           <>
@@ -2945,7 +3225,6 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
               </select>
             </ToolbarField>
             <Badge>{designerFontResource(selectedText.fontId)?.hash.slice(0, 15) ?? "Unresolved font"}</Badge>
-            <Button type="button" variant="outline" density="compact" onClick={() => void convertTextToPaths(selectedText.id)}>Convert to paths</Button>
           </>
         ) : editorMode === "design" && selectedBuildArea ? (
           <>
@@ -2963,12 +3242,12 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
                   <NodeTypePicker value={selectedBuildAreaPointLocation.point.nodeType ?? (selectedBuildArea.pathMode === "bezier" ? "smooth" : "corner")} onChange={(nodeType) => setBuildAreaNodeType(selectedBuildArea.id, selectedBuildAreaPointIndex, nodeType)} />
                 </ToolbarField>
               </>
-            ) : (
+            ) : selectedBuildArea.shape === "rect" || selectedBuildArea.shape === "ellipse" ? (
               <>
-                <ToolbarNumber label="W" value={selectedBuildArea.width} suffix="cm" onChange={(width) => patchBuildArea(selectedBuildArea.id, { width })} />
-                <ToolbarNumber label="H" value={selectedBuildArea.height} suffix="cm" onChange={(height) => patchBuildArea(selectedBuildArea.id, { height })} />
+                <PrimitiveDimensionNumber label={selectedBuildArea.shape === "ellipse" ? "ØW" : "W"} value={selectedBuildArea.width} onCommit={(width) => patchBuildArea(selectedBuildArea.id, { width })} />
+                <PrimitiveDimensionNumber label={selectedBuildArea.shape === "ellipse" ? "ØH" : "H"} value={selectedBuildArea.height} onCommit={(height) => patchBuildArea(selectedBuildArea.id, { height })} />
               </>
-            )}
+            ) : null}
           </>
         ) : editorMode === "design" && selectedLightSource ? (
           <>
@@ -2993,6 +3272,12 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
                 <ToolbarField label="Node"><NodeTypePicker value={selectedFaceGraphicPointLocation.point.nodeType ?? (selectedFaceGraphic.pathMode === "bezier" ? "smooth" : "corner")} onChange={(nodeType) => setFaceGraphicNodeType(selectedFaceGraphic.id, selectedFaceGraphicPointIndex, nodeType)} /></ToolbarField>
               </>
             ) : null}
+            {selectedFaceGraphic.shape === "rect" || selectedFaceGraphic.shape === "ellipse" ? (
+              <>
+                <PrimitiveDimensionNumber label={selectedFaceGraphic.shape === "ellipse" ? "ØW" : "W"} value={selectedFaceGraphic.width} onCommit={(width) => patchFaceGraphic(selectedFaceGraphic.id, { width })} />
+                <PrimitiveDimensionNumber label={selectedFaceGraphic.shape === "ellipse" ? "ØH" : "H"} value={selectedFaceGraphic.height} onCommit={(height) => patchFaceGraphic(selectedFaceGraphic.id, { height })} />
+              </>
+            ) : null}
           </>
         ) : editorMode === "design" && selectedZone ? (
           <>
@@ -3002,6 +3287,12 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
                 <ToolbarField label="Node">
                   <NodeTypePicker value={selectedZonePointLocation.point.nodeType ?? (selectedZone.pathMode === "bezier" ? "smooth" : "corner")} onChange={(nodeType) => setZoneNodeType(selectedZone.id, selectedZonePointIndex, nodeType)} />
                 </ToolbarField>
+              </>
+            ) : null}
+            {selectedZone.shape === "rect" || selectedZone.shape === "ellipse" ? (
+              <>
+                <PrimitiveDimensionNumber label={selectedZone.shape === "ellipse" ? "ØW" : "W"} value={selectedZone.width} onCommit={(width) => patchZone(selectedZone.id, { width })} />
+                <PrimitiveDimensionNumber label={selectedZone.shape === "ellipse" ? "ØH" : "H"} value={selectedZone.height} onCommit={(height) => patchZone(selectedZone.id, { height })} />
               </>
             ) : null}
           </>
@@ -3056,19 +3347,25 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
           </>
         ) : null}
         </fieldset>
-        {editorMode === "design" && pathTrimAvailable ? (
-          <Button type="button" variant={tool === "path_trim" ? "default" : "outline"} density="compact" disabled={selectedObjectLocked} title="Preview and remove one self-crossing path segment" onClick={() => setTool(tool === "path_trim" ? "select" : "path_trim")}>
-            <Scissors className="h-4 w-4" /> Trim
+        {selectedArtworkCanCreateZones && selectedArtwork ? (
+          <Button type="button" variant="outline" density="compact" disabled={importingSvgZones || designer.layers.zones.locked} title={designer.layers.zones.locked ? "Unlock Diffusors before creating Zones" : "Create editable Zones from every closed path in this SVG"} onClick={() => void createZonesFromArtworkSvg(selectedArtwork.id)}>
+            <Spline className="h-4 w-4" /> {importingSvgZones ? "Importing…" : "Create Zones"}
           </Button>
         ) : null}
-        {editorMode === "design" && geometrySelections.length >= 2 ? (
+        {selectedWorkLine ? <Button type="button" variant="outline" density="compact" onClick={generateWorkLineHoles}><Circle className="h-4 w-4" /> Generate Holes</Button> : null}
+        {selectedText ? <Button type="button" variant="outline" density="compact" onClick={() => void convertTextToPaths(selectedText.id)}>Convert to paths</Button> : null}
+        {editorMode === "design" && tool === "fillet" && directFilletAvailable ? (
           <>
-            <div className="h-6 w-px shrink-0 bg-border" />
-            <Badge>{geometrySelections.length} profiles</Badge>
-            <Button type="button" variant="outline" density="compact" title="Merge all selected profiles" onClick={() => applyBooleanOperation("union")}>Union</Button>
-            <Button type="button" variant="outline" density="compact" title="Subtract later selections from the first selected profile" onClick={() => applyBooleanOperation("subtract")}>Subtract</Button>
-            <Button type="button" variant="outline" density="compact" title="Keep only overlapping material" onClick={() => applyBooleanOperation("intersect")}>Intersect</Button>
-            <Button type="button" variant="outline" density="compact" title="Keep areas belonging to exactly one profile; nested profiles produce the same hole as Subtract" onClick={() => applyBooleanOperation("exclude")}>Exclude</Button>
+            <ToolbarField label="Radius source">
+              <select className="h-8 rounded-md border border-input bg-card px-2 text-body-sm" value={directFilletRadiusSource} onChange={(event) => selectDirectFilletRadiusSource(event.target.value as "custom" | "router_bit")}>
+                <option value="custom">Custom</option>
+                <option value="router_bit">
+                  Router bit · Ø{Number(designer.fabricationCutterDiameterMm.toFixed(3))} mm → R{Number((designer.fabricationCutterDiameterMm / 2).toFixed(3))} mm
+                </option>
+              </select>
+            </ToolbarField>
+            <ToolbarNumber label="Radius" value={activeDirectFilletRadiusMm} suffix="mm" onChange={patchDirectFilletRadius} />
+            <span role="status" className="max-w-80 whitespace-normal text-meta leading-tight text-muted-foreground" title={fabricationNotice}>{fabricationNotice}</span>
           </>
         ) : null}
         {editorMode === "design" && selectedGeometryId && !selectedChannel && !selectedProjectionSourceChannel ? (
@@ -3080,13 +3377,8 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
                 <option value="round">Round</option><option value="miter">Miter</option><option value="bevel">Bevel</option>
               </select>
             </ToolbarField>
-            <Button type="button" variant="outline" density="compact" title="Create an independent offset from this profile" onClick={createIndependentOffsetGeometry}>Offset Path</Button>
-            {directFilletAvailable ? (
-              <>
-                <Button type="button" variant={tool === "fillet" ? "default" : "outline"} density="compact" title="Apply a tangent fillet to the selected node or click another corner" onClick={toggleDirectFilletTool}>Fillet</Button>
-                {tool === "fillet" ? <ToolbarNumber label="Radius" value={directFilletRadiusMm} suffix="mm" onChange={patchDirectFilletRadius} /> : null}
-              </>
-            ) : <Button type="button" variant="outline" density="compact" title="Create a live fillet derived from this linked profile" onClick={createDerivedFilletGeometry}>Fillet</Button>}
+            <Button type="button" variant="outline" density="compact" title="Create an independent offset from this profile" onClick={createIndependentOffsetGeometry}><Tally2 className="h-4 w-4" /> Offset Path</Button>
+            {!directFilletAvailable ? <Button type="button" variant="outline" density="compact" onClick={createDerivedFilletGeometry}><Radius className="h-4 w-4" /> Fillet</Button> : null}
           </>
         ) : null}
         {editorMode === "design" && selectedDerivedGeometry ? (
@@ -3149,7 +3441,8 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
               </select>
             </ToolbarField>
           </>
-        ) : editorMode === "design" && selectedGeometryId ? (
+        ) : null}
+        {editorMode === "design" && selectedGeometryId && !selectedDerivedGeometry && !selectedProjection ? (
           <>
             <div className="h-6 w-px shrink-0 bg-border" />
             <ToolbarField label="Project to">
@@ -3157,31 +3450,34 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
                 <option value="faceGraphic">Face Graphic</option><option value="zones">Diffusors</option><option value="reference">Reference</option>
               </select>
             </ToolbarField>
-            <Button type="button" variant="outline" density="compact" onClick={projectSelectedGeometry}><ScanLine className="h-4 w-4" /> Project Geometry</Button>
+            <Button type="button" variant="outline" density="compact" onClick={projectSelectedGeometry}><Layers2 className="h-4 w-4" /> Project Geometry</Button>
           </>
         ) : null}
-        {editorMode === "design" && (canCopySelection || clipboard || canDeleteSelection) ? (
+        </> : (
           <>
-            <div className="h-6 w-px shrink-0 bg-border" />
-            {canCopySelection ? (
-              <Button type="button" variant="outline" density="compact" title="Copy selected object (Ctrl/Cmd+C)" className="px-2" onClick={copySelection}>
-                <Copy className="h-3.5 w-3.5" /> Copy
-              </Button>
-            ) : null}
-            {clipboard ? (
-              <Button type="button" variant="outline" density="compact" title="Paste copied object (Ctrl/Cmd+V)" className="px-2" onClick={pasteSelection}>
-                Paste
-              </Button>
-            ) : null}
-            {canDeleteSelection ? (
-              <Button type="button" variant="destructive" density="compact" title="Delete selection" className="px-2" onClick={deleteSelection}>
-                <Trash2 className="h-3.5 w-3.5" /> Delete
-              </Button>
-            ) : null}
+            <Badge>{geometrySelections.length} selected</Badge>
+            <div className="flex h-8 items-center overflow-hidden rounded-md border border-border-2 bg-card">
+              {selectedVectorGroup ? (
+                <button type="button" className="flex h-8 items-center justify-center gap-1.5 border-r border-border px-2 hover:bg-surface-hover" title="Ungroup · keep every vector unchanged and remove only the authoring group" aria-label="Ungroup selected vectors" onClick={ungroupSelectedGeometry}><Ungroup className="h-4 w-4" /><span>Ungroup</span></button>
+              ) : (
+                <button type="button" className="flex h-8 items-center justify-center gap-1.5 border-r border-border px-2 hover:bg-surface-hover disabled:cursor-not-allowed disabled:opacity-50" title={canGroupGeometrySelection ? "Group · select and move these vectors as one authoring unit" : "Group requires editable vectors from the same layer"} aria-label="Group selected vectors" disabled={!canGroupGeometrySelection} onClick={groupSelectedGeometry}><Group className="h-4 w-4" /><span>Group</span></button>
+              )}
+              <button type="button" className="flex h-8 items-center justify-center gap-1.5 border-r border-border px-2 hover:bg-surface-hover" title="Union · merge all selected profiles" aria-label="Union selected profiles" onClick={() => applyBooleanOperation("union")}><BooleanSquaresIcon operation="union" className="h-4 w-4" /><span>Union</span></button>
+              <button type="button" className="flex h-8 items-center justify-center gap-1.5 border-r border-border px-2 hover:bg-surface-hover" title="Subtract · remove later selections from the first profile" aria-label="Subtract selected profiles" onClick={() => applyBooleanOperation("subtract")}><BooleanSquaresIcon operation="subtract" className="h-4 w-4" /><span>Subtract</span></button>
+              <button type="button" className="flex h-8 items-center justify-center gap-1.5 border-r border-border px-2 hover:bg-surface-hover" title="Intersect · keep only overlapping material" aria-label="Intersect selected profiles" onClick={() => applyBooleanOperation("intersect")}><BooleanSquaresIcon operation="intersect" className="h-4 w-4" /><span>Intersect</span></button>
+              <button type="button" className="flex h-8 items-center justify-center gap-1.5 px-2 hover:bg-surface-hover" title="Exclude · keep areas belonging to exactly one profile" aria-label="Exclude selected profiles" onClick={() => applyBooleanOperation("exclude")}><BooleanSquaresIcon operation="exclude" className="h-4 w-4" /><span>Exclude</span></button>
+            </div>
           </>
-        ) : null}
+        )}
           </div>
         </div>
+        {!hasMultipleGeometrySelection && (canCopySelection || canDeleteSelection) ? (
+          <div className="ml-2 flex shrink-0 items-center gap-1 border-l border-border pl-2">
+            {canCopySelection ? <Button type="button" variant="outline" density="compact" title="Copy selected object (Ctrl/Cmd+C)" aria-label="Copy selected object" className="w-8 px-0" onClick={copySelection}><Copy className="h-4 w-4" /></Button> : null}
+            {canCopySelection ? <Button type="button" variant="outline" density="compact" title={canPasteSelection ? "Paste copied object (Ctrl/Cmd+V)" : "Paste becomes available after copying a compatible object"} aria-label="Paste copied object" disabled={!canPasteSelection} className="w-8 px-0" onClick={pasteSelection}><ClipboardPaste className="h-4 w-4" /></Button> : null}
+            {canDeleteSelection ? <Button type="button" variant="destructive" density="compact" title="Delete selection" aria-label="Delete selection" className="w-8 px-0" onClick={deleteSelection}><Trash2 className="h-4 w-4" /></Button> : null}
+          </div>
+        ) : null}
       </div> : null}
       <div className={`grid min-h-0 flex-1 ${editorMode === "animate" ? "grid-cols-[minmax(0,1fr)_380px]" : layersPanelOpen ? "grid-cols-[56px_minmax(0,1fr)_320px]" : "grid-cols-[56px_minmax(0,1fr)]"}`}>
         {editorMode === "design" ? <aside className="flex min-h-0 flex-col border-r border-border-2 bg-card py-2">
@@ -3189,13 +3485,14 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
           <ToolButton active={tool === "select"} label="Select" icon={MousePointer2} onClick={() => setTool("select")} />
           <ToolButton active={tool === "move"} label="Move · fixed X/Y axis; Ctrl releases both axes" icon={Move} onClick={() => setTool("move")} />
             <ToolButton active={tool === "pan"} label="Pan" icon={Hand} onClick={() => setTool("pan")} />
-          <ToolButton active={tool === "measure"} label="Measure distance" icon={MeasuringTapeIcon} onClick={() => setTool("measure")} />
+          <ToolButton active={tool === "measure"} label="Measure distance" icon={RulerDimensionLineIcon} onClick={() => setTool("measure")} />
           </div>
           <div className="mx-3 my-2 h-px shrink-0 bg-border" />
           {editorMode === "design" ? <div className="flex min-h-0 flex-1 flex-col items-center gap-2 overflow-y-auto px-2 pb-2">
           {activeLayer === "artwork" || activeLayer === "reference" || activeLayer === "zones" || activeLayer === "faceGraphic" ? (
-            <ToolButton active={tool === "work_line"} label="Work line · dashed construction reference" icon={WorkLineIcon} onClick={() => {
-              if (!designer.workLinesVisible) patchDesigner({ workLinesVisible: true });
+            <ToolButton active={tool === "work_line"} label="Work line · continuous construction reference" icon={SquareCenterlineDashedVertical} onClick={() => {
+              if (!designer.layers.artwork.visible) setArtworkVisibility(true);
+              else if (!designer.workLinesVisible) setArtworkFolderVisibility("workLines", true);
               setTool("work_line");
             }} />
           ) : null}
@@ -3225,8 +3522,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
             <>
               <ToolButton active={tool === "zone_rect"} label="Rectangle Zone (drag on canvas)" icon={Square} disabled={designer.layers.zones.locked || !designer.layers.zones.visible} onClick={() => setTool("zone_rect")} />
               <ToolButton active={tool === "zone_ellipse"} label="Ellipse Zone (drag on canvas)" icon={Circle} disabled={designer.layers.zones.locked || !designer.layers.zones.visible} onClick={() => setTool("zone_ellipse")} />
-              <ToolButton active={tool === "zone_polygon"} label="Polygon Zone" icon={PenLine} disabled={designer.layers.zones.locked || !designer.layers.zones.visible} onClick={() => setTool("zone_polygon")} />
-              <ToolButton active={tool === "zone_bezier"} label="Bezier Zone" icon={Spline} disabled={designer.layers.zones.locked || !designer.layers.zones.visible} onClick={() => setTool("zone_bezier")} />
+              <ToolButton active={tool === "zone_polygon"} label="Draw a polygon vector" icon={VectorPolygonIcon} disabled={designer.layers.zones.locked || !designer.layers.zones.visible} onClick={() => setTool("zone_polygon")} />
               <ToolButton active={tool === "channel_bezier"} label="Channel (neon flex trace)" icon={Waves} disabled={designer.layers.zones.locked || !designer.layers.zones.visible} onClick={() => setTool("channel_bezier")} />
             </>
           ) : null}
@@ -3237,6 +3533,13 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
               <ToolButton active={tool === "face_graphic_polygon"} label="Polygon Face Graphic" icon={PenLine} disabled={designer.layers.faceGraphic.locked || !designer.layers.faceGraphic.visible} onClick={() => setTool("face_graphic_polygon")} />
               <ToolButton active={tool === "face_graphic_bezier"} label="Bezier Face Graphic" icon={Spline} disabled={designer.layers.faceGraphic.locked || !designer.layers.faceGraphic.visible} onClick={() => setTool("face_graphic_bezier")} />
             </>
+          ) : null}
+          {!hasMultipleGeometrySelection && (pathTrimAvailable || directFilletAvailable) ? <div className="my-0.5 h-px w-6 shrink-0 bg-border" /> : null}
+          {!hasMultipleGeometrySelection && pathTrimAvailable ? (
+            <ToolButton active={tool === "path_trim"} label="Trim selected path" icon={Scissors} disabled={selectedObjectLocked} onClick={() => setTool(tool === "path_trim" ? "select" : "path_trim")} />
+          ) : null}
+          {!hasMultipleGeometrySelection && directFilletAvailable ? (
+            <ToolButton active={tool === "fillet"} label="Fillet selected path" icon={Radius} disabled={selectedObjectLocked} onClick={toggleDirectFilletTool} />
           ) : null}
           {activeLayer === "strings" ? (
             <>
@@ -3405,6 +3708,8 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
             onActivateLayer={activateDesignerLayer}
             onPatchLayer={patchDesignerLayer}
             onPatchLayers={patchDesignerLayers}
+            onSetArtworkVisibility={setArtworkVisibility}
+            onSetArtworkFolderVisibility={setArtworkFolderVisibility}
             onPatchWorkLine={patchWorkLine}
             onToggleFaceGraphicVinylPreview={() => setFaceGraphicVinylPreview((active) => !active)}
             onRouteSurfaceViewChange={(view) => {
@@ -3417,6 +3722,10 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
             onPatchBuildArea={patchBuildAreaVisual}
             onPatchZone={patchZoneVisual}
             onSetDiffusorFolderVisibility={setDiffusorFolderVisibility}
+            onApplyDiffusorVisibility={applyDiffusorVisibility}
+            onCreateDiffusorVisibilityPreset={createDiffusorVisibilityPreset}
+            onUpdateDiffusorVisibilityPreset={updateDiffusorVisibilityPreset}
+            onDeleteDiffusorVisibilityPreset={deleteDiffusorVisibilityPreset}
             onPatchFaceGraphic={patchFaceGraphic}
             onPatchProjection={patchProjection}
             onPatchDerivedGeometry={patchDerivedGeometry}

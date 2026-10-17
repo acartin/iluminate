@@ -20,8 +20,10 @@ Animate timeline when Animate mode is active
 ```
 
 Do not add a third horizontal command/properties bar. Recover horizontal space
-with compact labels, icons, grouped menus or responsive hiding before adding
-another row. Vertical canvas space has priority.
+with compact labels, icons or responsive hiding before adding another row.
+Grouped menus are valid only where this contract explicitly assigns a coherent
+group, such as global `Setup`; they are not an overflow mechanism for contextual
+object actions. Vertical canvas space has priority.
 
 ## 1. Global Command Bar
 
@@ -85,11 +87,72 @@ With an object selected it shows:
 - contextual actions such as Lighting, Configure source, Copy, Paste and
   Delete.
 
+Every Layers category uses the same contextual-bar grammar, even when its
+objects expose different capabilities:
+
+```text
+scrollable properties and contextual actions -> fixed Copy / Paste / Delete
+```
+
+### Mandatory contextual-action pattern
+
+This is a cross-category interaction contract, not a per-object styling choice:
+
+| Capability | Canonical placement | Presentation |
+|---|---|---|
+| Edits a value on the selected object or node | Scrollable contextual area | Direct field or selector |
+| Runs one operation on the selected object | Scrollable contextual area | Visible short label, with an icon when one exists |
+| Changes subsequent pointer behavior | Left tool rail | Icon-only tool with the shared hover description |
+| Copy, Paste or Delete | Fixed trailing action group | Icon-only, always in that order when supported |
+| Edits many related values | Right properties panel or focused dialog | One visible, specifically named launcher |
+| Applies regardless of selection | Global bar or its established coherent group | Never inserted into object context |
+
+The contextual bar must not contain an overflow button, generic ellipsis,
+`More`, `Actions`, `Path operations`, or any equivalent renamed catch-all.
+A specifically named launcher is allowed only when it opens one cohesive
+editor, not a list of otherwise unrelated commands. When horizontal space is
+tight, the scrollable contextual area scrolls; actions are compacted according
+to this table, but capabilities are not hidden or moved to a catch-all menu.
+
+New Layers categories and new selectable object types inherit this pattern by
+default. Deviating from it requires an explicit product UX decision and an
+update to this contract before implementation; local convenience, temporary
+space pressure or the number of actions is not sufficient justification.
+
+The common action group is fixed at the right edge and never scrolls away with
+the properties. `Copy`, `Paste` and `Delete` are icon-only controls with the
+shared accessible hover description. For copyable object kinds, `Paste`
+occupies its position while disabled and becomes active only when the clipboard
+contains a compatible object. Unsupported actions are omitted; consistency
+means stable order and behavior, not inventing Copy/Delete semantics for a
+singleton such as the controller.
+
+Actions that define the selected object's workflow (`Create Zones`, `Convert
+to paths`, `Generate Holes`, `Offset Path`, `Project Geometry` and compatible
+legacy operations) remain visible in the contextual bar with concise labels
+and their required parameters. A generic ellipsis/`More` menu or a renamed
+catch-all operation menu must not hide an object's capabilities or become a
+dumping ground for actions. Object and node properties remain directly visible.
+
+Context precedence is strict: active path-tool context, multiple selection,
+selected node, selected object, then no selection. With two or more compatible
+profiles selected, the multiple-selection context replaces all properties and
+single-object commands from the last-selected profile. It shows only the
+selection count and the compact icon-and-label group for `Group`, `Union`,
+`Subtract`, `Intersect` and `Exclude`. `Group` persists a same-layer authoring
+group without merging geometry; selecting any member later restores the complete
+group selection and Move translates every member together. For an exact grouped
+selection, `Ungroup` replaces `Group` and removes only the relationship, leaving
+all vectors unchanged and selected. This authoring group is separate from the
+electrical/effect Zone groups in Layers. Single-object Copy/Paste/Delete remain hidden until those actions
+have real batch semantics.
+
 Examples:
 
-- Zone: selected-node type only. Shape conversion and width/height stay out of
-  the contextual bar along with element and node X/Y coordinates; canvas
-  manipulation is the geometry editing surface.
+- Zone: selected-node type plus parametric dimensions for native primitives.
+  Rectangles expose `W/H` and ellipses expose `ØW/ØH`; polygon width/height,
+  shape conversion and element/node X/Y stay out of the contextual bar.
+  Canvas manipulation remains the geometry editing surface for paths.
 - Channel: router-bit diameter, open/closed path, ends and node type. Channel
   node coordinates stay off the contextual bar. When a corner node is selected,
   one numeric `Fillet` field in millimeters edits that node directly and redraws
@@ -124,9 +187,11 @@ Examples:
   valid authored state.
 - Controller: port count.
 - Light source: source type and Configure source.
-- Face Graphic: pass mode, translucent filter color and selected-node type.
-  Locking remains exclusively in Layers; shape conversion, width/height and
-  compound-contour summary stay out of the contextual bar.
+- Face Graphic: pass mode, translucent filter color, selected-node type and
+  parametric dimensions for native primitives. Rectangles expose `W/H` and
+  ellipses expose `ØW/ØH`. Locking remains exclusively in Layers; shape
+  conversion, polygon dimensions and compound-contour summary stay out of the
+  contextual bar.
 - Legacy projected geometry: linked/broken status, source selector and Delete.
   It has no editable shape or node fields while linked. New `Project Geometry`
   operations do not create linked projection records.
@@ -151,7 +216,8 @@ Delete button beside node properties. Other destructive controls in Designer
 use the same shared destructive button treatment.
 
 Zone, Channel and Face Graphic objects selected from Layers reuse the exact
-Artwork `Copy` and `Delete` buttons at the end of all contextual controls.
+Artwork `Copy`, disabled/enabled `Paste` and `Delete` icon controls in the fixed
+trailing action group.
 Those object-level actions remain available when the category or Face Graphic
 object is locked; locking prevents geometry edits and movement, not explicit
 copying or deletion from the contextual bar.
@@ -186,12 +252,18 @@ Always-available tools:
   nodes or resize handles.
 - Pan.
 - Measure.
-- Work line. It creates a straight, open, dashed construction polyline and
-  finishes with Enter or double-click. It appears only with an active Artwork,
-  Reference, Diffusors or Face Graphic layer and assigns the new line to that
-  layer. Setup owns the single global visibility toggle; individual
-  work lines do not expose separate eye controls or a separate Layers folder.
-  A layer-owned line appears directly among that layer's objects.
+- Work line. It creates a straight, open, continuous construction polyline and
+  finishes with Enter or double-click. It is available from Artwork, Reference,
+  Diffusors and Face Graphic, but every existing or new Work Line is grouped
+  inside the dedicated `Work Lines` folder under `Artwork`; completing or
+  selecting one activates that destination. The Artwork master eye controls
+  the complete contents of Images, Reference and Work Lines. Each folder also
+  has a bulk visibility eye; individual work lines do not expose separate eye
+  controls. Selecting a Work Line exposes `Generate Holes`, which creates an
+  independent clear Face Graphic circle at every unique Work Line crossing;
+  Setup persists the shared `Hole diameter` in millimeters and generated hole
+  circles use a continuous outline. Repeating `Generate Holes` skips every
+  crossing coordinate that already has a generated Work Line hole.
 
 The remaining tools depend on the active layer, for example image placement,
 reference/zone/channel drawing, LED string, data cable and route cutting.
@@ -269,8 +341,13 @@ Node hit-testing is screen-sized and always chooses the nearest visible node,
 with the currently selected object's nodes taking precedence over overlapping
 objects. A double-click on or near a node selects it; it must not insert another
 node. Insertion occurs only when the double-click is close to an edge.
+Changing a node to smooth or symmetric must activate and persist both handles
+on that node's own contour, including materialized compound paths; a top-level
+Bezier flag must not leave the edited contour rendered as straight.
 
-A selected native polygon exposes contextual `Trim`. While active, Paper.js
+A selected native polygon exposes the contextual `Trim` pointer tool in the
+left rail. It appears only for a compatible single selection; its guidance uses
+the contextual bar while active. Paper.js
 resolves its crossing graph into exact closed faces. Hovering inside or along a
 face previews that face in red, the retained profile in cyan and the source
 crossings in amber. The smallest face containing the pointer wins before
@@ -279,15 +356,18 @@ commits; `Esc` cancels; Undo restores the original path. Remaining resolved
 faces stay selectable in subsequent Trim passes, including after the object
 becomes compound. Invalid/open outcomes must not be committed. The same
 interaction applies to Reference, Zones and Face Graphic and preserves native
-Bezier segments.
+Bezier segments. Channels expose the same rail `Trim` tool while their center
+trace is selected. For a Channel, the hovered crossing loop is spliced from the
+center trace, preserving its open/closed state, width, cap and semantic identity
+instead of converting it into a filled or compound profile.
 
 `Offset Path` is a contextual object command that creates a new independent
 native result in the same target layer. Its signed millimeter distance and
 Round, Miter or Bevel join are selected before executing the command. The last
 distance and join are persisted with the Designer document and reused by the
 next operation. It creates no live link and requires no `Break Link` step.
-For native Reference, Zone and Face Graphic paths, the existing
-`Fillet` command instead activates direct node editing: the contextual radius
+For native Reference, Zone and Face Graphic paths, the contextual `Fillet`
+pointer tool appears in the left rail and activates direct node editing: the contextual radius
 stays active while each corner click mutates that same native object, remains
 active for subsequent nodes and records one Undo step per click. If a corner
 node is already selected, activating `Fillet` applies the current radius to it
@@ -296,10 +376,19 @@ recalculates that same selected corner from its
 pre-fillet geometry instead of stacking another fillet; zero restores the
 corner. `Esc` exits.
 There is no preview, Apply step, derived object or Break Link in this native
-workflow. If the requested radius does not fit, Designer applies the greatest
-smaller radius that remains tangent to both adjacent straight or Bezier
-segments and reports requested versus applied values. A node without a usable
-tangent solution remains unchanged. Linked/read-only geometry retains the live
+workflow. Direct native Fillet recalculates and trims the neighboring segments
+to preserve the exact requested radius; it must never substitute the maximum
+smaller radius. When the existing Bezier spans cannot contain the requested
+circle, their local joins are adjusted. Dense materialized paths must consume
+the sampling nodes covered by the tangent span; they must not create a local
+fold by retaining micro-segments inside the requested radius. A smooth node
+that still forms a visible anchor corner may use its support legs, while an
+existing exact circular span must not receive a stacked second fillet. A result or blocking topology warning is
+reported beside the active Fillet controls and must not be hidden only in the
+global bar. A node without a usable tangent solution remains unchanged. The last Custom radius persists with the
+Designer document and must be the value used by the next canvas click after
+Save/reload; choosing the router-bit source uses half of the current cutter
+diameter without overwriting that Custom value. Linked/read-only geometry retains the live
 derived Fillet workflow until materialized. Channels remain the semantic
 center-line exception: select a canonical Channel corner node and edit its
 inline `Fillet` radius directly. The Channel redraws on every numeric change,
@@ -333,8 +422,8 @@ dialog generates CAM toolpaths, STL or a machine-specific cut file.
 
 Ruler visibility and distance measurement are different functions and must not
 share the same icon. The global Ruler control uses the ruler icon. The Measure
-tool uses a measuring-tape icon so the operator can distinguish view state from
-an active canvas tool without reading a tooltip.
+tool uses the Lucide `ruler-dimension-line` icon so the operator can distinguish
+view state from an active canvas tool without reading a tooltip.
 
 ## Category Activation And Selection Synchronization
 
@@ -360,6 +449,11 @@ Category activation must be immediate and deterministic:
   folder in one transaction, so all child eyes immediately match. The
   `Zones Groups` folder remains organizational because groups have no canvas
   geometry or independent visibility state.
+- Diffusors exposes the same compact named-visibility manager as Face Graphic,
+  backed by its own independent preset collection. A preset captures Zones,
+  Channels, projected/derived geometry and controlled text belonging to
+  Diffusors. `All on`, `All off`, create, apply, update and delete affect only
+  those object eyes; Zones Groups remain excluded.
 
 Canvas selection and Layers navigation are one synchronized state:
 
@@ -502,6 +596,10 @@ Any change to Designer navigation or controls must verify:
 - Undo/Redo, Compile, Save, Layers, Fit, Copy/Paste/Delete and Lighting remain
   reachable in their canonical regions;
 - no third horizontal bar was introduced;
+- no contextual workflow action was moved behind an ellipsis, overflow menu or
+  renamed catch-all operation menu;
+- direct fields, visible object commands, pointer tools and the fixed trailing
+  action group still follow the mandatory placement table;
 - the production build and Designer smoke flow still pass.
 
 Changing this contract requires an explicit UX decision, an update to this

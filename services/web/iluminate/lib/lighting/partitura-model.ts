@@ -20,7 +20,7 @@ export type DesignerContour = {
   closed: true;
 };
 
-export const DESIGNER_SCHEMA_VERSION = 12 as const;
+export const DESIGNER_SCHEMA_VERSION = 14 as const;
 export const DEFAULT_CHANNEL_ROUTER_DIAMETER_MM = 10;
 
 /**
@@ -142,6 +142,15 @@ export type DesignerGroupForm = {
   id: string;
   name: string;
   members: Array<{ type: "zone" | "group"; id: string }>;
+};
+
+/** Visual authoring group; separate from electrical/effect Zone groups. */
+export type DesignerVectorGroupMember = { type: "build_area" | "zone" | "face_graphic"; id: string };
+
+export type DesignerVectorGroupForm = {
+  id: string;
+  name: string;
+  members: DesignerVectorGroupMember[];
 };
 
 export type DesignerChannelCap = "butt" | "round";
@@ -293,7 +302,7 @@ export type DesignerBuildAreaForm = {
 export type DesignerWorkLineForm = {
   id: string;
   name: string;
-  /** Organizational owner captured at creation; omitted means global. */
+  /** Persisted as artwork for backward compatibility; displayed in Work Lines. */
   layer?: "artwork" | "zones" | "faceGraphic";
   points: DesignerPoint[];
 };
@@ -314,6 +323,12 @@ export type DesignerFaceGraphicVisibilityPreset = {
   visibleObjectKeys: string[];
 };
 
+export type DesignerDiffusorVisibilityPreset = {
+  id: string;
+  name: string;
+  visibleObjectKeys: string[];
+};
+
 export type DesignerForm = {
   /** Missing on legacy documents; normalization always writes the current version. */
   designerSchemaVersion?: typeof DESIGNER_SCHEMA_VERSION;
@@ -324,6 +339,8 @@ export type DesignerForm = {
   texts: DesignerText[];
   /** Named snapshots of Face Graphic object-eye states. */
   faceGraphicVisibilityPresets: DesignerFaceGraphicVisibilityPreset[];
+  /** Named snapshots of Diffusors object-eye states. */
+  diffusorVisibilityPresets: DesignerDiffusorVisibilityPreset[];
   canvasWidthCm: number;
   canvasHeightCm: number;
   addressablePixelsPerMeter: number;
@@ -343,6 +360,8 @@ export type DesignerForm = {
   offsetJoin: "round" | "miter" | "bevel";
   /** Router-bit diameter used as the width of newly traced neon-flex channels. */
   channelRouterDiameterMm: number;
+  /** Diameter used by Generate Holes at Work Line intersections. */
+  holeDiameterMm: number;
   alignmentMarks: DesignerAlignmentMarksForm;
   rulerVisible: boolean;
   sourceSvg: string | null;
@@ -355,6 +374,8 @@ export type DesignerForm = {
   controller: DesignerControllerForm;
   zones: DesignerZoneForm[];
   faceGraphics: DesignerFaceGraphicForm[];
+  /** Same-layer vectors that select and move as one authoring unit. */
+  vectorGroups: DesignerVectorGroupForm[];
   groups: DesignerGroupForm[];
   channels: DesignerChannelForm[];
   lightSources: DesignerLightSource[];
@@ -539,6 +560,7 @@ export function createNewPartituraDocument(projectId: string): PartituraDocument
       buildAreas: [],
       zones: [],
       faceGraphics: [],
+      vectorGroups: [],
       groups: [],
       channels: [],
       lightSources: [],
@@ -624,6 +646,7 @@ export function createDefaultDesigner(): DesignerForm {
     offsetDistanceMm: 2,
     offsetJoin: "miter",
     channelRouterDiameterMm: DEFAULT_CHANNEL_ROUTER_DIAMETER_MM,
+    holeDiameterMm: 3,
     alignmentMarks: { enabled: false, locked: false, originXcm: 2, originYcm: 2, spacingMm: 100 },
     rulerVisible: true,
     sourceSvg: null,
@@ -635,6 +658,7 @@ export function createDefaultDesigner(): DesignerForm {
     derivedGeometries: [],
     texts: [],
     faceGraphicVisibilityPresets: [],
+    diffusorVisibilityPresets: [],
     buildAreas: [
       { id: "build_area_main", name: "Main Sign Face", shape: "rect", x: 40, y: 0, width: 120, height: 40, visible: true, locked: false, opacity: 1 },
       { id: "build_area_logo", name: "Round Logo Reference", shape: "ellipse", x: 108, y: 2, width: 18, height: 18, visible: true, locked: false, opacity: 0.9 },
@@ -661,6 +685,7 @@ export function createDefaultDesigner(): DesignerForm {
       height: 12,
       dataOutputs: 3
     },
+    vectorGroups: [],
     groups: [],
     channels: [],
     lightSources: [],
@@ -708,6 +733,40 @@ export function createDefaultDesigner(): DesignerForm {
   return canonicalizeDesignerGeometry(designer);
 }
 
+function normalizeDesignerVectorGroups(designer: DesignerForm): DesignerVectorGroupForm[] {
+  const buildAreaIds = new Set((designer.buildAreas ?? []).map((entry) => entry.id));
+  const zoneIds = new Set((designer.zones ?? []).map((entry) => entry.id));
+  const faceGraphicIds = new Set((designer.faceGraphics ?? []).map((entry) => entry.id));
+  const claimedMembers = new Set<string>();
+  const groupIds = new Set<string>();
+  const normalized: DesignerVectorGroupForm[] = [];
+  const memberLayer = (member: DesignerVectorGroupMember) => member.type === "build_area" ? "artwork" : member.type === "zone" ? "zones" : "faceGraphic";
+  const memberExists = (member: DesignerVectorGroupMember) => member.type === "build_area"
+    ? buildAreaIds.has(member.id)
+    : member.type === "zone"
+      ? zoneIds.has(member.id)
+      : faceGraphicIds.has(member.id);
+
+  for (const candidate of Array.isArray(designer.vectorGroups) ? designer.vectorGroups : []) {
+    if (!candidate || typeof candidate.id !== "string" || groupIds.has(candidate.id)) continue;
+    const members: DesignerVectorGroupMember[] = [];
+    const localKeys = new Set<string>();
+    for (const rawMember of Array.isArray(candidate.members) ? candidate.members : []) {
+      if (!rawMember || (rawMember.type !== "build_area" && rawMember.type !== "zone" && rawMember.type !== "face_graphic") || typeof rawMember.id !== "string") continue;
+      const member: DesignerVectorGroupMember = { type: rawMember.type, id: rawMember.id };
+      const key = `${member.type}:${member.id}`;
+      if (!memberExists(member) || localKeys.has(key) || claimedMembers.has(key)) continue;
+      localKeys.add(key);
+      members.push(member);
+    }
+    if (members.length < 2 || members.some((member) => memberLayer(member) !== memberLayer(members[0]))) continue;
+    groupIds.add(candidate.id);
+    members.forEach((member) => claimedMembers.add(`${member.type}:${member.id}`));
+    normalized.push({ id: candidate.id, name: typeof candidate.name === "string" && candidate.name.trim() ? candidate.name : candidate.id, members });
+  }
+  return normalized;
+}
+
 function normalizeDesigner(designer?: DesignerForm, compiledLayout?: PartituraDocument["compiledLayout"]): DesignerForm {
   const fallback = createDefaultDesigner();
   if (!designer) return fallback;
@@ -738,6 +797,7 @@ function normalizeDesigner(designer?: DesignerForm, compiledLayout?: PartituraDo
     offsetDistanceMm: finiteNumber(designer.offsetDistanceMm, fallback.offsetDistanceMm),
     offsetJoin: designer.offsetJoin === "round" || designer.offsetJoin === "bevel" ? designer.offsetJoin : "miter",
     channelRouterDiameterMm: Math.max(3, Math.min(20, positiveNumber(designer.channelRouterDiameterMm, fallback.channelRouterDiameterMm))),
+    holeDiameterMm: positiveNumber(designer.holeDiameterMm, fallback.holeDiameterMm),
     alignmentMarks: {
       enabled: designer.alignmentMarks?.enabled === true,
       locked: designer.alignmentMarks?.locked === true,
@@ -755,10 +815,12 @@ function normalizeDesigner(designer?: DesignerForm, compiledLayout?: PartituraDo
     derivedGeometries: normalizeDesignerDerivedGeometries(designer.derivedGeometries),
     texts: normalizeDesignerTexts(designer.texts),
     faceGraphicVisibilityPresets: normalizeFaceGraphicVisibilityPresets(designer.faceGraphicVisibilityPresets),
+    diffusorVisibilityPresets: normalizeDiffusorVisibilityPresets(designer.diffusorVisibilityPresets),
     buildAreas: normalizeBuildAreas(designer, fallback.buildAreas),
     controller: normalizeController(designer.controller, fallback.controller),
     zones: Array.isArray(designer.zones) ? designer.zones.map(normalizeDesignerZone) : fallback.zones,
     faceGraphics: Array.isArray(designer.faceGraphics) ? designer.faceGraphics.map(normalizeFaceGraphic).filter((entry): entry is DesignerFaceGraphicForm => entry !== null) : [],
+    vectorGroups: normalizeDesignerVectorGroups(designer),
     groups: Array.isArray(designer.groups) ? designer.groups.filter((group) => typeof group.id === "string" && typeof group.name === "string").map((group) => ({ id: group.id, name: group.name, members: Array.isArray(group.members) ? group.members.filter((member) => member?.type === "zone" || member?.type === "group") : [] })) : [],
     channels: normalizeDesignerChannels(designer.channels),
     lightSources: normalizeLightSources(rawLightSources, routes, compiledLayout),
@@ -1290,6 +1352,22 @@ function normalizeFaceGraphicVisibilityPresets(presets: DesignerFaceGraphicVisib
   });
 }
 
+function normalizeDiffusorVisibilityPresets(presets: DesignerDiffusorVisibilityPreset[] | undefined): DesignerDiffusorVisibilityPreset[] {
+  if (!Array.isArray(presets)) return [];
+  const usedIds = new Set<string>();
+  return presets.flatMap((preset, index) => {
+    if (!preset) return [];
+    const id = typeof preset.id === "string" && preset.id.trim() ? preset.id.trim() : `diffusor_visibility_${index + 1}`;
+    if (usedIds.has(id)) return [];
+    usedIds.add(id);
+    const name = typeof preset.name === "string" && preset.name.trim() ? preset.name.trim() : `Preset ${index + 1}`;
+    const visibleObjectKeys = Array.isArray(preset.visibleObjectKeys)
+      ? Array.from(new Set(preset.visibleObjectKeys.filter((key): key is string => typeof key === "string" && /^(zone|channel|projection|derived|text):[^:]+$/.test(key))))
+      : [];
+    return [{ id, name, visibleObjectKeys }];
+  });
+}
+
 function normalizeChannelPoints(points: DesignerPoint[] | undefined): DesignerPoint[] {
   if (!Array.isArray(points)) return [];
   return points
@@ -1359,11 +1437,10 @@ function normalizeDesignerWorkLines(workLines: DesignerWorkLineForm[] | undefine
       ? line.points.filter((point) => Number.isFinite(point?.x) && Number.isFinite(point?.y)).map((point) => ({ x: point.x, y: point.y }))
       : [];
     if (points.length < 2) return [];
-    const layer = line.layer === "artwork" || line.layer === "zones" || line.layer === "faceGraphic" ? line.layer : undefined;
     return [{
       id: typeof line.id === "string" && line.id ? line.id : `work_line_${index + 1}`,
       name: typeof line.name === "string" && line.name ? line.name : `Work line ${index + 1}`,
-      ...(layer ? { layer } : {}),
+      layer: "artwork",
       points
     }];
   });

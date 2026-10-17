@@ -1,5 +1,5 @@
 import { canonicalizeDesignerGeometry, designerGeometryAsShape, type DesignerForm, type DesignerGeometry, type DesignerPoint } from "@/lib/lighting/partitura-model";
-import { filletDesignerGeometry } from "@/lib/lighting/designer-derived-geometry";
+import { filletDesignerGeometryExact } from "@/lib/lighting/designer-derived-geometry";
 
 export type DesignerGeometryCommand =
   | { type: "move"; dx: number; dy: number }
@@ -48,7 +48,7 @@ export type DesignerNativeFilletResult = {
   designer: DesignerForm;
   applied: boolean;
   appliedRadiusMm?: number;
-  issue: "missing-source" | "collapsed" | "invalid-topology" | null;
+  issue: "missing-source" | "collapsed" | "invalid-topology" | "radius-not-preserved" | null;
   warnings: string[];
 };
 
@@ -69,8 +69,18 @@ export function applyDesignerNativeFillet(
   const source = owner?.geometryId ? canonical.geometries?.find((geometry) => geometry.id === owner.geometryId) : null;
   if (!owner || !source) return { designer, applied: false, issue: "missing-source", warnings: [] };
 
-  const result = filletDesignerGeometry(source, radiusMm, [target.cornerIndex], source.id);
+  const result = filletDesignerGeometryExact(source, radiusMm, target.cornerIndex, source.id);
   if (!result.geometry) return { designer, applied: false, issue: result.issue, warnings: result.warnings };
+  const appliedRadiusMm = result.appliedFilletRadiiMm?.[0];
+  if (radiusMm > 0 && (typeof appliedRadiusMm !== "number" || Math.abs(appliedRadiusMm - radiusMm) > 0.001)) {
+    return {
+      designer,
+      applied: false,
+      appliedRadiusMm,
+      issue: "radius-not-preserved",
+      warnings: [`Fillet R${Number(radiusMm.toFixed(3))} mm could not be preserved exactly. Geometry was not changed.`]
+    };
+  }
   const changed = source.kind !== result.geometry.kind
     || source.pathMode !== result.geometry.pathMode
     || JSON.stringify(source.points ?? null) !== JSON.stringify(result.geometry.points ?? null)
@@ -93,5 +103,5 @@ export function applyDesignerNativeFillet(
             } : entry)
           }
         : { ...canonical, faceGraphics: canonical.faceGraphics.map((entry) => entry.id === target.id ? { ...entry, ...shape } : entry) };
-  return { designer: canonicalizeDesignerGeometry(nextDesigner), applied: true, appliedRadiusMm: result.appliedFilletRadiiMm?.[0], issue: result.issue, warnings: result.warnings };
+  return { designer: canonicalizeDesignerGeometry(nextDesigner), applied: true, appliedRadiusMm, issue: result.issue, warnings: result.warnings };
 }

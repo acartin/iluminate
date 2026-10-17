@@ -5,7 +5,7 @@ import paper from "paper";
 import type { VisualShape } from "@iluminate/lighting-core";
 import type { ClipForm, DesignerChannelForm } from "../../../lib/lighting/partitura-model";
 import { DESIGNER_SCHEMA_VERSION, canonicalizeDesignerGeometry, createDefaultOpticalTreatment, createDefaultPartituraDocument, createNewPartituraDocument, nextEmptyClipLayer, normalizeDefaultSignLayout, resolveDesignerDerivedGeometry, resolveDesignerProjectionGeometry, wouldCreateDesignerDerivedGeometryCycle, wouldCreateDesignerProjectionCycle } from "../../../lib/lighting/partitura-model";
-import { designerFilletCornerIsEligible, filletDesignerGeometry, offsetDesignerGeometry } from "../../../lib/lighting/designer-derived-geometry";
+import { designerFilletCornerIsEligible, filletDesignerGeometry, filletDesignerGeometryExact, offsetDesignerGeometry } from "../../../lib/lighting/designer-derived-geometry";
 import { DEFAULT_DESIGNER_FONT_ID, designerFontResource } from "../../../lib/lighting/designer-font-catalog";
 import { designerTextToGeometry } from "../../../lib/lighting/designer-text-geometry";
 import { inspectArtworkIntrinsicSize } from "../../../lib/lighting/artwork-intrinsic-size";
@@ -14,7 +14,7 @@ import { compileDesignerLayout, designerCompileSignature } from "./designer-comp
 import { canvasInteractionSnapCm, CHANNEL_ROUTER_BIT_PRESETS, channelWidthForRouterDiameter, geometryToolAllowedOnLayer, geometryToolPolicy, POINTER_DRAG_THRESHOLD_PX, TERMINAL_SOLDER_CAPTURE_RADIUS_PX } from "./canvas/designer-tool-policy";
 import { applyDesignerGeometryCommand, applyDesignerNativeFillet } from "./geometry/designer-geometry-commands";
 import { applyDesignerBooleanOperation, validateDesignerGeometryTopology } from "./geometry/designer-geometry-boolean";
-import { trimDesignerPathAtPoint } from "./geometry/designer-path-trim";
+import { trimDesignerChannelPathAtPoint, trimDesignerPathAtPoint } from "./geometry/designer-path-trim";
 import { channelPathsFromGeometries } from "./geometry/designer-channel-from-path";
 import { resolveDesignerProjectionGeometry as resolveProjectedGeometry } from "./geometry/designer-projected-geometry";
 import { applyFaceGraphicToOpticalMode, applyFaceGraphicTransmission, faceGraphicMaskUv, faceGraphicTransmissionAtPoint, frontMaterialOffStyle, orderOpticalTreatmentsForRendering, resolvePhysicalFaceGraphics } from "../player/optical-model";
@@ -22,6 +22,7 @@ import { buildOutlineSegments, faceMaskTextureSize, opticalOccluderShapes, optic
 import { resolveChannelOutlineContours, sweptChannelOutlineContours } from "./rendering/channel-swept-outline";
 import { generateDesignerFabricationExport, sha256Hex } from "./fabrication/designer-fabrication-export";
 import { applyFaceGraphicObjectVisibility, faceGraphicObjectKeys, sameFaceGraphicVisibility, visibleFaceGraphicObjectKeys } from "./designer-face-graphic-visibility";
+import { applyDiffusorObjectVisibility, diffusorObjectKeys, sameDiffusorVisibility, visibleDiffusorObjectKeys } from "./designer-diffusor-visibility";
 import { designerAdditiveSelectionRequested, designerConstrainedMoveDelta, designerLayerForSelection, designerSelectionForClipTarget, designerWholeObjectHit, routeMatchesSurfaceView } from "./types";
 import { clipIdForSelectedTargets, clipLightSourcesForTarget, clipScopeTargets, clipTargetsForSelection, designerClipTargetIdsForSelection, explicitClipTargetSelectionSettled } from "./designer-animation-selection";
 import {
@@ -42,6 +43,9 @@ import {
   findJointGroup,
   findMatchingSolderTerminal,
   findNearbySolderTerminal,
+  missingWorkLineHolePoints,
+  moveDesignerVectorGroupMember,
+  movedShape,
   nextDesignerItemNumber,
   pickDesignerHit,
   pickAnimationTarget,
@@ -53,13 +57,15 @@ import {
   movedWorkLine,
   resolveRouteOutputs,
   setChannelNodeType,
+  setPolygonNodeType,
   smoothBezierPoints,
   smoothOpenBezierPoints,
   shapeInsertIndexAtPoint,
   worldHitTolerance,
   updatePolygonPoint,
   updateWorkLinePoint,
-  updatedDesignerOffsetName
+  updatedDesignerOffsetName,
+  workLineIntersectionPoints
 } from "./designer-geometry";
 
 describe("Layers panel organization", () => {
@@ -169,11 +175,58 @@ describe("Face Graphic visibility presets", () => {
   it("keeps the Face Graphic preset bar limited to create, update, delete, and visibility application", async () => {
     const panelSource = await readFile("components/lighting/designer/designer-ui.tsx", "utf8");
     assert.match(panelSource, /FaceGraphicVisibilityBar[\s\S]*?All on[\s\S]*?All off/);
-    assert.match(panelSource, /Create Face Graphic visibility preset/);
-    assert.match(panelSource, /Update Face Graphic visibility preset/);
-    assert.match(panelSource, /Delete Face Graphic visibility preset/);
+    assert.match(panelSource, /scopeLabel="Face Graphic"/);
+    assert.match(panelSource, /aria-label=\{`Create \$\{scopeLabel\} visibility preset`\}/);
+    assert.match(panelSource, /aria-label=\{`Update \$\{scopeLabel\} visibility preset`\}/);
+    assert.match(panelSource, /aria-label=\{`Delete \$\{scopeLabel\} visibility preset`\}/);
     assert.match(panelSource, /title="Create visibility preset"/);
     assert.match(panelSource, /title="Delete visibility preset\?"/);
+    assert.doesNotMatch(panelSource, /window\.(?:prompt|confirm)/);
+  });
+});
+
+describe("Diffusors visibility presets", () => {
+  it("captures and applies every Diffusors object eye without touching Face Graphic or Reference", () => {
+    const designer = createDefaultPartituraDocument("diffusor_visibility_presets").designer;
+    const sourceGeometryId = designer.zones[0].geometryId!;
+    designer.channels = [{ id: "channel_1", name: "Channel", widthMm: 10, points: [{ x: 0, y: 0 }, { x: 5, y: 5 }], pathMode: "straight", closed: false, cap: "round", visible: false, locked: false, opacity: 1 }];
+    designer.faceGraphics = [{ id: "face_1", name: "Face", shape: "rect", x: 1, y: 1, width: 10, height: 5, passMode: "clear", filterColor: "#FFFFFF", visible: true, locked: false, opacity: 1 }];
+    designer.projections = [
+      { id: "projection_zones", name: "Zone projection", geometryId: "geometry_projection_zones", sourceGeometryId, targetLayer: "zones", linked: true, visible: false },
+      { id: "projection_reference", name: "Reference projection", geometryId: "geometry_projection_reference", sourceGeometryId, targetLayer: "reference", linked: true, visible: true }
+    ];
+    designer.derivedGeometries = [{ id: "derived_zones", name: "Zone offset", geometryId: "geometry_derived_zones", sourceGeometryId, targetLayer: "zones", operation: "offset", distanceMm: 2, join: "round", miterLimit: 4, visible: true }];
+    designer.texts = [{ id: "text_zones", name: "Zone text", text: "A", fontId: DEFAULT_DESIGNER_FONT_ID, fontHash: designerFontResource(DEFAULT_DESIGNER_FONT_ID)!.hash, fontSizeMm: 20, trackingMm: 0, lineHeight: 1.2, alignment: "left", x: 1, y: 1, targetLayer: "zones", visible: false, locked: false, opacity: 1 }];
+
+    assert.ok(diffusorObjectKeys(designer).includes("channel:channel_1"));
+    assert.ok(diffusorObjectKeys(designer).includes("projection:projection_zones"));
+    assert.ok(visibleDiffusorObjectKeys(designer).includes("derived:derived_zones"));
+    assert.equal(visibleDiffusorObjectKeys(designer).includes("channel:channel_1"), false);
+    const applied = applyDiffusorObjectVisibility(designer, ["channel:channel_1", "projection:projection_zones", "text:text_zones"]);
+    assert.equal(applied.zones.every((zone) => zone.visible === false), true);
+    assert.equal(applied.channels[0].visible, true);
+    assert.equal(applied.projections[0].visible, true);
+    assert.equal(applied.projections[1].visible, true);
+    assert.equal(applied.derivedGeometries[0].visible, false);
+    assert.equal(applied.texts[0].visible, true);
+    assert.equal(applied.faceGraphics[0].visible, true);
+    assert.equal(sameDiffusorVisibility(visibleDiffusorObjectKeys(applied), ["channel:channel_1", "projection:projection_zones", "text:text_zones"]), true);
+  });
+
+  it("persists Diffusors presets independently and exposes the same compact manager", async () => {
+    const baseline = normalizeDefaultSignLayout(JSON.parse(JSON.stringify(createDefaultPartituraDocument("diffusor_visibility_persistence"))));
+    const compileBefore = designerCompileSignature(baseline.designer);
+    baseline.designer.faceGraphicVisibilityPresets = [{ id: "face_view", name: "Face", visibleObjectKeys: ["faceGraphic:face_1"] }];
+    baseline.designer.diffusorVisibilityPresets = [{ id: "diffusor_view", name: "Routing", visibleObjectKeys: ["zone:zone_1", "channel:channel_1", "faceGraphic:invalid", "zone:zone_1"] }];
+    const normalized = normalizeDefaultSignLayout(JSON.parse(JSON.stringify(baseline)));
+    assert.deepEqual(normalized.designer.diffusorVisibilityPresets, [{ id: "diffusor_view", name: "Routing", visibleObjectKeys: ["zone:zone_1", "channel:channel_1"] }]);
+    assert.deepEqual(normalized.designer.faceGraphicVisibilityPresets, [{ id: "face_view", name: "Face", visibleObjectKeys: ["faceGraphic:face_1"] }]);
+    assert.equal(designerCompileSignature(normalized.designer), compileBefore);
+
+    const panelSource = await readFile("components/lighting/designer/designer-ui.tsx", "utf8");
+    assert.match(panelSource, /label="Diffusors"[\s\S]*?<DiffusorVisibilityBar/);
+    assert.match(panelSource, /function DiffusorVisibilityBar[\s\S]*?designer\.diffusorVisibilityPresets/);
+    assert.match(panelSource, /scopeLabel="Diffusors"[\s\S]*?diffusorObjectKeys\(designer\)[\s\S]*?visibleDiffusorObjectKeys\(designer\)/);
     assert.doesNotMatch(panelSource, /window\.(?:prompt|confirm)/);
   });
 });
@@ -223,6 +276,7 @@ describe("New partitura document", () => {
     assert.deepEqual(designer.buildAreas, []);
     assert.deepEqual(designer.zones, []);
     assert.deepEqual(designer.faceGraphics, []);
+    assert.deepEqual(designer.vectorGroups, []);
     assert.deepEqual(designer.groups, []);
     assert.deepEqual(designer.channels, []);
     assert.deepEqual(designer.lightSources, []);
@@ -234,6 +288,32 @@ describe("New partitura document", () => {
     assert.ok(demo.designer && demo.designer.buildAreas.length > 0);
     assert.ok(demo.designer && demo.designer.zones.length > 0);
     assert.ok(demo.designer && demo.designer.routes.length > 0);
+  });
+
+  it("persists same-layer vector groups without changing electrical compilation", () => {
+    const document = createDefaultPartituraDocument("vector_groups");
+    const designer = document.designer!;
+    const [firstZone, secondZone] = designer.zones;
+    designer.vectorGroups = [
+      { id: "vector_group_1", name: "Letters", members: [{ type: "zone", id: firstZone.id }, { type: "zone", id: secondZone.id }] },
+      { id: "vector_group_overlap", name: "Overlap", members: [{ type: "zone", id: firstZone.id }, { type: "zone", id: designer.zones[2].id }] },
+      { id: "vector_group_mixed", name: "Mixed", members: [{ type: "zone", id: designer.zones[3].id }, { type: "build_area", id: designer.buildAreas[0].id }] }
+    ];
+    const withoutGroups = normalizeDefaultSignLayout(JSON.parse(JSON.stringify({ ...document, designer: { ...designer, vectorGroups: [] } }))).designer;
+    const compileBefore = designerCompileSignature(withoutGroups);
+    const normalized = normalizeDefaultSignLayout(JSON.parse(JSON.stringify(document))).designer;
+
+    assert.deepEqual(normalized.vectorGroups, [designer.vectorGroups[0]]);
+    assert.equal(designerCompileSignature(normalized), compileBefore);
+    assert.equal(normalized.designerSchemaVersion, DESIGNER_SCHEMA_VERSION);
+
+    const movedFirst = movedShape(normalized.zones[0], 7, 3, 0);
+    const moved = moveDesignerVectorGroupMember(normalized, { type: "zone", id: normalized.zones[0].id }, movedFirst);
+    assert.deepEqual(
+      moved.zones.slice(0, 2).map((zone, index) => ({ x: zone.x - normalized.zones[index].x, y: zone.y - normalized.zones[index].y })),
+      [{ x: 7, y: 3 }, { x: 7, y: 3 }]
+    );
+    assert.deepEqual(moved.zones[2], normalized.zones[2]);
   });
 });
 
@@ -799,6 +879,69 @@ describe("compound paths and boolean operations", () => {
 });
 
 describe("interactive path trim", () => {
+  it("routes the contextual Trim rail tool through the selected Channel center trace", async () => {
+    const workspaceSource = await readFile("components/lighting/partitura-workspace.tsx", "utf8");
+    const canvasSource = await readFile("components/lighting/designer/designer-paper-canvas.tsx", "utf8");
+
+    assert.match(workspaceSource, /const pathTrimAvailable = Boolean\([\s\S]*?selection\?\.type === "channel" && selectedChannel\?\.points\.length/);
+    assert.match(workspaceSource, /<ToolButton active=\{tool === "path_trim"\} label="Trim selected path" icon=\{Scissors\}/);
+    assert.match(canvasSource, /selectedChannelId \? trimDesignerChannelPathAtPoint : trimDesignerPathAtPoint/);
+    assert.match(canvasSource, /else if \(selectedChannelId && preview\.geometry\.points\?\.length\)[\s\S]*?channels: designer\.channels\.map/);
+  });
+
+  it("splices the hovered self-crossing loop from an open Channel trace", () => {
+    paper.setup(new paper.Size(100, 100));
+    const crossingChannel = {
+      id: "crossing-channel",
+      kind: "path" as const,
+      x: 0,
+      y: 0,
+      width: 30,
+      height: 20,
+      points: [{ x: 0, y: 0 }, { x: 20, y: 20 }, { x: 0, y: 20 }, { x: 20, y: 0 }, { x: 30, y: 0 }],
+      pathMode: "straight" as const,
+      closed: false,
+      fillRule: "nonzero" as const
+    };
+
+    const trimmed = trimDesignerChannelPathAtPoint(paper, crossingChannel, { x: 10, y: 18 });
+
+    assert.ok(trimmed);
+    assert.equal(trimmed.geometry.closed, false);
+    assert.equal(trimmed.intersections.length, 1);
+    assert.deepEqual(trimmed.geometry.points, [
+      { x: 0, y: 0, nodeType: "corner" },
+      { x: 10, y: 10, nodeType: "corner" },
+      { x: 20, y: 0, nodeType: "corner" },
+      { x: 30, y: 0, nodeType: "corner" }
+    ]);
+    assert.equal(trimmed.removed.closed, true);
+  });
+
+  it("keeps a closed Channel as one editable trace after trimming its selected loop", () => {
+    paper.setup(new paper.Size(100, 100));
+    const crossingChannel = {
+      id: "closed-crossing-channel",
+      kind: "path" as const,
+      x: 0,
+      y: 0,
+      width: 20,
+      height: 20,
+      points: [{ x: 0, y: 0 }, { x: 20, y: 20 }, { x: 0, y: 20 }, { x: 20, y: 0 }],
+      pathMode: "straight" as const,
+      closed: true,
+      fillRule: "nonzero" as const
+    };
+
+    const trimmed = trimDesignerChannelPathAtPoint(paper, crossingChannel, { x: 10, y: 18 });
+
+    assert.ok(trimmed);
+    assert.equal(trimmed.geometry.closed, true);
+    assert.equal(trimmed.geometry.contours, undefined);
+    assert.ok(trimmed.geometry.points?.some((point) => point.y === 0));
+    assert.ok(trimmed.removed.points.some((point) => point.y === 20));
+  });
+
   it("removes the hovered self-crossing loop and stores a clean closed contour", () => {
     paper.setup(new paper.Size(100, 100));
     const crossing = {
@@ -1006,6 +1149,46 @@ describe("parametric offset and fillet operations", () => {
     assert.equal(largerOutward.geometry?.contours, undefined);
   });
 
+  it("reduces simplification tolerance instead of rejecting a valid inset letterform", () => {
+    const tuples: Array<[number, number, number | null, number | null, number | null, number | null]> = [
+      [117.83559, 24.72869, 0.80978, 0, -0.98635, 0],
+      [115.23273, 24.00781, 0.74889, 0.48059, -0.7428, -0.48746],
+      [113.48836, 21.98932, 0.42011, 0.8582, -0.41402, -0.8582],
+      [112.86732, 19.04399, 0, 1.10536, 0, -1.10536],
+      [113.48836, 16.09866, -0.41402, 0.8582, 0.42011, -0.8582],
+      [115.22359, 14.09047, -0.73671, 0.48059, 0.73672, -0.48746],
+      [117.75339, 13.35929, -0.94981, 0, 0.72454, 0],
+      [119.73521, 13.77122, -0.59668, -0.27462, 0.59668, 0.26776],
+      [121.27866, 14.92464, -0.43228, -0.50119, 0.43838, 0.50119],
+      [122.29241, 16.70626, -0.23745, -0.68656, 0.23746, 0.67969],
+      [122.64859, 18.9616, 0, -0.82387, null, null],
+      [122.64859, 19.91935, null, null, null, null],
+      [115.92861, 19.91935, null, null, 0.01252, 0.42973],
+      [116.16427, 21.06247, -0.14459, -0.33235, 0.16439, 0.35701],
+      [116.85837, 21.88634, -0.29834, -0.19224, 0.30443, 0.19224],
+      [117.94518, 22.1747, -0.42011, 0, 0.31052, 0],
+      [118.77626, 22.03052, -0.24354, 0.09612, 0.24355, -0.09612],
+      [119.38817, 21.61858, -0.16439, 0.17851, 0.16439, -0.1785],
+      [119.75348, 21.00068, -0.07915, 0.23343, null, null],
+      [122.57553, 21.00068, null, null, -0.11568, 0.72775],
+      [121.73531, 22.93677, 0.44446, -0.56298, -0.44446, 0.55611],
+      [120.05487, 24.25497, 0.67583, -0.32268, -0.66974, 0.31582]
+    ];
+    const points = tuples.map(([x, y, handleInX, handleInY, handleOutX, handleOutY]) => ({
+      x, y,
+      ...(handleInX !== null && handleInY !== null ? { handleIn: { x: handleInX, y: handleInY } } : {}),
+      ...(handleOutX !== null && handleOutY !== null ? { handleOut: { x: handleOutX, y: handleOutY } } : {})
+    }));
+    const letterE = { id: "letter_e", kind: "path" as const, x: 112.86732, y: 13.35929, width: 9.78127, height: 11.3694, points, pathMode: "bezier" as const, closed: true, fillRule: "nonzero" as const };
+
+    const inset = offsetDesignerGeometry(letterE, -0.3, "round", 4, "letter_e_inset");
+
+    assert.equal(inset.issue, null);
+    assert.ok(inset.geometry);
+    assert.deepEqual(validateDesignerGeometryTopology(inset.geometry!), []);
+    assert.ok((inset.geometry?.points?.length ?? Infinity) < 549);
+  });
+
   it("offsets an open path without inventing a closing segment", () => {
     const open = { id: "open", kind: "path" as const, x: 0, y: 0, width: 10, height: 5, points: [{ x: 0, y: 0 }, { x: 5, y: 0 }, { x: 10, y: 5 }], pathMode: "straight" as const, closed: false };
     const result = offsetDesignerGeometry(open, 10, "miter", 4, "open_offset");
@@ -1066,7 +1249,104 @@ describe("parametric offset and fillet operations", () => {
 
     const alreadyTangent = applyDesignerNativeFillet(second.designer, { type: "build_area", id: source.id, cornerIndex: 0 }, 20);
     assert.equal(alreadyTangent.applied, false);
-    assert.ok(alreadyTangent.warnings.some((warning) => warning.includes("Bezier tangents")));
+    assert.equal(alreadyTangent.issue, "radius-not-preserved");
+    assert.ok(alreadyTangent.warnings.some((warning) => warning.includes("could not be preserved exactly")));
+  });
+
+  it("preserves the requested direct radius by adjusting adjacent curved traces", () => {
+    const curvedCorner = {
+      id: "curved_exact",
+      kind: "path" as const,
+      x: 0,
+      y: 0,
+      width: 2,
+      height: 0.5,
+      closed: false,
+      pathMode: "bezier" as const,
+      points: [
+        { x: -0.5, y: 0, handleOut: { x: 0.2, y: 0 } },
+        { x: 0.5, y: 0.5, handleIn: { x: -0.2, y: -0.2 }, handleOut: { x: 0.2, y: -0.2 } },
+        { x: 1.5, y: 0, handleIn: { x: -0.2, y: 0 } }
+      ]
+    };
+    const legacy = filletDesignerGeometry(curvedCorner, 15, [1], "legacy_clamped");
+    const exact = filletDesignerGeometryExact(curvedCorner, 15, 1, "direct_exact");
+
+    assert.ok((legacy.appliedFilletRadiiMm?.[0] ?? 15) < 15);
+    assert.equal(exact.issue, null);
+    assert.equal(exact.appliedFilletRadiiMm?.[0], 15);
+    assert.match(exact.warnings.join(" "), /adjusted to preserve the exact R15 mm/);
+  });
+
+  it("preserves an exact fillet on either contour of a compound path", () => {
+    const outer = { points: [{ x: 0, y: 0 }, { x: 20, y: 0 }, { x: 20, y: 20 }, { x: 0, y: 20 }], pathMode: "straight" as const, closed: true as const };
+    const hole = { points: [{ x: 5, y: 5 }, { x: 9, y: 5 }, { x: 9, y: 9 }, { x: 5, y: 9 }], pathMode: "straight" as const, closed: true as const };
+    const compound = { id: "compound_fillet", kind: "path" as const, x: 0, y: 0, width: 20, height: 20, points: outer.points, contours: [outer, hole], pathMode: "straight" as const, closed: true, fillRule: "evenodd" as const };
+
+    assert.equal(designerFilletCornerIsEligible(compound, 4), true);
+    const result = filletDesignerGeometryExact(compound, 30, 4, "compound_fillet_result");
+
+    assert.equal(result.issue, null);
+    assert.equal(result.appliedFilletRadiiMm?.[0], 30);
+    assert.equal(result.geometry?.contours?.length, 2);
+    assert.deepEqual(result.geometry?.contours?.[0].points, outer.points);
+    assert.equal(result.geometry?.contours?.[1].points.length, 5);
+  });
+
+  it("consumes dense offset samples instead of folding an oversized fillet over its immediate neighbors", () => {
+    const denseOffsetCusp = {
+      id: "dense_offset_cusp",
+      kind: "path" as const,
+      x: 73.129,
+      y: 13.8091,
+      width: 2.65637,
+      height: 1.6259,
+      closed: false,
+      pathMode: "straight" as const,
+      points: [
+        { x: 73.129, y: 14.27046 },
+        { x: 73.5893, y: 14.65086 },
+        { x: 73.90344, y: 14.97187 },
+        { x: 74.263, y: 15.435, nodeType: "straight" as const },
+        { x: 74.46659, y: 15.18518 },
+        { x: 74.79213, y: 14.83853 },
+        { x: 75.26671, y: 14.42773 },
+        { x: 75.78537, y: 14.07867 }
+      ]
+    };
+
+    const result = filletDesignerGeometryExact(denseOffsetCusp, 5, 3, "dense_offset_fillet");
+
+    assert.equal(result.issue, null);
+    assert.equal(result.appliedFilletRadiiMm?.[0], 5);
+    assert.ok(result.geometry);
+    assert.equal(result.geometry.points?.some((point) => point.x === 73.90344 && point.y === 14.97187), false);
+    assert.equal(result.geometry.points?.some((point) => point.x === 74.46659 && point.y === 15.18518), false);
+    assert.equal(result.geometry?.closed, false);
+  });
+
+  it("uses the visible support legs when smooth handles hide an otherwise usable corner", () => {
+    const smoothTaggedCorner = {
+      id: "smooth_tagged_corner",
+      kind: "path" as const,
+      x: 97.006,
+      y: 14.126,
+      width: 4.39081,
+      height: 2.571,
+      closed: false,
+      pathMode: "bezier" as const,
+      points: [
+        { x: 97.01201, y: 14.46446 },
+        { x: 97.006, y: 16.697, nodeType: "smooth" as const, handleIn: { x: 0.0000029563, y: -0.74786168 }, handleOut: { x: -0.0000003144, y: 0.07078761 } },
+        { x: 98.19955, y: 15.34738, nodeType: "smooth" as const, handleIn: { x: -0.32991301, y: 0.33201432 }, handleOut: { x: 0.8091, y: -0.81425 } },
+        { x: 101.39681, y: 14.126 }
+      ]
+    };
+
+    assert.equal(designerFilletCornerIsEligible(smoothTaggedCorner, 1), false);
+    const result = filletDesignerGeometryExact(smoothTaggedCorner, 6, 1, "smooth_tagged_fillet");
+    assert.equal(result.issue, null);
+    assert.equal(result.appliedFilletRadiiMm?.[0], 6);
   });
 
   it("uses the existing Fillet command as a persistent direct-node tool for native geometry", async () => {
@@ -1074,18 +1354,31 @@ describe("parametric offset and fillet operations", () => {
       readFile("components/lighting/partitura-workspace.tsx", "utf8"),
       readFile("components/lighting/designer/designer-paper-canvas.tsx", "utf8")
     ]);
-    assert.match(workspaceSource, /variant=\{tool === "fillet" \? "default" : "outline"\}/);
+    assert.match(workspaceSource, /<ToolButton active=\{tool === "fillet"\} label="Fillet selected path" icon=\{Radius\}/);
     assert.match(workspaceSource, /onFilletCorner=\{applyDirectFillet\}/);
     assert.match(workspaceSource, /updateDesigner\(result\.designer\)/);
     assert.match(workspaceSource, /editableNativeFilletRef\.current = \{ target: editableTarget, sourceGeometry \}/);
     assert.match(workspaceSource, /onChange=\{patchDirectFilletRadius\}/);
+    assert.match(workspaceSource, /directFilletRadiusSource === "router_bit"[\s\S]*?designer\.fabricationCutterDiameterMm \/ 2/);
+    assert.match(workspaceSource, /label="Radius source"[\s\S]*?<option value="custom">Custom<\/option>[\s\S]*?<option value="router_bit">[\s\S]*?Router bit · Ø\{Number\(designer\.fabricationCutterDiameterMm\.toFixed\(3\)\)\} mm → R\{Number\(\(designer\.fabricationCutterDiameterMm \/ 2\)\.toFixed\(3\)\)\} mm/);
+    assert.match(workspaceSource, /role="status"[\s\S]*?\{fabricationNotice\}/);
+    assert.match(workspaceSource, /function selectDirectFilletRadiusSource[\s\S]*?activeDirectFilletRadiusMmRef\.current = requestedRadiusMm;[\s\S]*?recalculateDirectFilletRadius\(requestedRadiusMm\)/);
+    assert.match(workspaceSource, /label="Router bit preset"/);
+    assert.match(workspaceSource, /label="Router bit diameter"/);
+    assert.match(workspaceSource, /label="Router bit unit"/);
+    assert.doesNotMatch(workspaceSource, /label="Cutter (?:preset|diameter|unit)"/);
     assert.match(workspaceSource, /onClick=\{toggleDirectFilletTool\}/);
     assert.match(workspaceSource, /function toggleDirectFilletTool\(\)[\s\S]*?if \(!selectedDirectFilletTarget\) return;[\s\S]*?applyDirectFillet\(selectedDirectFilletTarget\)/);
     assert.match(workspaceSource, /setSelection\(\{ type: target\.type, id: target\.id, pointIndex: target\.cornerIndex \}\)/);
     assert.match(workspaceSource, /function patchDirectFilletRadius\([\s\S]*?selection\?\.type !== editable\.target\.type \|\| selection\.id !== editable\.target\.id \|\| selection\.pointIndex !== editable\.target\.cornerIndex/);
+    assert.match(workspaceSource, /useState\(\(\) => Math\.max\(0, document\.designer\?\.filletRadiusMm \?\? 2\)\)/);
+    assert.match(workspaceSource, /activeDirectFilletRadiusMmRef\.current = requestedRadiusMm;[\s\S]*?recalculateDirectFilletRadius\(requestedRadiusMm, requestedRadiusMm\)/);
+    assert.match(workspaceSource, /const requestedRadiusMm = Math\.max\(0, activeDirectFilletRadiusMmRef\.current\)/);
+    assert.match(workspaceSource, /settingsDesigner = typeof customRadiusMm === "number"[\s\S]*?filletRadiusMm: customRadiusMm/);
     assert.match(workspaceSource, /requestedRadiusMm === 0[\s\S]*?Fillet removed from the selected node/);
     assert.match(workspaceSource, /geometries: \[\.\.\.\(designer\.geometries \?\? \[\]\)\.filter[\s\S]*?applyDesignerNativeFillet\(calculationDesigner, editable\.target, requestedRadiusMm\)/);
     assert.match(canvasSource, /if \(tool === "fillet"\)[\s\S]*?onFilletCorner\(target\)/);
+    assert.match(canvasSource, /const selectedFilletHit = tool === "fillet"[\s\S]*?const rawHit = selectedFilletHit/);
     assert.match(workspaceSource, /event\.key === "Escape" && \(tool === "move" \|\| tool === "path_trim" \|\| tool === "fillet"\)/);
   });
 
@@ -1554,6 +1847,26 @@ describe("shared node authoring context", () => {
     assert.ok(points[3].handleIn && points[3].handleOut);
   });
 
+  it("activates and preserves both handles on a straight compound contour", () => {
+    const outer = { points: [{ x: 0, y: 0 }, { x: 20, y: 0 }, { x: 20, y: 20 }, { x: 0, y: 20 }], pathMode: "straight" as const, closed: true as const };
+    const inner = { points: [{ x: 5, y: 5 }, { x: 10, y: 5 }, { x: 10, y: 10 }, { x: 5, y: 10 }], pathMode: "straight" as const, closed: true as const };
+    const shape = { x: 0, y: 0, width: 20, height: 20, points: outer.points, contours: [outer, inner], pathMode: "straight" as const };
+
+    const curved = setPolygonNodeType(shape, 6, "smooth");
+
+    assert.equal(curved.pathMode, "bezier");
+    assert.equal(curved.contours?.[0].pathMode, "straight");
+    assert.equal(curved.contours?.[1].pathMode, "bezier");
+    assert.ok(curved.contours?.[1].points[2].handleIn);
+    assert.ok(curved.contours?.[1].points[2].handleOut);
+
+    const restored = setPolygonNodeType(curved, 6, "straight");
+    assert.equal(restored.pathMode, "straight");
+    assert.equal(restored.contours?.[1].pathMode, "straight");
+    assert.equal(restored.contours?.[1].points[2].handleIn, undefined);
+    assert.equal(restored.contours?.[1].points[2].handleOut, undefined);
+  });
+
   it("uses one contextual picker and one canvas node type across geometric layers", async () => {
     const workspaceSource = await readFile("components/lighting/partitura-workspace.tsx", "utf8");
     const canvasSource = await readFile("components/lighting/designer/designer-paper-canvas.tsx", "utf8");
@@ -1566,7 +1879,7 @@ describe("shared node authoring context", () => {
 });
 
 describe("Designer contextual properties", () => {
-  it("omits element coordinates and exposes one consistently destructive Delete action", async () => {
+  it("omits element coordinates and exposes one consistently destructive icon-only Delete action", async () => {
     const [workspaceSource, designerUiSource, buttonSource] = await Promise.all([
       readFile("components/lighting/partitura-workspace.tsx", "utf8"),
       readFile("components/lighting/designer/designer-ui.tsx", "utf8"),
@@ -1582,11 +1895,11 @@ describe("Designer contextual properties", () => {
     assert.doesNotMatch(contextualBar, /<ToolbarNumber label="(?:X|Y|PX|PY)"/);
     assert.doesNotMatch(detailFields, /label: "Position"/);
     assert.equal(contextualBar.match(/<Trash2 /g)?.length, 1);
-    assert.match(contextualBar, /variant="destructive"[\s\S]{0,160}<Trash2[^>]*\/> Delete/);
+    assert.match(contextualBar, /variant="destructive"[\s\S]{0,180}aria-label="Delete selection"[\s\S]{0,120}<Trash2[^>]*\/>/);
     assert.match(buttonSource, /destructive: "border border-destructive bg-destructive/);
   });
 
-  it("reuses the trailing Artwork Copy and Delete actions for Diffusors and Face Graphic objects", async () => {
+  it("reuses one fixed Copy, Paste and Delete action group across copyable Layers objects", async () => {
     const workspaceSource = await readFile("components/lighting/partitura-workspace.tsx", "utf8");
     assert.match(workspaceSource, /selection\.type === "artwork" \|\| selection\.type === "zone" \|\| selection\.type === "channel" \|\| selection\.type === "face_graphic" \|\| selection\.type === "route"/);
     assert.match(workspaceSource, /if \(clipboard\.type === "channel"\)[\s\S]*?channels: \[\.\.\.designer\.channels, copy\]/);
@@ -1596,14 +1909,16 @@ describe("Designer contextual properties", () => {
     const deleteSource = workspaceSource.slice(deleteStart, deleteEnd);
     assert.doesNotMatch(deleteSource, /selection\.type === "(?:zone|channel|face_graphic)" && .*locked/);
 
-    const actionsStart = workspaceSource.indexOf('{editorMode === "design" && (canCopySelection || clipboard || canDeleteSelection) ? (');
-    const actionsEnd = workspaceSource.indexOf("</div>\n        </div>\n      </div> : null}", actionsStart);
+    const actionsStart = workspaceSource.indexOf('{!hasMultipleGeometrySelection && (canCopySelection || canDeleteSelection) ? (');
+    const actionsEnd = workspaceSource.indexOf("</div>\n        ) : null}", actionsStart);
     const actions = workspaceSource.slice(actionsStart, actionsEnd);
     assert.ok(actionsStart >= 0 && actionsEnd > actionsStart);
-    assert.match(actions, /Copy selected object[\s\S]*Delete selection/);
+    assert.match(actions, /aria-label="Copy selected object"[\s\S]*aria-label="Paste copied object"[\s\S]*aria-label="Delete selection"/);
+    assert.match(actions, /disabled=\{!canPasteSelection\}/);
+    assert.match(actions, /<Copy [^>]*\/>[\s\S]*<ClipboardPaste [^>]*\/>[\s\S]*<Trash2 [^>]*\/>/);
   });
 
-  it("keeps the Face Graphic context compact and gives Project Geometry a distinct icon", async () => {
+  it("keeps object workflow actions visible and forbids contextual catch-all menus", async () => {
     const workspaceSource = await readFile("components/lighting/partitura-workspace.tsx", "utf8");
     const contextualBar = workspaceSource.slice(
       workspaceSource.indexOf('{editorMode === "design" ? <div className="flex h-10'),
@@ -1619,11 +1934,21 @@ describe("Designer contextual properties", () => {
     assert.ok(faceGraphicStart >= 0 && faceGraphicEnd > faceGraphicStart);
     assert.ok(zoneStart >= 0 && zoneEnd > zoneStart);
     assert.doesNotMatch(contextualBar, /Locked · inspect only|Compound ·/);
-    assert.doesNotMatch(faceGraphicContext, /<Badge>Face Graphic<\/Badge>|<Lock|> Lock<|label="Shape"|label="W"|label="H"/);
-    assert.doesNotMatch(zoneContext, /label="Shape"|label="W"|label="H"/);
+    assert.doesNotMatch(faceGraphicContext, /<Badge>Face Graphic<\/Badge>|<Lock|> Lock<|label="Shape"/);
+    assert.doesNotMatch(zoneContext, /label="Shape"/);
+    assert.match(faceGraphicContext, /<PrimitiveDimensionNumber label=\{selectedFaceGraphic\.shape === "ellipse" \? "ØW" : "W"\}[\s\S]*?<PrimitiveDimensionNumber label=\{selectedFaceGraphic\.shape === "ellipse" \? "ØH" : "H"\}/);
+    assert.match(zoneContext, /<PrimitiveDimensionNumber label=\{selectedZone\.shape === "ellipse" \? "ØW" : "W"\}[\s\S]*?<PrimitiveDimensionNumber label=\{selectedZone\.shape === "ellipse" \? "ØH" : "H"\}/);
+    assert.match(workspaceSource, /function PrimitiveDimensionNumber[\s\S]*?inputMode="decimal"[\s\S]*?onBlur=\{commit\}/);
     assert.match(faceGraphicContext, /label="Pass"[\s\S]*label="Filter color"/);
     assert.match(zoneContext, /label="Node"/);
-    assert.match(contextualBar, /<ScanLine className="h-4 w-4" \/> Project Geometry/);
+    assert.match(contextualBar, /<Layers2 className="h-4 w-4" \/> Project Geometry/);
+    assert.match(contextualBar, /!hasMultipleGeometrySelection \? <>[\s\S]*<Badge>\{geometrySelections\.length\} selected<\/Badge>/);
+    assert.match(contextualBar, /aria-label="Union selected profiles"[\s\S]*aria-label="Subtract selected profiles"[\s\S]*aria-label="Intersect selected profiles"[\s\S]*aria-label="Exclude selected profiles"/);
+    assert.match(contextualBar, /aria-label="Ungroup selected vectors"[\s\S]*<Ungroup className="h-4 w-4" \/>[\s\S]*aria-label="Group selected vectors"[\s\S]*<Group className="h-4 w-4" \/>/);
+    assert.match(contextualBar, /<span>Union<\/span>[\s\S]*<span>Subtract<\/span>[\s\S]*<span>Intersect<\/span>[\s\S]*<span>Exclude<\/span>/);
+    assert.doesNotMatch(contextualBar, /title="(?:More|Actions|Path operations)"|aria-label="(?:More|Actions|Path operations)"|<Ellipsis |Path operations/);
+    assert.match(contextualBar, /label="Offset"[\s\S]*<Tally2 className="h-4 w-4" \/> Offset Path[\s\S]*label="Project to"[\s\S]*Project Geometry/);
+    assert.match(contextualBar, /Create Zones[\s\S]*Generate Holes[\s\S]*Convert to paths/);
   });
 
 });
@@ -1781,7 +2106,20 @@ describe("shared geometry tool policy", () => {
   it("keeps layer permissions outside the geometry engine", () => {
     assert.equal(geometryToolAllowedOnLayer("build_area_rect", "reference"), true);
     assert.equal(geometryToolAllowedOnLayer("build_area_rect", "zones"), false);
-    assert.equal(geometryToolAllowedOnLayer("zone_bezier", "zones"), true);
+    assert.equal(geometryToolAllowedOnLayer("zone_polygon", "zones"), true);
+  });
+
+  it("uses one Zone path tool with a node-type picker", async () => {
+    const source = await readFile("components/lighting/partitura-workspace.tsx", "utf8");
+    assert.match(source, /label="Draw a polygon vector" icon=\{VectorPolygonIcon\}/);
+    assert.doesNotMatch(source, /zone_bezier|Bezier Zone/);
+    assert.match(source, /nodeCreationToolActive[\s\S]*NodeTypePicker/);
+  });
+
+  it("uses the square centerline icon for Work Lines", async () => {
+    const source = await readFile("components/lighting/partitura-workspace.tsx", "utf8");
+    assert.match(source, /FlipHorizontal as SquareCenterlineDashedVertical/);
+    assert.match(source, /label="Work line · continuous construction reference" icon=\{SquareCenterlineDashedVertical\}/);
   });
 
   it("uses the configured router-bit diameter as the channel trace width", async () => {
@@ -2113,7 +2451,7 @@ describe("Offset Path and legacy derived offsets", () => {
     assert.match(workspaceSource, /label="Offset" value=\{designer\.offsetDistanceMm\}/);
     assert.match(workspaceSource, /patchOffsetSettings\(\{ offsetDistanceMm \}\)/);
     assert.match(workspaceSource, /patchOffsetSettings\(\{ offsetJoin:/);
-    assert.match(workspaceSource, /onClick=\{createIndependentOffsetGeometry\}>Offset Path/);
+    assert.match(workspaceSource, /onClick=\{createIndependentOffsetGeometry\}><Tally2 className="h-4 w-4" \/> Offset Path/);
     assert.match(workspaceSource, /selectedDerivedGeometry\.operation === "fillet" \? <Button[\s\S]*?>Break Link<\/Button> : null/);
   });
 });
@@ -2691,6 +3029,36 @@ describe("timeline clip target selection", () => {
 });
 
 describe("work lines", () => {
+  it("groups every existing and newly created Work Line in its own Artwork folder", async () => {
+    const panelSource = await readFile("components/lighting/designer/designer-ui.tsx", "utf8");
+    const canvasSource = await readFile("components/lighting/designer/designer-paper-canvas.tsx", "utf8");
+    const rendererSource = await readFile("components/lighting/designer/designer-paper-renderer.ts", "utf8");
+    const workspaceSource = await readFile("components/lighting/partitura-workspace.tsx", "utf8");
+    const imagesFolder = panelSource.slice(panelSource.indexOf('label="Images"'), panelSource.indexOf("</RouteFolder>", panelSource.indexOf('label="Images"')));
+    const referenceFolder = panelSource.slice(panelSource.indexOf('label="Reference"'), panelSource.indexOf("</RouteFolder>", panelSource.indexOf('label="Reference"')));
+    const workLinesFolder = panelSource.slice(panelSource.indexOf('label="Work Lines"'), panelSource.indexOf("</RouteFolder>", panelSource.indexOf('label="Work Lines"')));
+
+    assert.doesNotMatch(referenceFolder, /designer\.workLines/);
+    assert.match(workLinesFolder, /count=\{designer\.workLines\.length\}/);
+    assert.match(workLinesFolder, /<WorkLineRows designer=\{designer\}/);
+    assert.match(workLinesFolder, /visible=\{designer\.workLinesVisible\}/);
+    assert.match(imagesFolder, /visible=\{imagesVisible\}[\s\S]*?onSetArtworkFolderVisibility\("images"/);
+    assert.match(referenceFolder, /visible=\{referenceVisible\}[\s\S]*?onSetArtworkFolderVisibility\("reference"/);
+    assert.match(workLinesFolder, /onSetArtworkFolderVisibility\("workLines"/);
+    assert.equal((panelSource.match(/<WorkLineRows designer=\{designer\}/g) ?? []).length, 1);
+    assert.match(panelSource, /No Work Lines yet\./);
+    assert.match(panelSource, /onSetArtworkVisibility\(patch\.visible\)/);
+    assert.match(workspaceSource, /function setArtworkVisibility\(visible: boolean\)[\s\S]*?artwork: \{ \.\.\.designer\.layers\.artwork, visible \},[\s\S]*?reference: \{ \.\.\.designer\.layers\.reference, visible \}/);
+    assert.match(workspaceSource, /function setArtworkFolderVisibility\(folder: "images" \| "reference" \| "workLines", visible: boolean\)/);
+    assert.match(panelSource, /workLines: true/);
+    assert.match(canvasSource, /name: `Work line \$\{next\}`,[\s\S]*?layer: "artwork"/);
+    const workLineRenderer = rendererSource.slice(rendererSource.indexOf("function drawPaperWorkLine"), rendererSource.indexOf("function drawPaperBuildArea"));
+    assert.doesNotMatch(workLineRenderer, /dashArray/);
+    assert.match(rendererSource, /dashArray: draft\.target === "work_line" \? undefined : \[8, 5\]/);
+    assert.match(workspaceSource, /activeLayer === "artwork" \|\| activeLayer === "reference" \|\| activeLayer === "zones" \|\| activeLayer === "faceGraphic" \? \([\s\S]*?Work line · continuous construction reference/);
+    assert.equal(designerLayerForSelection({ type: "work_line", id: "work_line_1" }), "artwork");
+  });
+
   it("persists open construction geometry without invalidating electrical compilation", () => {
     const document = createNewPartituraDocument("work_lines");
     const before = designerCompileSignature(normalizeDefaultSignLayout(document).designer);
@@ -2704,8 +3072,50 @@ describe("work lines", () => {
     });
 
     assert.equal(normalized.designer.workLinesVisible, false);
-    assert.deepEqual(normalized.designer.workLines, [{ id: "work_line_1", name: "Baseline", layer: "faceGraphic", points: [{ x: 2, y: 3 }, { x: 9, y: 3 }] }]);
+    assert.deepEqual(normalized.designer.workLines, [{ id: "work_line_1", name: "Baseline", layer: "artwork", points: [{ x: 2, y: 3 }, { x: 9, y: 3 }] }]);
     assert.equal(designerCompileSignature(normalized.designer), before);
+  });
+
+  it("finds and deduplicates crossings for direct Face Graphic holes", async () => {
+    const intersections = workLineIntersectionPoints([
+      { id: "horizontal", name: "Horizontal", points: [{ x: 0, y: 5 }, { x: 10, y: 5 }] },
+      { id: "vertical", name: "Vertical", points: [{ x: 5, y: 0 }, { x: 5, y: 10 }] },
+      { id: "joined", name: "Joined", points: [{ x: 5, y: 5 }, { x: 9, y: 9 }] },
+      { id: "parallel", name: "Parallel", points: [{ x: 0, y: 7 }, { x: 10, y: 7 }] }
+    ]);
+    assert.deepEqual(intersections, [{ x: 5, y: 5 }, { x: 5, y: 7 }, { x: 7, y: 7 }]);
+
+    const existingHole = {
+      id: "work_line_hole_1",
+      name: "Hole 1",
+      shape: "ellipse" as const,
+      x: 4.8,
+      y: 4.8,
+      width: 0.4,
+      height: 0.4,
+      passMode: "clear" as const,
+      filterColor: "#FFFFFF",
+      visible: true,
+      locked: false,
+      opacity: 1
+    };
+    assert.deepEqual(missingWorkLineHolePoints(intersections, [existingHole]), [{ x: 5, y: 7 }, { x: 7, y: 7 }]);
+    assert.deepEqual(missingWorkLineHolePoints(intersections, [{ ...existingHole, x: 4.80005 }]), [{ x: 5, y: 7 }, { x: 7, y: 7 }]);
+
+    const normalized = normalizeDefaultSignLayout({
+      ...createNewPartituraDocument("work_line_holes"),
+      designer: { ...createNewPartituraDocument("work_line_holes").designer, holeDiameterMm: 4.2 }
+    });
+    assert.equal(normalized.designer.holeDiameterMm, 4.2);
+
+    const workspaceSource = await readFile("components/lighting/partitura-workspace.tsx", "utf8");
+    const rendererSource = await readFile("components/lighting/designer/designer-paper-renderer.ts", "utf8");
+    assert.match(workspaceSource, /label="Hole diameter" value=\{designer\.holeDiameterMm\}/);
+    assert.match(workspaceSource, /onClick=\{generateWorkLineHoles\}[\s\S]{0,160}Generate Holes/);
+    assert.match(workspaceSource, /passMode: "clear"/);
+    assert.match(workspaceSource, /missingWorkLineHolePoints\(intersections, designer\.faceGraphics\)/);
+    assert.match(workspaceSource, /faceGraphics: \[\.\.\.designer\.faceGraphics, \.\.\.holes\]/);
+    assert.match(rendererSource, /element\.passMode === "clear" && !element\.id\.startsWith\("work_line_hole_"\) \? \[5, 4\] : undefined/);
   });
 
   it("moves every point by one snapped delta and keeps individual nodes editable", () => {

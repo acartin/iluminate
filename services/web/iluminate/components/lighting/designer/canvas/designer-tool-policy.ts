@@ -19,7 +19,6 @@ const GEOMETRY_TOOL_POLICIES: Partial<Record<DesignerTool, DesignerGeometryToolP
   zone_rect: { target: "zone", construction: "primitive", shape: "rect", mode: "straight", layers: ["zones"] },
   zone_ellipse: { target: "zone", construction: "primitive", shape: "ellipse", mode: "straight", layers: ["zones"] },
   zone_polygon: { target: "zone", construction: "path", shape: "path", mode: "straight", layers: ["zones"] },
-  zone_bezier: { target: "zone", construction: "path", shape: "path", mode: "bezier", layers: ["zones"] },
   channel_bezier: { target: "channel", construction: "path", shape: "path", mode: "bezier", layers: ["zones"] },
   face_graphic_rect: { target: "face_graphic", construction: "primitive", shape: "rect", mode: "straight", layers: ["faceGraphic"] },
   face_graphic_ellipse: { target: "face_graphic", construction: "primitive", shape: "ellipse", mode: "straight", layers: ["faceGraphic"] },

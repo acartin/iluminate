@@ -1,4 +1,4 @@
-import type { DesignerBuildAreaForm, DesignerChannelForm, DesignerContour, DesignerControllerForm, DesignerForm, DesignerGeometry, DesignerPoint, DesignerPointNodeType, DesignerRouteForm, DesignerRouteKind, DesignerRouteSurface, DesignerWorkLineForm, DesignerZoneForm } from "@/lib/lighting/partitura-model";
+import type { DesignerBuildAreaForm, DesignerChannelForm, DesignerContour, DesignerControllerForm, DesignerFaceGraphicForm, DesignerForm, DesignerGeometry, DesignerPoint, DesignerPointNodeType, DesignerRouteForm, DesignerRouteKind, DesignerRouteSurface, DesignerWorkLineForm, DesignerZoneForm } from "@/lib/lighting/partitura-model";
 import { designerGeometryAsShape, resolveDesignerDerivedGeometry, resolveDesignerProjectionGeometry } from "@/lib/lighting/partitura-model";
 import { filletDesignerGeometry } from "@/lib/lighting/designer-derived-geometry";
 import { estimateDesignerTextBounds } from "@/lib/lighting/designer-text-geometry";
@@ -152,6 +152,44 @@ export function movedShape<T extends { x: number; y: number; points?: DesignerPo
   };
 }
 
+export function moveDesignerVectorGroupMember(
+  designer: DesignerForm,
+  member: { type: "build_area" | "zone" | "face_graphic"; id: string },
+  movedMember: DesignerBuildAreaForm | DesignerZoneForm | DesignerFaceGraphicForm
+): DesignerForm {
+  const collection = member.type === "build_area" ? designer.buildAreas : member.type === "zone" ? designer.zones : designer.faceGraphics;
+  const currentMember = collection.find((entry) => entry.id === member.id);
+  if (!currentMember) return designer;
+  const group = designer.vectorGroups.find((candidate) => candidate.members.some((candidate) => candidate.type === member.type && candidate.id === member.id));
+  const memberIds = new Set(group?.members.filter((candidate) => candidate.type === member.type).map((candidate) => candidate.id) ?? [member.id]);
+  if (member.type === "face_graphic" && designer.faceGraphics.some((entry) => memberIds.has(entry.id) && entry.locked)) return designer;
+  const deltaX = movedMember.x - currentMember.x;
+  const deltaY = movedMember.y - currentMember.y;
+
+  if (member.type === "build_area") {
+    return {
+      ...designer,
+      buildAreas: designer.buildAreas.map((entry) => memberIds.has(entry.id)
+        ? entry.id === member.id ? { ...entry, ...movedMember } as DesignerBuildAreaForm : movedShape(entry, deltaX, deltaY, 0)
+        : entry)
+    };
+  }
+  if (member.type === "zone") {
+    return {
+      ...designer,
+      zones: designer.zones.map((entry) => memberIds.has(entry.id)
+        ? entry.id === member.id ? { ...entry, ...movedMember } as DesignerZoneForm : movedShape(entry, deltaX, deltaY, 0)
+        : entry)
+    };
+  }
+  return {
+    ...designer,
+    faceGraphics: designer.faceGraphics.map((entry) => memberIds.has(entry.id)
+      ? entry.id === member.id ? { ...entry, ...movedMember } as DesignerFaceGraphicForm : movedShape(entry, deltaX, deltaY, 0)
+      : entry)
+  };
+}
+
 type PolygonPointShape = { x: number; y: number; width: number; height: number; points?: DesignerPoint[]; contours?: DesignerContour[] };
 
 export function designerShapePointLocation(shape: Pick<PolygonPointShape, "points" | "contours">, flatIndex: number) {
@@ -179,6 +217,22 @@ function replaceContourPoints<T extends PolygonPointShape>(shape: T, contourInde
   if (!shape.contours?.length) return { ...shape, points };
   const contours = shape.contours.map((contour, index) => index === contourIndex ? { ...contour, points } : contour);
   return { ...shape, points: contours[0].points, contours };
+}
+
+function synchronizeShapePathModes<T extends PolygonPointShape & { pathMode?: "straight" | "bezier" }>(shape: T): T {
+  if (!shape.contours?.length) {
+    return { ...shape, pathMode: shape.points?.some((point) => point.handleIn || point.handleOut) ? "bezier" : "straight" };
+  }
+  const contours = shape.contours.map((contour) => ({
+    ...contour,
+    pathMode: contour.points.some((point) => point.handleIn || point.handleOut) ? "bezier" as const : "straight" as const
+  }));
+  return {
+    ...shape,
+    points: contours[0].points,
+    contours,
+    pathMode: contours.some((contour) => contour.pathMode === "bezier") ? "bezier" : "straight"
+  };
 }
 
 export function updatePolygonPoint<T extends PolygonPointShape>(shape: T, pointIndex: number, point: DesignerPoint, snapCm: number): T {
@@ -289,9 +343,9 @@ export function setPolygonNodeType<T extends PolygonPointShape & { pathMode?: "s
     const { radiusMm: _radiusMm, ...smoothPoint } = point;
     return { ...smoothPoint, nodeType, handleIn: { x: -tangent.x, y: -tangent.y }, handleOut: tangent };
   });
-  const updated = replaceContourPoints(shape, location.contourIndex, points);
+  const updated = synchronizeShapePathModes(replaceContourPoints(shape, location.contourIndex, points));
   const bounds = polygonShapeBounds(updated);
-  return { ...updated, pathMode: "bezier", ...(bounds ?? {}) };
+  return { ...updated, ...(bounds ?? {}) };
 }
 
 export function updateBezierHandle<T extends PolygonPointShape>(shape: T, pointIndex: number, handle: "in" | "out", absolutePoint: DesignerPoint, snapCm: number): T {
@@ -311,7 +365,7 @@ export function updateBezierHandle<T extends PolygonPointShape>(shape: T, pointI
     : { x: 0, y: 0 };
   const nodeType: DesignerPointNodeType = anchor.nodeType === "smooth" ? "smooth" : "symmetric";
   const points: DesignerPoint[] = location.points.map((point, index) => index === location.pointIndex ? { ...point, nodeType, [primary]: vector, [opposite]: oppositeVector } : point);
-  const updated = replaceContourPoints(shape, location.contourIndex, points);
+  const updated = synchronizeShapePathModes(replaceContourPoints(shape, location.contourIndex, points));
   const bounds = polygonShapeBounds(updated);
   return bounds ? { ...updated, ...bounds } : updated;
 }
@@ -464,7 +518,7 @@ export function pickDesignerHit(designer: DesignerForm, activeLayer: DesignerAct
       const targetsActiveLayer = operation.targetLayer === "reference"
         ? activeLayer === "artwork" || activeLayer === "reference"
         : operation.targetLayer === activeLayer;
-      if (!operation.visible || !targetsActiveLayer) continue;
+      if (!operation.visible || !targetsActiveLayer || operation.targetLayer === "reference" && !designer.layers.artwork.visible) continue;
       const resolved = resolveDesignerDerivedGeometry(designer, operation.id);
       if (!resolved.geometry) continue;
       const shape = designerGeometryAsShape(resolved.geometry);
@@ -474,7 +528,7 @@ export function pickDesignerHit(designer: DesignerForm, activeLayer: DesignerAct
       const targetsActiveLayer = projection.targetLayer === "reference"
         ? activeLayer === "artwork" || activeLayer === "reference"
         : projection.targetLayer === activeLayer;
-      if (!projection.visible || !targetsActiveLayer) continue;
+      if (!projection.visible || !targetsActiveLayer || projection.targetLayer === "reference" && !designer.layers.artwork.visible) continue;
       const sourceChannel = designer.channels.find((channel) => channel.geometryId === projection.sourceGeometryId);
       if (sourceChannel && channelContainsPoint(sourceChannel, point, tolerance)) return { type: "projection", id: projection.id };
       const resolved = resolveDesignerProjectionGeometry(designer, projection.id);
@@ -543,7 +597,7 @@ export function pickDesignerHit(designer: DesignerForm, activeLayer: DesignerAct
   }
   // Construction lines are deliberately last in hit priority so they never
   // steal a click from authored geometry drawn above them.
-  if (designer.workLinesVisible) {
+  if (designer.layers.artwork.visible && designer.workLinesVisible) {
     for (const line of [...designer.workLines].reverse()) {
       const pointHit = pickPolygonPointHit(line.id, line.points, point, tolerance, "work_line_point");
       if (pointHit) return pointHit;
@@ -1606,6 +1660,63 @@ export function pointToSegmentDistance(point: DesignerPoint, start: DesignerPoin
   const t = clamp(((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared, 0, 1);
   const projection = { x: start.x + t * dx, y: start.y + t * dy };
   return Math.hypot(point.x - projection.x, point.y - projection.y);
+}
+
+/** Finds unique crossings between distinct straight Work Line polylines. */
+export function workLineIntersectionPoints(workLines: DesignerWorkLineForm[], epsilon = 1e-6): DesignerPoint[] {
+  const intersections: DesignerPoint[] = [];
+  const addUnique = (point: DesignerPoint) => {
+    if (!intersections.some((entry) => Math.hypot(entry.x - point.x, entry.y - point.y) <= epsilon)) intersections.push(point);
+  };
+
+  for (let leftIndex = 0; leftIndex < workLines.length; leftIndex += 1) {
+    const left = workLines[leftIndex];
+    for (let rightIndex = leftIndex + 1; rightIndex < workLines.length; rightIndex += 1) {
+      const right = workLines[rightIndex];
+      for (let leftSegment = 1; leftSegment < left.points.length; leftSegment += 1) {
+        const a = left.points[leftSegment - 1];
+        const b = left.points[leftSegment];
+        for (let rightSegment = 1; rightSegment < right.points.length; rightSegment += 1) {
+          const c = right.points[rightSegment - 1];
+          const d = right.points[rightSegment];
+          const r = { x: b.x - a.x, y: b.y - a.y };
+          const s = { x: d.x - c.x, y: d.y - c.y };
+          const denominator = r.x * s.y - r.y * s.x;
+          if (Math.abs(denominator) <= epsilon) {
+            for (const leftEndpoint of [a, b]) {
+              for (const rightEndpoint of [c, d]) {
+                if (Math.hypot(leftEndpoint.x - rightEndpoint.x, leftEndpoint.y - rightEndpoint.y) <= epsilon) {
+                  addUnique({ x: (leftEndpoint.x + rightEndpoint.x) / 2, y: (leftEndpoint.y + rightEndpoint.y) / 2 });
+                }
+              }
+            }
+            continue;
+          }
+          const delta = { x: c.x - a.x, y: c.y - a.y };
+          const t = (delta.x * s.y - delta.y * s.x) / denominator;
+          const u = (delta.x * r.y - delta.y * r.x) / denominator;
+          if (t < -epsilon || t > 1 + epsilon || u < -epsilon || u > 1 + epsilon) continue;
+          addUnique({ x: a.x + t * r.x, y: a.y + t * r.y });
+        }
+      }
+    }
+  }
+  return intersections;
+}
+
+/** Excludes intersections that already have a generated Work Line hole at the same center. */
+export function missingWorkLineHolePoints(
+  intersections: DesignerPoint[],
+  faceGraphics: DesignerFaceGraphicForm[],
+  epsilon = 1e-4
+): DesignerPoint[] {
+  const generatedHoleCenters = faceGraphics
+    .filter((element) => element.id.startsWith("work_line_hole_") && element.shape === "ellipse")
+    .map((element) => ({ x: element.x + element.width / 2, y: element.y + element.height / 2 }));
+
+  return intersections.filter((point) => !generatedHoleCenters.some(
+    (center) => Math.hypot(center.x - point.x, center.y - point.y) <= epsilon
+  ));
 }
 
 /** Returns a monotonically increasing suffix without relying on array length. */

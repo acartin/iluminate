@@ -9,6 +9,12 @@ export type DesignerPathTrimPreview = {
 
 type PaperPath = InstanceType<PaperApi["Path"]>;
 type PaperCompoundPath = InstanceType<PaperApi["CompoundPath"]>;
+type DesignerTrace = Omit<DesignerContour, "closed"> & { closed: boolean };
+type DesignerChannelTrimCandidate = {
+  removed: DesignerContour;
+  kept: DesignerTrace;
+  score: [number, number, number];
+};
 
 /**
  * Resolves a self-crossing path into exact non-crossing contours, then selects
@@ -103,8 +109,125 @@ export function trimDesignerPathAtPoint(
   }
 }
 
-function contourToPaperPath(paper: PaperApi, contour: DesignerContour) {
-  const path = new paper.Path({ insert: false, closed: true });
+/**
+ * Removes one self-crossing loop from a Channel center trace. Unlike filled
+ * profiles, a Channel must remain one continuous path, so the clicked loop is
+ * spliced out without resolving the trace into compound filled contours.
+ */
+export function trimDesignerChannelPathAtPoint(
+  paper: PaperApi,
+  geometry: DesignerGeometry,
+  point: DesignerPoint,
+  maxDistance = Number.POSITIVE_INFINITY
+): DesignerPathTrimPreview | null {
+  if (geometry.kind !== "path" || !geometry.points?.length) return null;
+  const source = contourToPaperPath(paper, {
+    points: geometry.points,
+    pathMode: geometry.pathMode ?? "straight",
+    closed: geometry.closed !== false
+  });
+  const pointer = new paper.Point(point.x, point.y);
+  const crossingLocations = source.getCrossings(source);
+  const intersections = uniquePoints(crossingLocations.map((location) => ({
+    x: round(location.point.x),
+    y: round(location.point.y)
+  })));
+  const seen = new Set<string>();
+  let selected: DesignerChannelTrimCandidate | null = null;
+
+  try {
+    crossingLocations.forEach((location) => {
+      const pairedOffset = location.intersection?.offset;
+      if (typeof pairedOffset !== "number") return;
+      const start = Math.min(location.offset, pairedOffset);
+      const end = Math.max(location.offset, pairedOffset);
+      const key = `${round(start)}:${round(end)}`;
+      if (seen.has(key) || end - start <= 1e-7) return;
+      seen.add(key);
+
+      if (geometry.closed === false) {
+        const keptPath = source.clone({ insert: false }) as PaperPath;
+        const tail = keptPath.splitAt(end);
+        const removedPath = keptPath.splitAt(start);
+        if (!tail || !removedPath) {
+          keptPath.remove();
+          tail?.remove();
+          removedPath?.remove();
+          return;
+        }
+        keptPath.join(tail);
+        removedPath.closed = true;
+        considerTraceCandidate(removedPath, keptPath, pointer, maxDistance, (candidate) => {
+          if (!selected || compareScore(candidate.score, selected.score) < 0) selected = candidate;
+        });
+        removedPath.remove();
+        keptPath.remove();
+        return;
+      }
+
+      const firstArc = source.clone({ insert: false }) as PaperPath;
+      firstArc.splitAt(start);
+      const secondArc = firstArc.splitAt(end - start);
+      if (!secondArc) {
+        firstArc.remove();
+        return;
+      }
+      firstArc.closed = true;
+      secondArc.closed = true;
+      considerTraceCandidate(firstArc, secondArc, pointer, maxDistance, (candidate) => {
+        if (!selected || compareScore(candidate.score, selected.score) < 0) selected = candidate;
+      });
+      considerTraceCandidate(secondArc, firstArc, pointer, maxDistance, (candidate) => {
+        if (!selected || compareScore(candidate.score, selected.score) < 0) selected = candidate;
+      });
+      firstArc.remove();
+      secondArc.remove();
+    });
+  } finally {
+    source.remove();
+  }
+
+  const selectedCandidate = selected as DesignerChannelTrimCandidate | null;
+  if (!selectedCandidate || selectedCandidate.kept.points.length < 2) return null;
+  const kept = selectedCandidate.kept;
+  const bounds = pointsBounds(kept.points);
+  return {
+    geometry: {
+      id: geometry.id,
+      kind: "path",
+      x: bounds.x,
+      y: bounds.y,
+      width: bounds.width,
+      height: bounds.height,
+      points: kept.points,
+      pathMode: kept.pathMode,
+      closed: kept.closed,
+      fillRule: "nonzero"
+    },
+    removed: selectedCandidate.removed,
+    intersections
+  };
+}
+
+function considerTraceCandidate(
+  removedPath: PaperPath,
+  keptPath: PaperPath,
+  pointer: InstanceType<PaperApi["Point"]>,
+  maxDistance: number,
+  accept: (candidate: DesignerChannelTrimCandidate) => void
+) {
+  const containsPointer = removedPath.contains(pointer);
+  const strokeDistance = removedPath.getNearestPoint(pointer).getDistance(pointer);
+  if (!containsPointer && strokeDistance > maxDistance) return;
+  accept({
+    removed: paperPathToContour(removedPath),
+    kept: paperPathToTrace(keptPath),
+    score: [containsPointer ? 0 : 1, containsPointer ? Math.abs(removedPath.area) : strokeDistance, removedPath.length]
+  });
+}
+
+function contourToPaperPath(paper: PaperApi, contour: DesignerTrace) {
+  const path = new paper.Path({ insert: false, closed: contour.closed });
   contour.points.forEach((point) => path.add(new paper.Segment(
     new paper.Point(point.x, point.y),
     new paper.Point(point.handleIn?.x ?? 0, point.handleIn?.y ?? 0),
@@ -114,6 +237,11 @@ function contourToPaperPath(paper: PaperApi, contour: DesignerContour) {
 }
 
 function paperPathToContour(path: PaperPath): DesignerContour {
+  const trace = paperPathToTrace(path);
+  return { ...trace, closed: true };
+}
+
+function paperPathToTrace(path: PaperPath): DesignerTrace {
   const points = path.segments.map((segment): DesignerPoint => ({
     x: round(segment.point.x),
     y: round(segment.point.y),
@@ -124,7 +252,20 @@ function paperPathToContour(path: PaperPath): DesignerContour {
   return {
     points,
     pathMode: points.some((entry) => entry.handleIn || entry.handleOut) ? "bezier" : "straight",
-    closed: true
+    closed: path.closed
+  };
+}
+
+function pointsBounds(points: DesignerPoint[]) {
+  const xs = points.map((point) => point.x);
+  const ys = points.map((point) => point.y);
+  const x = Math.min(...xs);
+  const y = Math.min(...ys);
+  return {
+    x: round(x),
+    y: round(y),
+    width: Math.max(0.001, round(Math.max(...xs) - x)),
+    height: Math.max(0.001, round(Math.max(...ys) - y))
   };
 }
 

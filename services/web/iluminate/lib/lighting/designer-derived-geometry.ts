@@ -33,7 +33,7 @@ export function offsetDesignerGeometry(
     const offset = offsetPolyline(points, source.closed !== false, contourDistance, join);
     const offsetHadSelfIntersections = source.closed !== false && polylineSelfIntersects(offset, true);
     const resolvedOffsets = source.closed === false ? [offset] : resolveOffsetLoops(offset, Math.sign(signedArea(points)) || 1)
-      .map((resolved) => simplifyClosedPolyline(resolved, 0.01));
+      .map((resolved) => simplifyClosedPolylinePreservingTopology(resolved, 0.01));
     if (offsetHadSelfIntersections) warnings.add("Offset self-intersection loops were trimmed.");
     return resolvedOffsets
       .filter((resolved) => resolved.length >= (source.closed === false ? 2 : 3))
@@ -88,20 +88,177 @@ export function filletDesignerGeometry(
   return { geometry: geometryFromContours(resultId, resultContours, source.closed !== false), issue: null, warnings: Array.from(warnings), appliedFilletRadiiMm };
 }
 
+/**
+ * Direct authoring variant: if the existing Bezier segments cannot contain the
+ * requested circle, replace only the two local joins with tangent traces so the
+ * authored radius remains exact. Legacy derived geometry keeps using the
+ * clamping behavior above for backwards compatibility.
+ */
+export function filletDesignerGeometryExact(
+  source: DesignerGeometry,
+  radiusMm: number,
+  cornerIndex: number,
+  resultId = `${source.id}_fillet`
+): DesignerDerivedOperationResult {
+  const requestedRadiusMm = Math.max(0, radiusMm);
+  const regular = filletDesignerGeometry(source, requestedRadiusMm, [cornerIndex], resultId);
+  const regularRadiusMm = regular.appliedFilletRadiiMm?.[0];
+  if (requestedRadiusMm <= 0 || typeof regularRadiusMm === "number" && Math.abs(regularRadiusMm - requestedRadiusMm) <= 0.001) return regular;
+  if (source.kind === "ellipse") return regular;
+
+  const location = geometryContourPointLocation(source, cornerIndex);
+  if (!location) return regular;
+  const { contours, contour, contourIndex, pointIndex } = location;
+  const closed = source.closed !== false;
+  const points = contour.points;
+  if (!closed && (pointIndex === 0 || pointIndex === points.length - 1)) return regular;
+  if (!designerFilletCornerIsEligible(source, cornerIndex) && pointTouchesCircularArc(points, pointIndex, closed)) return regular;
+  const corner = points[pointIndex];
+  const radiusCm = requestedRadiusMm / 10;
+  const supports = expandedFilletSupports(points, pointIndex, closed, radiusCm);
+  if (!supports) return regular;
+  const { previousIndex, nextIndex, incoming, outgoing, turn, tangentDistance } = supports;
+  const start = subtract(corner, scale(incoming, tangentDistance));
+  const end = add(corner, scale(outgoing, tangentDistance));
+  const bisector = normalize(add(scale(incoming, -1), outgoing));
+  const center = add(corner, scale(bisector, radiusCm / Math.sin((Math.PI - turn) / 2)));
+  const cross = incoming.x * outgoing.y - incoming.y * outgoing.x;
+  const arc: DesignerPoint[] = [];
+  appendBezierArc(arc, center, start, end, cross >= 0 ? 1 : -1);
+  if (!arc.length) return regular;
+
+  arc[0] = { ...arc[0], handleIn: undefined, nodeType: "smooth" };
+  arc[arc.length - 1] = { ...arc[arc.length - 1], handleOut: undefined, nodeType: "smooth" };
+  const adjusted = replaceFilletSpan(points, previousIndex, nextIndex, pointIndex, arc, closed);
+  const adjustedContour: DesignerContour = { ...contour, points: adjusted, pathMode: "bezier", closed: true };
+  if (polylineSelfIntersects(flattenContour(adjustedContour, closed), closed)) {
+    return { geometry: null, issue: "invalid-topology", warnings: [`Fillet R${Number(requestedRadiusMm.toFixed(3))} mm would make this contour self-intersect. Geometry was not changed.`] };
+  }
+  const adjustedContours = contours.map((candidate, index) => index === contourIndex
+    ? adjustedContour
+    : { ...candidate, points: candidate.points.map(clonePoint) });
+  return {
+    geometry: geometryFromContours(resultId, adjustedContours, source.closed !== false),
+    issue: null,
+    warnings: [`Adjacent traces were adjusted to preserve the exact R${Number(requestedRadiusMm.toFixed(3))} mm fillet.`],
+    appliedFilletRadiiMm: [requestedRadiusMm]
+  };
+}
+
+function pointTouchesCircularArc(points: DesignerPoint[], pointIndex: number, closed: boolean) {
+  const previousIndex = pointIndex - 1;
+  const nextIndex = pointIndex + 1;
+  return ((closed || previousIndex >= 0) && cubicSegmentIsCircular(points[(previousIndex + points.length) % points.length], points[pointIndex]))
+    || ((closed || nextIndex < points.length) && cubicSegmentIsCircular(points[pointIndex], points[nextIndex % points.length]));
+}
+
+function cubicSegmentIsCircular(start: DesignerPoint, end: DesignerPoint) {
+  if (!start.handleOut || !end.handleIn) return false;
+  const startTangent = normalize(start.handleOut);
+  const endTangent = normalize(scale(end.handleIn, -1));
+  const startNormal = { x: -startTangent.y, y: startTangent.x };
+  const endNormal = { x: -endTangent.y, y: endTangent.x };
+  const center = lineIntersection(start, add(start, startNormal), end, add(end, endNormal));
+  if (!center) return false;
+  const startRadius = distanceBetween(center, start);
+  const endRadius = distanceBetween(center, end);
+  if (startRadius < 1e-7 || Math.abs(startRadius - endRadius) > Math.max(1e-6, startRadius * 1e-4)) return false;
+  const startRadial = scale(subtract(start, center), 1 / startRadius);
+  const endRadial = scale(subtract(end, center), 1 / endRadius);
+  const sweep = Math.acos(clamp(dot(startRadial, endRadial), -1, 1));
+  if (sweep < 1e-5 || sweep > Math.PI / 2 + 1e-4) return false;
+  const expectedHandleLength = 4 / 3 * Math.tan(sweep / 4) * startRadius;
+  const tolerance = Math.max(1e-6, expectedHandleLength * 1e-4);
+  return Math.abs(Math.hypot(start.handleOut.x, start.handleOut.y) - expectedHandleLength) <= tolerance
+    && Math.abs(Math.hypot(end.handleIn.x, end.handleIn.y) - expectedHandleLength) <= tolerance;
+}
+
+function expandedFilletSupports(points: DesignerPoint[], cornerIndex: number, closed: boolean, radiusCm: number) {
+  let previousOffset = 1;
+  let nextOffset = 1;
+  const canExpandPrevious = () => closed
+    ? previousOffset + nextOffset < points.length - 1
+    : cornerIndex - previousOffset > 0;
+  const canExpandNext = () => closed
+    ? previousOffset + nextOffset < points.length - 1
+    : cornerIndex + nextOffset < points.length - 1;
+
+  for (let attempt = 0; attempt < points.length * 2; attempt += 1) {
+    const previousIndex = (cornerIndex - previousOffset + points.length) % points.length;
+    const nextIndex = (cornerIndex + nextOffset) % points.length;
+    const incomingVector = subtract(points[cornerIndex], points[previousIndex]);
+    const outgoingVector = subtract(points[nextIndex], points[cornerIndex]);
+    const incomingLength = Math.hypot(incomingVector.x, incomingVector.y);
+    const outgoingLength = Math.hypot(outgoingVector.x, outgoingVector.y);
+    if (incomingLength < 1e-7 || outgoingLength < 1e-7) return null;
+    const incoming = scale(incomingVector, 1 / incomingLength);
+    const outgoing = scale(outgoingVector, 1 / outgoingLength);
+    const turn = Math.acos(clamp(dot(incoming, outgoing), -1, 1));
+    if (turn < 1e-4 || Math.PI - turn < 1e-4) return null;
+    const tangentDistance = radiusCm * Math.tan(turn / 2);
+    const previousFits = tangentDistance <= incomingLength - 1e-7;
+    const nextFits = tangentDistance <= outgoingLength - 1e-7;
+    if (previousFits && nextFits) return { previousIndex, nextIndex, incoming, outgoing, turn, tangentDistance };
+
+    let expanded = false;
+    if (!previousFits && canExpandPrevious()) {
+      previousOffset += 1;
+      expanded = true;
+    }
+    if (!nextFits && canExpandNext()) {
+      nextOffset += 1;
+      expanded = true;
+    }
+    if (!expanded) return null;
+  }
+  return null;
+}
+
+function replaceFilletSpan(
+  points: DesignerPoint[],
+  previousIndex: number,
+  nextIndex: number,
+  cornerIndex: number,
+  arc: DesignerPoint[],
+  closed: boolean
+) {
+  if (!closed || previousIndex < cornerIndex && cornerIndex < nextIndex) {
+    const adjusted = points.map(clonePoint);
+    adjusted[previousIndex] = { ...adjusted[previousIndex], handleOut: undefined };
+    adjusted[nextIndex] = { ...adjusted[nextIndex], handleIn: undefined };
+    adjusted.splice(previousIndex + 1, nextIndex - previousIndex - 1, ...arc);
+    return adjusted;
+  }
+
+  const remainder: DesignerPoint[] = [];
+  for (let index = (nextIndex + 1) % points.length; index !== previousIndex; index = (index + 1) % points.length) {
+    remainder.push(clonePoint(points[index]));
+  }
+  return [
+    { ...clonePoint(points[previousIndex]), handleOut: undefined },
+    ...arc,
+    { ...clonePoint(points[nextIndex]), handleIn: undefined },
+    ...remainder
+  ];
+}
+
 /** Structural eligibility only; the configured radius is validated when the operator clicks. */
 export function designerFilletCornerIsEligible(source: DesignerGeometry, cornerIndex: number) {
-  if (source.kind === "ellipse" || source.contours && source.contours.length > 1) return false;
+  if (source.kind === "ellipse") return false;
   if (source.kind === "rect") return cornerIndex >= 0 && cornerIndex < 4;
-  const points = source.points ?? [];
+  const location = geometryContourPointLocation(source, cornerIndex);
+  if (!location) return false;
+  const { contour, pointIndex } = location;
+  const points = contour.points;
   const closed = source.closed !== false;
-  if (cornerIndex < 0 || cornerIndex >= points.length || !closed && (cornerIndex === 0 || cornerIndex === points.length - 1)) return false;
-  const previous = points[(cornerIndex - 1 + points.length) % points.length];
-  const point = points[cornerIndex];
-  const next = points[(cornerIndex + 1) % points.length];
-  const incoming = cornerHasCurvedSegment(points, cornerIndex, closed)
+  if (!closed && (pointIndex === 0 || pointIndex === points.length - 1)) return false;
+  const previous = points[(pointIndex - 1 + points.length) % points.length];
+  const point = points[pointIndex];
+  const next = points[(pointIndex + 1) % points.length];
+  const incoming = cornerHasCurvedSegment(points, pointIndex, closed)
     ? stableCubicTangent(cubicForSegment(previous, point), true)
     : normalize(subtract(point, previous));
-  const outgoing = cornerHasCurvedSegment(points, cornerIndex, closed)
+  const outgoing = cornerHasCurvedSegment(points, pointIndex, closed)
     ? stableCubicTangent(cubicForSegment(point, next), false)
     : normalize(subtract(next, point));
   const turn = Math.acos(clamp(dot(incoming, outgoing), -1, 1));
@@ -285,6 +442,19 @@ function geometryContours(geometry: DesignerGeometry): DesignerContour[] {
   return geometry.points?.length ? [{ points: geometry.points, pathMode: geometry.pathMode ?? "straight", closed: true }] : [];
 }
 
+function geometryContourPointLocation(geometry: DesignerGeometry, flatIndex: number) {
+  const contours = geometryContours(geometry);
+  let offset = 0;
+  for (let contourIndex = 0; contourIndex < contours.length; contourIndex += 1) {
+    const contour = contours[contourIndex];
+    if (flatIndex >= offset && flatIndex < offset + contour.points.length) {
+      return { contours, contour, contourIndex, pointIndex: flatIndex - offset };
+    }
+    offset += contour.points.length;
+  }
+  return null;
+}
+
 function flattenContour(contour: DesignerContour, closed = true) {
   if (contour.pathMode !== "bezier") return contour.points.map((point) => ({ x: point.x, y: point.y }));
   const result: DesignerPoint[] = [];
@@ -416,6 +586,18 @@ function simplifyClosedPolyline(points: DesignerPoint[], toleranceCm: number) {
   const firstHalf = simplifyPolyline(points.slice(first, second + 1), toleranceCm);
   const secondHalf = simplifyPolyline([...points.slice(second), ...points.slice(0, first + 1)], toleranceCm);
   return dedupeSequentialPoints([...firstHalf.slice(0, -1), ...secondHalf.slice(0, -1)]);
+}
+
+function simplifyClosedPolylinePreservingTopology(points: DesignerPoint[], toleranceCm: number) {
+  const orientation = Math.sign(signedArea(points));
+  let tolerance = toleranceCm;
+  for (let attempt = 0; attempt < 8; attempt += 1) {
+    const simplified = simplifyClosedPolyline(points, tolerance);
+    const preservesOrientation = !orientation || Math.sign(signedArea(simplified)) === orientation;
+    if (simplified.length >= 3 && preservesOrientation && !polylineSelfIntersects(simplified, true)) return simplified;
+    tolerance /= 2;
+  }
+  return points;
 }
 
 function simplifyPolyline(points: DesignerPoint[], toleranceCm: number): DesignerPoint[] {

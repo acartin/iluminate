@@ -110,7 +110,10 @@ export function drawPaperDesigner({
   drawPaperShapeDraft(shapeDraft?.target === "work_line" ? null : shapeDraft, toScreen, lengthToScreen);
   drawPaperPrimitiveDraft(primitiveDraft, rectToScreen);
 
-  designer.derivedGeometries.filter((operation) => operation.visible && !(vinylPreviewActive && operation.targetLayer === "faceGraphic") && (operation.targetLayer === "reference" ? activeLayer === "artwork" || activeLayer === "reference" : operation.targetLayer === activeLayer)).forEach((operation) => {
+  designer.derivedGeometries.filter((operation) => operation.visible
+    && (operation.targetLayer !== "reference" || designer.layers.artwork.visible)
+    && !(vinylPreviewActive && operation.targetLayer === "faceGraphic")
+    && (operation.targetLayer === "reference" ? activeLayer === "artwork" || activeLayer === "reference" : operation.targetLayer === activeLayer)).forEach((operation) => {
     const resolved = resolveDesignerDerivedGeometry(designer, operation.id);
     if (!resolved.geometry) return;
     const derived = designerGeometryAsShape(resolved.geometry);
@@ -126,7 +129,10 @@ export function drawPaperDesigner({
     new paperScope.PointText({ point: toScreen({ x: derived.x + 0.8, y: derived.y - 0.8 }), content: `${operation.operation.toUpperCase()} · ${operation.name}`, fillColor: selected ? "#fcd34d" : "#d97706", fontFamily: "monospace", fontSize: 10 });
   });
 
-  designer.projections.filter((projection) => projection.visible && !(vinylPreviewActive && projection.targetLayer === "faceGraphic") && (projection.targetLayer === "reference" ? activeLayer === "artwork" || activeLayer === "reference" : projection.targetLayer === activeLayer)).forEach((projection) => {
+  designer.projections.filter((projection) => projection.visible
+    && (projection.targetLayer !== "reference" || designer.layers.artwork.visible)
+    && !(vinylPreviewActive && projection.targetLayer === "faceGraphic")
+    && (projection.targetLayer === "reference" ? activeLayer === "artwork" || activeLayer === "reference" : projection.targetLayer === activeLayer)).forEach((projection) => {
     const resolved = resolveDesignerProjectionGeometry(designer, projection.id);
     if (!resolved.geometry) return;
     const projected = designerGeometryAsShape(resolved.geometry);
@@ -324,7 +330,7 @@ export function drawPaperDesigner({
 
   // Work lines stay last in hit-test priority, but render over filled artwork
   // so an intentionally selected construction reference remains usable.
-  if (designer.workLinesVisible) {
+  if (designer.layers.artwork.visible && designer.workLinesVisible) {
     designer.workLines.forEach((line) => drawPaperWorkLine(line, {
       selected: selectedWorkLineId === line.id,
       selectedPointIndex: selectedWorkLineId === line.id ? selectedWorkLinePointIndex : undefined,
@@ -371,24 +377,21 @@ function drawPaperPathTrimPreview(
   toScreen: (point: DesignerPoint) => PaperPoint,
   rectToScreen: (shape: { x: number; y: number; width: number; height: number }) => PaperRectangle
 ) {
-  const kept = drawPaperClosedShape(designerGeometryAsShape(preview.geometry), {
-    fillColor: "rgba(34,211,238,0.12)",
-    strokeColor: "#22d3ee",
-    strokeWidth: 2.4,
-    toScreen,
-    rectToScreen
-  });
+  const kept = preview.geometry.closed === false
+    ? drawPaperTrimContour({
+        points: preview.geometry.points ?? [],
+        closed: false
+      }, toScreen, "#22d3ee", 2.4)
+    : drawPaperClosedShape(designerGeometryAsShape(preview.geometry), {
+        fillColor: "rgba(34,211,238,0.12)",
+        strokeColor: "#22d3ee",
+        strokeWidth: 2.4,
+        toScreen,
+        rectToScreen
+      });
   kept.opacity = 0.95;
-  const removed = new paperScope.Path({ strokeColor: "#ef4444", strokeWidth: 4, dashArray: [7, 4] });
-  preview.removed.points.forEach((point) => {
-    const anchor = toScreen(point);
-    removed.add(new paperScope.Segment(
-      anchor,
-      point.handleIn ? toScreen({ x: point.x + point.handleIn.x, y: point.y + point.handleIn.y }).subtract(anchor) : undefined,
-      point.handleOut ? toScreen({ x: point.x + point.handleOut.x, y: point.y + point.handleOut.y }).subtract(anchor) : undefined
-    ));
-  });
-  removed.closed = preview.removed.closed;
+  const removed = drawPaperTrimContour(preview.removed, toScreen, "#ef4444", 4);
+  removed.dashArray = [7, 4];
   preview.intersections.forEach((point) => new paperScope.Path.Circle({
     center: toScreen(point),
     radius: 7,
@@ -396,6 +399,25 @@ function drawPaperPathTrimPreview(
     strokeColor: "#111827",
     strokeWidth: 2
   }));
+}
+
+function drawPaperTrimContour(
+  contour: Pick<DesignerContour, "points"> & { closed: boolean },
+  toScreen: (point: DesignerPoint) => PaperPoint,
+  strokeColor: string,
+  strokeWidth: number
+) {
+  const path = new paperScope.Path({ strokeColor, strokeWidth });
+  contour.points.forEach((point) => {
+    const anchor = toScreen(point);
+    path.add(new paperScope.Segment(
+      anchor,
+      point.handleIn ? toScreen({ x: point.x + point.handleIn.x, y: point.y + point.handleIn.y }).subtract(anchor) : undefined,
+      point.handleOut ? toScreen({ x: point.x + point.handleOut.x, y: point.y + point.handleOut.y }).subtract(anchor) : undefined
+    ));
+  });
+  path.closed = contour.closed;
+  return path;
 }
 
 function drawPaperPrimitiveDraft(draft: DesignerPrimitiveDraft | null, rectToScreen: (shape: { x: number; y: number; width: number; height: number }) => PaperRectangle) {
@@ -549,7 +571,7 @@ function drawPaperShapeDraft(draft: DesignerShapeDraft | null, toScreen: (point:
   const path = new paperScope.Path({
     strokeColor: draftColor,
     strokeWidth: 1.5,
-    dashArray: [8, 5]
+    dashArray: draft.target === "work_line" ? undefined : [8, 5]
   });
   draftTrace.forEach((point) => path.add(toScreen(point)));
   if (draft.target !== "channel" && draft.target !== "work_line" && draft.points.length > 2) {
@@ -577,7 +599,6 @@ function drawPaperWorkLine(line: DesignerWorkLineForm, options: { selected: bool
   const path = new paperScope.Path({
     strokeColor: options.selected ? "#2dd4bf" : "#0d9488",
     strokeWidth: options.selected ? 2 : 1.2,
-    dashArray: [7, 5],
     opacity: options.selected ? 1 : 0.72
   });
   line.points.forEach((point) => path.add(options.toScreen(point)));
@@ -751,7 +772,7 @@ function drawPaperFaceGraphic(element: DesignerFaceGraphicForm, options: {
     fillColor,
     strokeColor: options.vinylPreview ? options.selected ? "#22d3ee" : element.passMode === "opaque" ? "#475569" : "#cbd5e1" : options.selected ? "#f472b6" : "#db2777",
     strokeWidth: options.selected ? 2 : 1.2,
-    dashArray: !options.vinylPreview && element.passMode === "clear" ? [5, 4] : undefined,
+    dashArray: !options.vinylPreview && element.passMode === "clear" && !element.id.startsWith("work_line_hole_") ? [5, 4] : undefined,
     toScreen: options.toScreen,
     rectToScreen: options.rectToScreen
   });

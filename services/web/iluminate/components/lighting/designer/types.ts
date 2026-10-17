@@ -16,7 +16,7 @@ import type {
   DesignerZoneForm
 } from "@/lib/lighting/partitura-model";
 
-export type DesignerTool = "select" | "move" | "path_trim" | "fillet" | "measure" | "work_line" | "image_place" | "build_area_rect" | "build_area_ellipse" | "build_area_polygon" | "build_area_bezier" | "reference_text" | "zone_rect" | "zone_ellipse" | "zone_polygon" | "zone_bezier" | "zone_text" | "channel_bezier" | "face_graphic_rect" | "face_graphic_ellipse" | "face_graphic_polygon" | "face_graphic_bezier" | "face_graphic_text" | "led_string" | "data_cable" | "cut" | "pan";
+export type DesignerTool = "select" | "move" | "path_trim" | "fillet" | "measure" | "work_line" | "image_place" | "build_area_rect" | "build_area_ellipse" | "build_area_polygon" | "build_area_bezier" | "reference_text" | "zone_rect" | "zone_ellipse" | "zone_polygon" | "zone_text" | "channel_bezier" | "face_graphic_rect" | "face_graphic_ellipse" | "face_graphic_polygon" | "face_graphic_bezier" | "face_graphic_text" | "led_string" | "data_cable" | "cut" | "pan";
 export type DesignerMoveAxis = "x" | "y";
 export type DesignerFilletCornerTarget = { type: "build_area" | "zone" | "channel" | "face_graphic"; id: string; cornerIndex: number };
 export type DesignerRouteTerminal = { routeId: string; pointIndex: number };
@@ -57,7 +57,7 @@ export type DesignerMeasurement = { start: DesignerPoint; end?: DesignerPoint; l
 
 export function designerLayerForSelection(selection: DesignerSelection): DesignerActiveLayer | null {
   if (!selection) return null;
-  if (selection.type === "artwork" || selection.type === "build_area") return "artwork";
+  if (selection.type === "artwork" || selection.type === "build_area" || selection.type === "work_line") return "artwork";
   if (selection.type === "zone" || selection.type === "channel") return "zones";
   if (selection.type === "face_graphic") return "faceGraphic";
   if (selection.type === "light_source") return "lightSources";
