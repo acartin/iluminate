@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { ProjectPlayer } from "@/components/project-player";
 import { ProjectVisual } from "@/components/project-visual";
 import { appStartUrl, appTemplateUrl, projects } from "@/content/site";
+import { createPageMetadata } from "@/lib/seo";
 
 type ProjectPageProps = { params: Promise<{ slug: string }> };
 
@@ -15,7 +16,11 @@ export async function generateMetadata({ params }: ProjectPageProps): Promise<Me
   const { slug } = await params;
   const project = projects.find((item) => item.slug === slug);
   if (!project) return {};
-  return { title: project.title, description: project.summary };
+  return createPageMetadata({
+    title: project.title,
+    description: project.summary,
+    path: `/projects/${project.slug}`,
+  });
 }
 
 export default async function ProjectPage({ params }: ProjectPageProps) {

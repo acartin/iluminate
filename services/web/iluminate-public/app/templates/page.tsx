@@ -2,11 +2,13 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { ProjectVisual } from "@/components/project-visual";
 import { templates } from "@/content/site";
+import { createPageMetadata } from "@/lib/seo";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = createPageMetadata({
   title: "Templates",
   description: "Puntos de partida editables para crear proyectos de iluminación con Iluminate.",
-};
+  path: "/templates",
+});
 
 export default function TemplatesPage() {
   return (

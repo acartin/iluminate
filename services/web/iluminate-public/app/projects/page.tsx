@@ -1,11 +1,13 @@
 import type { Metadata } from "next";
 import { ProjectCard } from "@/components/project-card";
 import { projects } from "@/content/site";
+import { createPageMetadata } from "@/lib/seo";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = createPageMetadata({
   title: "Proyectos",
   description: "Estudios conceptuales de rótulos 3D, luz direccionable y movimiento creados por Iluminate.",
-};
+  path: "/projects",
+});
 
 export default function ProjectsPage() {
   return (

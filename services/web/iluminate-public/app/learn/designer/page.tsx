@@ -1,7 +1,12 @@
 import type { Metadata } from "next";
 import { LessonList } from "@/components/lesson-list";
+import { createPageMetadata } from "@/lib/seo";
 
-export const metadata: Metadata = { title: "Aprender Designer" };
+export const metadata: Metadata = createPageMetadata({
+  title: "Aprender Designer",
+  description: "Próximas lecciones para preparar geometría, zonas, strings y conexiones de un rótulo en Iluminate Designer.",
+  path: "/learn/designer",
+});
 
 export default function DesignerLearnPage() {
   return (

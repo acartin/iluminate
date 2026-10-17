@@ -1,8 +1,17 @@
+import type { Metadata } from "next";
 import Link from "next/link";
 import { HeroStage } from "@/components/hero-stage";
 import { ProjectCard } from "@/components/project-card";
 import { Reveal } from "@/components/reveal";
 import { appStartUrl, projects } from "@/content/site";
+import { createPageMetadata } from "@/lib/seo";
+
+export const metadata: Metadata = createPageMetadata({
+  title: "Iluminate — Rótulos que se mueven con luz",
+  description:
+    "Diseña, anima y previsualiza rótulos 3D con iluminación direccionable. Explora proyectos, templates y el sistema creativo de Iluminate.",
+  path: "/",
+});
 
 export default function HomePage() {
   return (

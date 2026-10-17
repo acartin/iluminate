@@ -4,9 +4,9 @@ import { Brand } from "./brand";
 
 const navigation = [
   ["Proyectos", "/projects"],
+  ["Simulador", "/simulator"],
   ["Templates", "/templates"],
   ["Aprender", "/learn"],
-  ["Tecnología", "/technology"],
 ] as const;
 
 export function SiteHeader() {

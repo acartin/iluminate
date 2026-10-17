@@ -3,6 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { ProjectPlayer } from "@/components/project-player";
 import { appTemplateUrl, templates } from "@/content/site";
+import { createPageMetadata } from "@/lib/seo";
 
 type TemplatePageProps = { params: Promise<{ slug: string }> };
 
@@ -13,7 +14,13 @@ export function generateStaticParams() {
 export async function generateMetadata({ params }: TemplatePageProps): Promise<Metadata> {
   const { slug } = await params;
   const template = templates.find((item) => item.slug === slug);
-  return template ? { title: template.title, description: template.description } : {};
+  return template
+    ? createPageMetadata({
+        title: template.title,
+        description: template.description,
+        path: `/templates/${template.slug}`,
+      })
+    : {};
 }
 
 export default async function TemplatePage({ params }: TemplatePageProps) {

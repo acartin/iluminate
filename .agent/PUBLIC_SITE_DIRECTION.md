@@ -40,6 +40,7 @@ Initial public information architecture:
 
 ```text
 /
+/simulator
 /projects
 /projects/[slug]
 /templates
@@ -76,6 +77,25 @@ Public projects are experiential demonstrations. Templates are reusable,
 versioned starting points. A public project may have a template, but not every
 showcase must be reusable.
 
+`/projects` is the curated public showroom. Its presentation components must
+consume project records from a content boundary instead of embedding a new page
+for every project. The initial implementation may use local typed records; a
+future publishing workflow may replace that source without changing the public
+routes or visual components.
+
+A customer share and a showroom publication are different states. A share link
+exists for review or delivery and follows its own `unlisted` or `public` policy.
+Adding a project to the showroom requires a separate, explicit publication
+action with the customer's authorization, curated title and description,
+stable showroom slug, attribution policy and approved media. Revoking showroom
+publication must not invalidate the customer's original share link.
+
+Every showroom record needs a durable poster image so project cards, metadata,
+mobile fallbacks and crawlers do not depend on video playback. A short hosted
+preview may be added when available. YouTube is optional distribution and may
+be embedded or linked, but it is not the canonical project record or media
+store and customer work must never be uploaded without explicit authorization.
+
 The intended visitor flow is:
 
 ```text
@@ -86,6 +106,11 @@ discover project
 -> create a private tenant-owned copy
 -> open it in Designer
 ```
+
+`/simulator` is the primary product-led discovery page. Its first delivery may
+reuse the existing conceptual public preview and placeholder content. It must
+remain clearly labelled as conceptual until immutable published bundles can be
+played with canonical Iluminate semantics.
 
 The public configurator is deliberately limited. It may expose scene, palette,
 effect, speed, intensity, play/pause and diffuser presentation. It must not
@@ -236,7 +261,9 @@ Do not require a custom video hosting or LMS platform for the first version.
 5. **Complete in the authenticated app:** consolidate the reusable read-only
    player under `services/web/iluminate/components/lighting/player`; public
    interactive playback may reuse that contract in a later delivery.
-6. Build project detail pages and the restricted public configurator.
+6. **Initial conceptual version complete:** add `/simulator`; replace its
+   presentation preview with the restricted canonical public configurator when
+   immutable published bundles are available.
 7. Add `/learn`, Designer and Animate YouTube collections.
 8. Add authenticated `Use this template` handoff and safe private cloning.
 9. Introduce persistent publication/template models only after the content and

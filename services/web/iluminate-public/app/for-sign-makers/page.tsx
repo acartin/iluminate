@@ -1,10 +1,12 @@
 import type { Metadata } from "next";
 import Link from "next/link";
+import { createPageMetadata } from "@/lib/seo";
 
-export const metadata: Metadata = {
+export const metadata: Metadata = createPageMetadata({
   title: "Para fabricantes",
-  description: "Una capacidad digital para fabricantes de rótulos, stands y espacios de marca.",
-};
+  description: "Diseña y previsualiza iluminación direccionable antes de fabricar rótulos, stands y espacios de marca.",
+  path: "/for-sign-makers",
+});
 
 export default function ForSignMakersPage() {
   return (
