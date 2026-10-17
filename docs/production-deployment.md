@@ -233,6 +233,17 @@ El archivo fuente del Compose público también se versiona en:
 ops/production/iluminate-public.compose.yml
 ```
 
+El script versionado selecciona ese archivo explícitamente. Así, el par puede
+copiarse sin renombrarlo a una VM o VPS y tampoco descubrirá accidentalmente
+otro Compose situado en un directorio padre.
+
+Para conservar compatibilidad con la instalación actual de `prd-web-01`, si el
+archivo versionado no está junto al script también acepta un `compose.yml`
+colocado en el mismo directorio. Un archivo alternativo debe indicarse de forma
+explícita con `ILUMINATE_COMPOSE_FILE`; las rutas relativas se resuelven desde el
+directorio del script. Si ninguno existe, el despliegue se detiene antes de
+invocar Docker.
+
 Contenedores activos:
 
 | Contenedor | Imagen | Red | Puerto público del host |
