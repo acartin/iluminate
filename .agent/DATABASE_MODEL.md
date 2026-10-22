@@ -56,6 +56,15 @@ Auth-specific audit log copied from the auth baseline.
 
 ## Iluminate Tables
 
+### `iluminate.led_strip_profiles`
+
+Stores active global presets (`client_id is null`) and tenant-owned custom LED
+strip profiles. Physical construction, cut mode, independent pixels/m,
+LEDs/m, LEDs/pixel and LEDs/cut facts, dimensions and rated power are catalog
+selection data. Selecting a profile copies a full
+snapshot into the partitura; compilation never joins or looks up this table, so
+later catalog changes cannot alter a saved installation.
+
 ### `iluminate.projects`
 
 Represents a client-owned LED sign, stand, exhibit or installation. It is the top-level workspace for modeling the physical layout, assets, controllers and current partitura.

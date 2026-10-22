@@ -1,6 +1,7 @@
 import type { DesignerGeometry, DesignerPoint } from "@/lib/lighting/partitura-model";
+import { offsetDesignerGeometry } from "@/lib/lighting/designer-derived-geometry";
 
-export type ChannelPathAlignment = "left" | "center" | "right";
+export type ChannelPathAlignment = "left" | "center" | "right" | "inside" | "outside";
 export type ChannelPathDraft = {
   points: DesignerPoint[];
   pathMode: "straight" | "bezier";
@@ -9,22 +10,40 @@ export type ChannelPathDraft = {
 
 export type ChannelPathResult =
   | { paths: ChannelPathDraft[]; issue: null }
-  | { paths: []; issue: "empty" | "branch" };
+  | { paths: []; issue: "empty" | "branch" | "offset" };
+
+export function generatedChannelName(sourceName: string | undefined, fallbackName: string, alignment: ChannelPathAlignment, offsetDistanceMm: number) {
+  if (alignment !== "inside" && alignment !== "outside") return sourceName ?? fallbackName;
+  const baseName = (sourceName ?? fallbackName).replace(/\s+(?:inset|outside offset|offset)\s+-?\d+(?:\.\d+)?\s*mm$/i, "");
+  const distanceLabel = String(Number(Math.abs(offsetDistanceMm).toFixed(3)));
+  return `${baseName} ${alignment === "inside" ? "inset" : "outside offset"} ${distanceLabel} mm`;
+}
 
 /** Builds one editable Channel trajectory per non-branching connected chain. */
 export function channelPathsFromGeometries(
   geometries: DesignerGeometry[],
   alignment: ChannelPathAlignment,
   widthMm: number,
+  offsetDistanceMm = 0,
   endpointToleranceCm = 0.02
 ): ChannelPathResult {
-  const inputs = geometries.flatMap(geometryPaths).filter((path) => path.points.length >= 2);
+  const offsetRequested = alignment === "inside" || alignment === "outside";
+  const pathGeometries = offsetRequested
+    ? geometries.flatMap((geometry) => {
+      if (geometry.closed === false) return [];
+      const distanceMm = Math.abs(offsetDistanceMm) * (alignment === "inside" ? -1 : 1);
+      const result = offsetDesignerGeometry(geometry, distanceMm, "round", 4, `${geometry.id}_channel_offset`);
+      return result.geometry ? [result.geometry] : [];
+    })
+    : geometries;
+  if (offsetRequested && pathGeometries.length !== geometries.length) return { paths: [], issue: "offset" };
+  const inputs = pathGeometries.flatMap(geometryPaths).filter((path) => path.points.length >= 2);
   if (!inputs.length) return { paths: [], issue: "empty" };
   const closed = inputs.filter((path) => path.closed);
   const open = inputs.filter((path) => !path.closed);
   const chained = chainOpenPaths(open, endpointToleranceCm);
   if (chained.issue) return chained;
-  const distanceCm = alignment === "center" ? 0 : widthMm / 20 * (alignment === "left" ? 1 : -1);
+  const distanceCm = alignment === "center" || offsetRequested ? 0 : widthMm / 20 * (alignment === "left" ? 1 : -1);
   return {
     paths: [...closed, ...chained.paths].map((path) => offsetEditablePath(path, distanceCm)),
     issue: null

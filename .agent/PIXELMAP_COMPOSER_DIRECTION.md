@@ -71,15 +71,35 @@ Effects may use:
 - group/word coordinates;
 - sequential element order.
 
-### LED Density
+### LED Strip Configuration
 
-One project uses one LED density.
+One partitura uses one resolved LED-strip configuration. Setup loads global or
+tenant catalog profiles from PostgreSQL, but `Apply` copies the selected values
+into `document_json`; catalog edits never alter an existing partitura and
+Compile never queries the catalog.
 
-Default can be `60 Pixels/m` and `60 LEDs/m`, but both must be configurable when the project starts.
+The snapshot describes the physical construction (`discrete` or `continuous`),
+native control protocol, voltage, cut mode, addressable pixels, physical
+emitters, PCB/package dimensions and rated power.
+`Pixels/m` remains the compiler sampling density. `LEDs/m` is meaningful for
+discrete products but optional for continuous COB products.
 
-Changing density resets existing LED routes/cabling, because it changes physical spacing, generated LED count, indices, power estimates and the final `pixelMap`.
+`continuous` describes the visible light band; it does not imply free cutting.
+Only continuous/COB profiles expose `cutMode`: `marked_segments` shows the
+manufacturer interval and canvas marks, while `free_cut` hides both. Discrete
+strips are always segmented and Setup presents the four commonly advertised
+facts `Pixels/m`, `LEDs/m`, `LEDs/pixel` and `LEDs/cut`. They persist
+independently: editing one never rewrites another. Discrete cut-mark spacing is
+derived only for rendering as `1000 × LEDs/cut ÷ LEDs/m`; it is not a required
+or operator-editable millimeter field. Continuous marked-cut products retain an
+explicit manufacturer cut interval because individual LED counts do not define
+a useful COB cutting model.
 
-Do not add per-route density yet.
+Applying another profile preserves authored routes/cabling, invalidates the
+compiled/generated artifacts and leaves the operator responsible for reviewing
+the resulting physical layout before compiling again.
+
+Do not add per-route strip profiles yet.
 
 ### LED Routes
 
@@ -137,7 +157,8 @@ Snap/solder behavior is exact-grid based:
 
 - no tolerance-based soldering;
 - no separate solder/cautin tool;
-- route green + route red on the same snap point solders;
+- route green + route red on the same snap point and construction plane solders;
+- coincident Front and Rear terminals remain separate electrical nodes;
 - controller red port + data-cable green terminal on the same snap point solders;
 - floating cyan joints must be cleaned when routes are deleted.
 
@@ -169,6 +190,16 @@ Effects are authored against visual **zones** and **groups**, not manually
 defined logical string segments.
 
 - A zone is named geometry that selects pixels by their `x/y` location.
+- Pixel membership uses each generated addressable pixel center as physical
+  truth. Zones test that center against their contour with a fixed 0.5 mm
+  boundary tolerance. Channels require at least 90% of the configured physical
+  square LED-package footprint to remain inside the channel band after the same
+  tolerance. Addressable pixel pitch never enlarges that footprint.
+- Lighting Setup string membership is compiler-derived, never a normal manual
+  matrix. Front setups use Front strings and Halo-Lit / Wall Wash setups use Rear
+  strings. An LED string may additionally persist a Lighting host (`Zone` or
+  `Channel`) to disambiguate stacked assemblies whose targets overlap in plan;
+  an unset host preserves automatic geometric membership.
 - A group is a named, cycle-free composition of zones and/or groups. It does not
   change cable routing or duplicate pixels.
 - A selected pixel set can be evaluated in `serial`, `local`, or `global`

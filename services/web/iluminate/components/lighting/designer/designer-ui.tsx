@@ -4,15 +4,15 @@ import { cloneElement, isValidElement, useEffect, useRef, useState, type ReactEl
 import { DndContext, KeyboardSensor, PointerSensor, closestCenter, type DragEndEvent, useSensor, useSensors } from "@dnd-kit/core";
 import { SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { Cable, ChevronDown, ChevronRight, CircleDot, Contrast, CornerDownRight, Cpu, Eye, EyeOff, Folder, GripVertical, ImageIcon, Info, Layers, Lightbulb, Lock, Minus, Pencil, Plus, Save, Search, Spline, Trash2, Type, Unlock, Upload, Waves, X } from "lucide-react";
+import { AlignEndHorizontal, AlignStartHorizontal, AlignVerticalJustifyCenter, Cable, ChevronDown, ChevronRight, CircleDot, Contrast, CornerDownRight, Cpu, Eye, EyeOff, Folder, GripVertical, Hammer, ImageIcon, Info, Layers, Lightbulb, Lock, Minus, Pencil, Plus, Route, Save, Search, Spline, Trash2, Type, Unlock, Upload, Waves, Waypoints, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
-import type { DesignerArtworkForm, DesignerBuildAreaForm, DesignerChannelForm, DesignerFaceGraphicForm, DesignerForm, DesignerGroupForm, DesignerLayerSettings, DesignerLayersForm, DesignerPointNodeType, DesignerText, DesignerWorkLineForm, DesignerZoneForm } from "@/lib/lighting/partitura-model";
+import type { DesignerArtworkForm, DesignerBuildAreaForm, DesignerChannelForm, DesignerFaceGraphicForm, DesignerFabricationPartForm, DesignerFabricationPathForm, DesignerForm, DesignerGroupForm, DesignerLayerSettings, DesignerLayersForm, DesignerPointNodeType, DesignerText, DesignerWorkLineForm, DesignerZoneForm } from "@/lib/lighting/partitura-model";
 import { resolveDesignerDerivedGeometry, resolveDesignerProjectionGeometry, type DesignerDerivedGeometry, type DesignerProjection, type DesignerProjectionLayer } from "@/lib/lighting/partitura-model";
 import { formatDecimal, rulerTicks } from "./designer-geometry";
 import { diffusorObjectKeys, sameDiffusorVisibility, visibleDiffusorObjectKeys } from "./designer-diffusor-visibility";
 import { faceGraphicObjectKeys, sameFaceGraphicVisibility, visibleFaceGraphicObjectKeys } from "./designer-face-graphic-visibility";
-import { designerAdditiveSelectionRequested, designerLayerForSelection, routeMatchesSurfaceView, type DesignerActiveLayer, type DesignerRouteSummary, type DesignerRouteSurfaceView, type DesignerSelection, type DesignerViewport } from "./types";
+import { channelMatchesSurfaceView, designerAdditiveSelectionRequested, designerLayerForSelection, routeMatchesSurfaceView, type DesignerActiveLayer, type DesignerRouteSummary, type DesignerRouteSurfaceView, type DesignerSelection, type DesignerViewport } from "./types";
 
 export function ToolButton({
   label,
@@ -56,6 +56,7 @@ export function DesignerLayersPanel({
   activeLayer,
   selection,
   selectedGeometryKeys,
+  selectedRouteIds,
   routeSummaries,
   routeOutputs,
   assets,
@@ -79,6 +80,9 @@ export function DesignerLayersPanel({
   onUpdateDiffusorVisibilityPreset,
   onDeleteDiffusorVisibilityPreset,
   onPatchFaceGraphic,
+  onAddFabricationPart,
+  onPatchFabricationPart,
+  onPatchFabricationPath,
   onPatchProjection,
   onPatchDerivedGeometry,
   onPatchText,
@@ -103,6 +107,7 @@ export function DesignerLayersPanel({
   activeLayer: DesignerActiveLayer | null;
   selection: DesignerSelection;
   selectedGeometryKeys: string[];
+  selectedRouteIds: string[];
   routeSummaries: DesignerRouteSummary[];
   routeOutputs: Map<string, number>;
   assets: Array<{ id: string; fileName: string; mimeType: string }>;
@@ -126,6 +131,9 @@ export function DesignerLayersPanel({
   onUpdateDiffusorVisibilityPreset: (presetId: string) => void;
   onDeleteDiffusorVisibilityPreset: (presetId: string) => void;
   onPatchFaceGraphic: (elementId: string, patch: Partial<DesignerFaceGraphicForm>) => void;
+  onAddFabricationPart: () => void;
+  onPatchFabricationPart: (partId: string, patch: Partial<DesignerFabricationPartForm>) => void;
+  onPatchFabricationPath: (pathId: string, patch: Partial<DesignerFabricationPathForm>) => void;
   onPatchProjection: (projectionId: string, patch: Partial<DesignerProjection>) => void;
   onPatchDerivedGeometry: (derivedId: string, patch: Partial<DesignerDerivedGeometry>) => void;
   onPatchText: (textId: string, patch: Partial<DesignerText>) => void;
@@ -158,6 +166,7 @@ export function DesignerLayersPanel({
     reference: false,
     zones: false,
     faceGraphic: false,
+    fabrication: false,
     lightSources: false,
     hardware: false,
     strings: false
@@ -167,6 +176,7 @@ export function DesignerLayersPanel({
   const [expandedControllerGroup, setExpandedControllerGroup] = useState(false);
   const [expandedDiffusorGroups, setExpandedDiffusorGroups] = useState({ zones: false, channels: false, groups: false });
   const [expandedArtworkGroups, setExpandedArtworkGroups] = useState({ images: false, reference: false, workLines: false });
+  const [expandedFabricationParts, setExpandedFabricationParts] = useState<Record<string, boolean>>({});
 
   function activateLayer(layer: DesignerActiveLayer) {
     setExpandedLayers((current) => ({ ...current, [layer]: true }));
@@ -236,6 +246,10 @@ export function DesignerLayersPanel({
       if (route?.kind === "data_cable") setExpandedStringGroups((current) => ({ ...current, data_cables: true }));
       if (route?.kind === "led_string") setExpandedStringGroups((current) => ({ ...current, led_strings: true }));
     }
+    if (selection.type === "fabrication_path") {
+      const path = designer.fabricationPaths.find((entry) => entry.id === selection.id);
+      if (path) setExpandedFabricationParts((current) => ({ ...current, [path.partId]: true }));
+    }
     if (selection.type === "controller") setExpandedControllerGroup(true);
   }, [selection]);
 
@@ -246,9 +260,12 @@ export function DesignerLayersPanel({
           <Layers className="h-4 w-4 text-blue-700" />
           Layers
         </div>
-        <button type="button" title="Close layers" className="flex h-8 w-8 items-center justify-center rounded-md border border-border-2 text-muted-foreground hover:bg-surface-hover" onClick={onClose}>
-          <EyeOff className="h-4 w-4" />
-        </button>
+        <div className="flex items-center gap-1" title="Filter physical construction by mounting or fabrication side">
+          <AssemblySurfaceViewToggle value={routeSurfaceView} onChange={onRouteSurfaceViewChange} />
+          <button type="button" title="Close layers" className="flex h-8 w-8 items-center justify-center rounded-md border border-border-2 text-muted-foreground hover:bg-surface-hover" onClick={onClose}>
+            <EyeOff className="h-4 w-4" />
+          </button>
+        </div>
       </div>
       <div className="flex h-9 shrink-0 items-center gap-1 border-b border-border px-2">
         <Search className="h-3.5 w-3.5 text-muted-foreground" />
@@ -449,7 +466,7 @@ export function DesignerLayersPanel({
                     }}
                     onRename={(name) => onPatchZone(zone.id, { name })}
                     onOpenDetails={() => setDetails({ type: "zone", id: zone.id })}
-                    lightingCount={designer.lightSources.filter((source) => source.targetType === "zone" && source.targetId === zone.id && source.enabled && source.stringIds.length > 0).length}
+                    lightingCount={designer.lightSources.filter((source) => source.targetType === "zone" && source.targetId === zone.id && source.enabled).length}
                     onOpenLighting={() => onOpenLighting({ type: "zone", id: zone.id })}
                   />
                 </SortableLayerChildRow>
@@ -458,7 +475,7 @@ export function DesignerLayersPanel({
           </RouteFolder>
           <RouteFolder
             label="Channels"
-            count={(designer.channels ?? []).length}
+            count={(designer.channels ?? []).filter((channel) => channelMatchesSurfaceView(channel.fabricationSurface, routeSurfaceView)).length}
             visible={designer.channels.every((channel) => channel.visible !== false)}
             onToggleVisible={() => onSetDiffusorFolderVisibility("channels", !designer.channels.every((channel) => channel.visible !== false))}
             expanded={expandedDiffusorGroups.channels}
@@ -466,18 +483,19 @@ export function DesignerLayersPanel({
           >
             {(designer.channels ?? []).length ? (
               <SortableLayerList
-                ids={designer.channels.map((channel) => channel.id)}
+                ids={designer.channels.filter((channel) => channelMatchesSurfaceView(channel.fabricationSurface, routeSurfaceView)).map((channel) => channel.id)}
                 sensors={sensors}
                 disabled={designer.layers.zones.locked}
                 onReorder={(activeId, overId) => onReorderItems("channels", activeId, overId)}
               >
-                {designer.channels.filter((channel) => matchesSearch(channel.name, "channel")).map((channel) => (
+                {designer.channels.filter((channel) => channelMatchesSurfaceView(channel.fabricationSurface, routeSurfaceView) && matchesSearch(channel.name, "channel")).map((channel) => (
                   <SortableLayerChildRow key={channel.id} id={channel.id} disabled={designer.layers.zones.locked}>
                     <LayerChildRow
                       label={channel.name}
-                      selected={selection?.type === "channel" && selection.id === channel.id}
+                      selected={(selection?.type === "channel" && selection.id === channel.id) || selectedGeometryKeys.includes(`channel:${channel.id}`)}
                       color="amber"
                       icon={Waves}
+                      detail={`${channel.fabricationSurface === "rear" ? "Rear" : "Front"} · ${channel.widthMm} mm router channel`}
                       visible={channel.visible}
                       onToggleVisible={() => onPatchChannel(channel.id, { visible: channel.visible === false })}
                       onClick={() => {
@@ -485,14 +503,14 @@ export function DesignerLayersPanel({
                         onSelect({ type: "channel", id: channel.id });
                       }}
                       onRename={(name) => onPatchChannel(channel.id, { name })}
-                      lightingCount={designer.lightSources.filter((source) => source.targetType === "channel" && source.targetId === channel.id && source.enabled && source.stringIds.length > 0).length}
+                      lightingCount={designer.lightSources.filter((source) => source.targetType === "channel" && source.targetId === channel.id && source.enabled).length}
                       onOpenLighting={() => onOpenLighting({ type: "channel", id: channel.id })}
                     />
                   </SortableLayerChildRow>
                 ))}
               </SortableLayerList>
             ) : (
-              <p className="px-2 py-1 text-[11px] leading-4 text-muted-foreground">Use the Channel tool to trace a 3-20 mm neon-flex channel.</p>
+              <p className="px-2 py-1 text-[11px] leading-4 text-muted-foreground">{designer.channels.length ? "No Channels on the current construction side." : "Use the Channel tool to trace a 3-20 mm lighting or fabrication channel."}</p>
             )}
           </RouteFolder>
           <RouteFolder
@@ -538,7 +556,6 @@ export function DesignerLayersPanel({
             setExpandedLayers((current) => ({ ...current, strings: !expanded, hardware: !expanded }));
           }}
           onChange={(patch) => onPatchLayers(["strings", "hardware"], patch)}
-          action={<RouteSurfaceViewToggle value={routeSurfaceView} onChange={onRouteSurfaceViewChange} />}
         >
           <RouteFolder
             label="Data cables"
@@ -563,14 +580,14 @@ export function DesignerLayersPanel({
                     label={route.name}
                     icon={Cable}
                     detail={`${routeOutputs.get(route.id) ? `Out ${routeOutputs.get(route.id)}` : "Unassigned"} · ${route.designSurface === "front" ? "Front" : "Rear"} · data cable`}
-                    selected={selection?.type === "route" && selection.id === route.id}
+                    selected={selectedRouteIds.includes(route.id)}
                     color="green"
                     strongColor
                     visible={route.visible !== false}
                     onToggleVisible={() => onPatchRoute(route.id, { visible: route.visible === false })}
-                    onClick={() => {
+                    onClick={(event) => {
                       activateLayer("strings");
-                      onSelect({ type: "route", id: route.id });
+                      onSelect({ type: "route", id: route.id }, designerAdditiveSelectionRequested(event));
                     }}
                     onRename={(name) => onPatchRoute(route.id, { name })}
                     onOpenDetails={() => setDetails({ type: "route", id: route.id })}
@@ -581,7 +598,7 @@ export function DesignerLayersPanel({
           </RouteFolder>
           <RouteFolder
             label="Strings"
-            icon={Lightbulb}
+            icon={Waypoints}
             order={1}
             count={designer.routes.filter((route) => route.kind === "led_string" && routeMatchesSurfaceView(route.designSurface, routeSurfaceView)).length}
             expanded={expandedStringGroups.led_strings}
@@ -600,16 +617,16 @@ export function DesignerLayersPanel({
                 <SortableLayerChildRow key={route.id} id={route.id} disabled={designer.layers.strings.locked}>
                   <LayerChildRow
                     label={route.name}
-                    icon={Lightbulb}
+                    icon={Waypoints}
                     detail={`${routeOutputs.get(route.id) ? `Out ${routeOutputs.get(route.id)}` : "Unassigned"} · ${route.designSurface === "front" ? "Front" : "Rear"} · ${routeSummaries[index]?.pixels ?? 0} px · ${routeSummaries[index]?.leds ?? 0} LEDs`}
-                    selected={selection?.type === "route" && selection.id === route.id}
+                    selected={selectedRouteIds.includes(route.id)}
                     color="amber"
                     strongColor
                     visible={route.visible !== false}
                     onToggleVisible={() => onPatchRoute(route.id, { visible: route.visible === false })}
-                    onClick={() => {
+                    onClick={(event) => {
                       activateLayer("strings");
-                      onSelect({ type: "route", id: route.id });
+                      onSelect({ type: "route", id: route.id }, designerAdditiveSelectionRequested(event));
                     }}
                     onRename={(name) => onPatchRoute(route.id, { name })}
                     onOpenDetails={() => setDetails({ type: "route", id: route.id })}
@@ -700,6 +717,71 @@ export function DesignerLayersPanel({
           <TextRows designer={designer} targetLayer="faceGraphic" selection={selection} onActivate={() => activateLayer("faceGraphic")} onSelect={onSelect} onPatch={onPatchText} />
           <ProjectionRows designer={designer} targetLayer="faceGraphic" selection={selection} selectedGeometryKeys={selectedGeometryKeys} onActivate={() => activateLayer("faceGraphic")} onSelect={onSelect} onPatch={onPatchProjection} />
           <DerivedGeometryRows designer={designer} targetLayer="faceGraphic" selection={selection} selectedGeometryKeys={selectedGeometryKeys} onActivate={() => activateLayer("faceGraphic")} onSelect={onSelect} onPatch={onPatchDerivedGeometry} />
+        </LayerPanelSection>
+
+        <LayerPanelSection
+          label="Fabrication Plans"
+          order={5}
+          active={activeLayer === "fabrication"}
+          expanded={expandedLayers.fabrication}
+          layer={designer.layers.fabrication}
+          onActivate={() => activateLayer("fabrication")}
+          onToggle={() => toggleLayer("fabrication")}
+          onChange={(patch) => onPatchLayer("fabrication", patch)}
+          action={(
+            <button type="button" title="New fabrication part" className="flex h-6 w-6 items-center justify-center rounded border border-border-2 bg-card text-blue-700 hover:bg-surface-hover" onClick={onAddFabricationPart}>
+              <Plus className="h-3.5 w-3.5" />
+            </button>
+          )}
+        >
+          {designer.fabricationParts.map((part) => {
+            const paths = designer.fabricationPaths.filter((path) => path.partId === part.id);
+            const expanded = expandedFabricationParts[part.id] ?? true;
+            return (
+              <RouteFolder
+                key={part.id}
+                label={part.name}
+                icon={Hammer}
+                count={paths.length}
+                visible={part.visible}
+                onToggleVisible={() => onPatchFabricationPart(part.id, { visible: !part.visible })}
+                expanded={expanded}
+                onToggle={() => {
+                  activateLayer("fabrication");
+                  setExpandedFabricationParts((current) => ({ ...current, [part.id]: !expanded }));
+                }}
+                action={<button type="button" title={part.locked ? "Unlock fabrication part" : "Lock fabrication part"} className="flex h-6 w-6 items-center justify-center rounded border border-border-2 bg-card text-muted-foreground hover:bg-surface-hover" onClick={() => onPatchFabricationPart(part.id, { locked: !part.locked })}>{part.locked ? <Lock className="h-3.5 w-3.5" /> : <Unlock className="h-3.5 w-3.5" />}</button>}
+              >
+                <div className="mx-2 mb-1 grid grid-cols-[minmax(0,1fr)_5rem] gap-1">
+                  <input className="h-7 min-w-0 rounded border border-input bg-background px-2 text-[11px] font-medium" value={part.name} aria-label="Fabrication part name" disabled={part.locked} onChange={(event) => onPatchFabricationPart(part.id, { name: event.target.value })} />
+                  <select className="h-7 rounded border border-input bg-background px-1 text-[11px]" value={part.machiningSide} disabled={part.locked} onChange={(event) => onPatchFabricationPart(part.id, { machiningSide: event.target.value === "rear" ? "rear" : "front" })}><option value="front">Front</option><option value="rear">Rear</option></select>
+                </div>
+                <div className="mx-2 mb-1 grid grid-cols-[minmax(0,1fr)_4.5rem] gap-1">
+                  <input className="h-7 min-w-0 rounded border border-input bg-background px-2 text-[11px]" value={part.material} aria-label={`${part.name} material`} disabled={part.locked} onChange={(event) => onPatchFabricationPart(part.id, { material: event.target.value })} />
+                  <label className="flex h-7 items-center rounded border border-input bg-background px-1 text-[10px] text-muted-foreground"><input className="min-w-0 flex-1 bg-transparent text-right text-foreground outline-none disabled:opacity-60" type="number" min="0.1" step="0.1" value={part.thicknessMm} disabled={part.locked} onChange={(event) => onPatchFabricationPart(part.id, { thicknessMm: Math.max(0.1, Number(event.target.value) || 0.1) })} /><span className="ml-1">mm</span></label>
+                </div>
+                {paths.map((path) => (
+                  <LayerChildRow
+                    key={path.id}
+                    label={path.name}
+                    icon={Route}
+                    detail={`${path.operation}${typeof path.depthMm === "number" ? ` · ${path.depthMm} mm` : ""}`}
+                    selected={selection?.type === "fabrication_path" && selection.id === path.id}
+                    color={path.operation === "pocket" ? "amber" : path.operation === "drill" ? "green" : path.operation === "engrave" ? "blue" : "slate"}
+                    strongColor
+                    visible={path.visible}
+                    locked={path.locked}
+                    onToggleVisible={() => onPatchFabricationPath(path.id, { visible: !path.visible })}
+                    onToggleLocked={() => onPatchFabricationPath(path.id, { locked: !path.locked })}
+                    onClick={() => { activateLayer("fabrication"); onSelect({ type: "fabrication_path", id: path.id }); }}
+                    onRename={(name) => onPatchFabricationPath(path.id, { name })}
+                  />
+                ))}
+                {!paths.length ? <p className="px-2 py-1 text-[11px] leading-4 text-muted-foreground">Project geometry into this physical part.</p> : null}
+              </RouteFolder>
+            );
+          })}
+          {!designer.fabricationParts.length ? <p className="px-2 py-2 text-[11px] leading-4 text-muted-foreground">Create a physical part here or choose Fabrication Plans in Project Geometry.</p> : null}
         </LayerPanelSection>
       </div>
       {details ? (
@@ -946,46 +1028,24 @@ function LayerPanelSection({
   );
 }
 
-function RouteSurfaceViewToggle({ value, onChange }: { value: DesignerRouteSurfaceView; onChange: (view: DesignerRouteSurfaceView) => void }) {
-  return (
-    <div className="flex items-center gap-0.5" role="group" aria-label="Wiring surface visibility">
-      {(["rear", "front", "both"] as const).map((view) => (
-        <IconToggle key={view} active={value === view} label={`Show ${view === "both" ? "both wiring surfaces" : `${view} wiring surface`}`} onClick={() => onChange(view)}>
-          <RouteSurfaceIcon view={view} />
-        </IconToggle>
-      ))}
-    </div>
-  );
-}
+export function AssemblySurfaceViewToggle({ value, onChange }: { value: DesignerRouteSurfaceView; onChange: (view: DesignerRouteSurfaceView) => void }) {
+  const icons = {
+    front: AlignEndHorizontal,
+    rear: AlignStartHorizontal,
+    both: AlignVerticalJustifyCenter
+  } as const;
 
-function RouteSurfaceIcon({ view }: { view: DesignerRouteSurfaceView }) {
   return (
-    <svg viewBox="0 0 24 24" aria-hidden="true" className="h-3.5 w-3.5 fill-none stroke-current" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      {view === "front" ? (
-        <>
-          <path d="M12 12V2" />
-          <path d="M2 17.002a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9a1 1 0 0 0 .59-.92" />
-          <path d="M7.674 8.774 2.58 11.09a1 1 0 0 0 0 1.822l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12a1 1 0 0 0-.59-.922l-5.078-2.308" />
-          <path d="m9 5 3-3 3 3" />
-        </>
-      ) : view === "rear" ? (
-        <>
-          <path d="M12 7v15" />
-          <path d="M2 12a1 1 0 0 0 .58.91l5.093 2.316" />
-          <path d="M22 12a1 1 0 0 1-.59.92l-5.077 2.308" />
-          <path d="M8 10.37 2.6 7.91a1 1 0 0 1 0-1.831l8.57-3.9a2 2 0 0 1 1.66.001l8.59 3.91a1 1 0 0 1 0 1.831l-5.392 2.45" />
-          <path d="m9 19 3 3 3-3" />
-        </>
-      ) : (
-        <>
-          <path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 .83.18 2 2 0 0 0 .83-.18l8.58-3.9a1 1 0 0 0 0-1.831z" />
-          <path d="M16 17h6" />
-          <path d="M19 14v6" />
-          <path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 .825.178" />
-          <path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l2.116-.962" />
-        </>
-      )}
-    </svg>
+    <div className="flex items-center gap-0.5" role="group" aria-label="Construction side visibility">
+      {(["front", "rear", "both"] as const).map((view) => {
+        const Icon = icons[view];
+        return (
+          <IconToggle key={view} active={value === view} label={`Show ${view === "both" ? "both construction sides" : `${view} construction side`}`} onClick={() => onChange(view)}>
+            <Icon className="h-3.5 w-3.5" />
+          </IconToggle>
+        );
+      })}
+    </div>
   );
 }
 

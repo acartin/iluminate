@@ -50,13 +50,14 @@ import {
   findNearbyControllerPort,
   findNearbySolderTerminal,
   moveControllerWithSolderedCables,
-  moveRoutePoint,
+  moveRoutePointWithRetraction,
   moveRouteTerminals,
   moveRouteWithSolderedTerminals,
   sameSnapPoint
 } from "./electrical/designer-electrical-engine";
 import { canvasInteractionSnapCm, channelWidthForRouterDiameter, ELECTRICAL_TOOLS, geometryToolAllowedOnLayer, geometryToolPolicy, POINTER_DRAG_THRESHOLD_PX, TERMINAL_SOLDER_CAPTURE_RADIUS_PX } from "./canvas/designer-tool-policy";
-import { designerConstrainedMoveDelta, designerWholeObjectHit, routeMatchesSurfaceView, type DesignerActiveLayer, type DesignerDrag, type DesignerFilletCornerTarget, type DesignerMeasurement, type DesignerMoveAxis, type DesignerPrimitiveDraft, type DesignerRouteDraft, type DesignerRouteSurfaceView, type DesignerRouteTerminal, type DesignerSelection, type DesignerShapeDraft, type DesignerTool, type DesignerViewport, type PaperApi, type ResizeHandle } from "./types";
+import { designerMarqueeSelection, moveDesignerMarqueeDiffusors, type DesignerMarqueeSelectionResult } from "./canvas/designer-marquee-selection";
+import { channelMatchesSurfaceView, designerConstrainedMoveDelta, designerInitialSelectHit, designerWholeObjectHit, routeMatchesSurfaceView, type DesignerActiveLayer, type DesignerDrag, type DesignerFilletCornerTarget, type DesignerMeasurement, type DesignerMoveAxis, type DesignerPrimitiveDraft, type DesignerRouteDraft, type DesignerRouteSurfaceView, type DesignerRouteTerminal, type DesignerSelection, type DesignerShapeDraft, type DesignerTool, type DesignerViewport, type PaperApi, type ResizeHandle } from "./types";
 import { DESIGNER_FONT_CATALOG, designerFontUrl } from "@/lib/lighting/designer-font-catalog";
 import { trimDesignerChannelPathAtPoint, trimDesignerPathAtPoint, type DesignerPathTrimPreview } from "./geometry/designer-path-trim";
 
@@ -91,12 +92,14 @@ export function DesignerStudioCanvas({
   faceGraphicVinylPreview = false,
   routeSurfaceView = "both",
   routeCreationSurface = "rear",
+  channelCreationSurface = "front",
   activeLayer,
   tool,
   onToolChange,
   moveAxis,
   nodeCreationType,
   channelRouterDiameterMm,
+  channelGenerationPreview = [],
   viewport,
   artworkUrls,
   selectedBuildAreaId,
@@ -108,18 +111,21 @@ export function DesignerStudioCanvas({
   selectedZonePointIndex,
   selectedFaceGraphicId,
   selectedFaceGraphicPointIndex,
+  selectedFabricationPathId,
   selectedProjectionId,
   selectedDerivedGeometryId,
   selectedTextId,
   selectedChannelId,
   selectedChannelPointIndex,
   selectedRouteId,
+  selectedRouteIds,
   selectedRoutePointIndex,
   selectedController,
   selectedGeometryKeys,
   onViewportChange,
   onChange,
   onSelect,
+  onMarqueeSelect,
   onInsertBuildAreaPoint,
   onInsertZonePoint,
   onInsertFaceGraphicPoint,
@@ -142,12 +148,14 @@ export function DesignerStudioCanvas({
   faceGraphicVinylPreview?: boolean;
   routeSurfaceView?: DesignerRouteSurfaceView;
   routeCreationSurface?: DesignerRouteSurface;
+  channelCreationSurface?: DesignerRouteSurface;
   activeLayer: DesignerActiveLayer | null;
   tool: DesignerTool;
   onToolChange: (tool: DesignerTool) => void;
   moveAxis: DesignerMoveAxis;
   nodeCreationType: DesignerPointNodeType;
   channelRouterDiameterMm: number;
+  channelGenerationPreview?: DesignerChannelForm[];
   viewport: DesignerViewport;
   artworkUrls: Record<string, string>;
   selectedArtworkId?: string;
@@ -159,18 +167,21 @@ export function DesignerStudioCanvas({
   selectedZonePointIndex?: number;
   selectedFaceGraphicId?: string;
   selectedFaceGraphicPointIndex?: number;
+  selectedFabricationPathId?: string;
   selectedProjectionId?: string;
   selectedDerivedGeometryId?: string;
   selectedTextId?: string;
   selectedChannelId?: string;
   selectedChannelPointIndex?: number;
   selectedRouteId?: string;
+  selectedRouteIds?: string[];
   selectedRoutePointIndex?: number;
   selectedController?: boolean;
   selectedGeometryKeys?: string[];
   onViewportChange: (viewport: DesignerViewport) => void;
   onChange: (designer: DesignerForm, options?: { recordHistory?: boolean }) => void;
   onSelect: (selection: DesignerSelection, additive?: boolean) => void;
+  onMarqueeSelect: (result: DesignerMarqueeSelectionResult) => void;
   onInsertBuildAreaPoint: (buildAreaId: string, insertIndex: number, point: DesignerPoint) => void;
   onInsertZonePoint: (zoneId: string, insertIndex: number, point: DesignerPoint) => void;
   onInsertFaceGraphicPoint: (elementId: string, insertIndex: number, point: DesignerPoint) => void;
@@ -210,11 +221,18 @@ export function DesignerStudioCanvas({
   const [shapeDraft, setShapeDraft] = useState<DesignerShapeDraft | null>(null);
   const [primitiveDraft, setPrimitiveDraft] = useState<DesignerPrimitiveDraft | null>(null);
   const [measurement, setMeasurement] = useState<DesignerMeasurement | null>(null);
+  const [marquee, setMarquee] = useState<{ start: DesignerPoint; end: DesignerPoint; clientStart: DesignerPoint } | null>(null);
   const [canvasSize, setCanvasSize] = useState({ width: 0, height: 0 });
   const [colorMode, setColorMode] = useState<"day" | "night">("night");
   const interactionSnapCm = canvasInteractionSnapCm(designer.snapCm, snapToGrid);
   const displayedRoutes = designer.routes.filter((route) => routeMatchesSurfaceView(route.designSurface, routeSurfaceView));
-  const displayedDesigner = displayedRoutes.length === designer.routes.length ? designer : { ...designer, routes: displayedRoutes };
+  const displayedChannels = designer.channels.filter((channel) => channelMatchesSurfaceView(channel.fabricationSurface, routeSurfaceView));
+  const displayedDesigner = displayedRoutes.length === designer.routes.length && displayedChannels.length === designer.channels.length
+    ? designer
+    : { ...designer, routes: displayedRoutes, channels: displayedChannels };
+  const wiringSurfaceAtmosphere = presentation === "design" && routeSurfaceView !== "both"
+    ? routeSurfaceView
+    : null;
   const rulerGrid = showRulers ? "grid-cols-[48px_minmax(0,1fr)] grid-rows-[28px_minmax(0,1fr)]" : "grid-cols-[0_minmax(0,1fr)] grid-rows-[0_minmax(0,1fr)]";
   designerRef.current = designer;
   onChangeRef.current = onChange;
@@ -334,13 +352,16 @@ export function DesignerStudioCanvas({
         selectedZonePointIndex,
         selectedFaceGraphicId,
         selectedFaceGraphicPointIndex,
+        selectedFabricationPathId,
         selectedProjectionId,
         selectedDerivedGeometryId,
         selectedTextId,
         selectedChannelId,
         selectedChannelPointIndex,
         interactiveChannelId: drag?.type === "channel-move" || drag?.type === "channel-point" || drag?.type === "channel-handle" ? drag.channelId : undefined,
+        channelGenerationPreview,
         selectedRouteId,
+        selectedRouteIds,
         selectedRoutePointIndex,
         selectedController: Boolean(selectedController),
         selectedGeometryKeys,
@@ -360,7 +381,7 @@ export function DesignerStudioCanvas({
     } finally {
       loadedPaper.view.update();
     }
-  }, [activeLayer, animationDiffusers, animationPixels, canvasSize, channelDragPreview, colorMode, compiledLayout, designer, drag, faceGraphicVinylPreview, measurement, paperReady, pathTrimPreview, presentation, primitiveDraft, routeDraft, routeSurfaceView, selectedBuildAreaId, selectedBuildAreaPointIndex, selectedChannelId, selectedChannelPointIndex, selectedController, selectedDerivedGeometryId, selectedFaceGraphicId, selectedFaceGraphicPointIndex, selectedGeometryKeys, selectedProjectionId, selectedRouteId, selectedRoutePointIndex, selectedTextId, selectedWorkLineId, selectedWorkLinePointIndex, selectedZoneId, selectedZonePointIndex, shapeDraft, viewport]);
+  }, [activeLayer, animationDiffusers, animationPixels, canvasSize, channelDragPreview, channelGenerationPreview, colorMode, compiledLayout, designer, drag, faceGraphicVinylPreview, measurement, paperReady, pathTrimPreview, presentation, primitiveDraft, routeDraft, routeSurfaceView, selectedBuildAreaId, selectedBuildAreaPointIndex, selectedChannelId, selectedChannelPointIndex, selectedController, selectedDerivedGeometryId, selectedFaceGraphicId, selectedFaceGraphicPointIndex, selectedFabricationPathId, selectedGeometryKeys, selectedProjectionId, selectedRouteId, selectedRouteIds, selectedRoutePointIndex, selectedTextId, selectedWorkLineId, selectedWorkLinePointIndex, selectedZoneId, selectedZonePointIndex, shapeDraft, viewport]);
 
   useEffect(() => {
     if (tool !== "path_trim") setPathTrimPreview(null);
@@ -376,6 +397,10 @@ export function DesignerStudioCanvas({
 
   useEffect(() => {
     if (tool !== "measure") setMeasurement(null);
+  }, [tool]);
+
+  useEffect(() => {
+    if (tool !== "select") setMarquee(null);
   }, [tool]);
 
   useEffect(() => {
@@ -399,8 +424,20 @@ export function DesignerStudioCanvas({
         if (tool === "fillet") onToolChange("select");
         return;
       }
-      if (event.key === "Enter" && shapeDraft?.target === "channel" && shapeDraft.points.length >= 2) {
-        finishChannelDraft(false);
+      if (event.key === "Enter" && routeDraft) {
+        event.preventDefault();
+        setRouteDraft(null);
+        onSelect(null);
+        return;
+      }
+      if (event.key === "Enter" && shapeDraft?.target === "channel") {
+        event.preventDefault();
+        if (shapeDraft.points.length >= 2) finishChannelDraft(false, true);
+        else {
+          setShapeDraft(null);
+          onSelect(null);
+        }
+        return;
       } else if (event.key === "Enter" && shapeDraft?.target === "work_line" && shapeDraft.points.length >= 2) {
         finishWorkLineDraft();
       }
@@ -453,7 +490,7 @@ export function DesignerStudioCanvas({
     onChange({ ...designer, channels: designer.channels.map((channel) => (channel.id === channelId ? { ...channel, ...patch } : channel)) });
   }
 
-  function finishChannelDraft(closed: boolean) {
+  function finishChannelDraft(closed: boolean, continueDrawing = false) {
     if (!shapeDraft || shapeDraft.target !== "channel" || shapeDraft.points.length < 2) return;
     const points = shapeDraft.mode === "bezier"
       ? (closed ? smoothBezierPoints(shapeDraft.points) : smoothOpenBezierPoints(shapeDraft.points))
@@ -467,13 +504,18 @@ export function DesignerStudioCanvas({
       widthMm: channelWidthForRouterDiameter(shapeDraft.widthMm ?? channelRouterDiameterMm),
       closed,
       cap: "round",
+      fabricationSurface: channelCreationSurface,
       visible: true,
       locked: false,
       opacity: 1
     };
     onChange({ ...designer, channels: [...designer.channels, channel] });
-    onSelect({ type: "channel", id: channel.id });
     setShapeDraft(null);
+    if (continueDrawing) {
+      onSelect(null);
+      return;
+    }
+    onSelect({ type: "channel", id: channel.id });
     onToolChange("select");
   }
 
@@ -692,6 +734,10 @@ export function DesignerStudioCanvas({
       setMeasurement({ ...measurement, end: { x: snapValue(point.x, interactionSnapCm), y: snapValue(point.y, interactionSnapCm) } });
       return;
     }
+    if (marquee) {
+      setMarquee({ ...marquee, end: eventPoint(event) });
+      return;
+    }
     if (!drag) return;
     const point = eventPoint(event);
     const movement = "start" in drag
@@ -722,6 +768,10 @@ export function DesignerStudioCanvas({
           originYcm: clamp(snapValue(drag.original.originYcm + movement.y, interactionSnapCm), 0, Math.max(0, designer.canvasHeightCm - spacingCm))
         }
       });
+      return;
+    }
+    if (drag.type === "diffusor-selection-move") {
+      onChange(moveDesignerMarqueeDiffusors(drag.original, drag.selectionKeys, drag.anchorKey, movement, interactionSnapCm));
       return;
     }
     if (drag.type === "artwork-move") {
@@ -808,6 +858,14 @@ export function DesignerStudioCanvas({
       if (element) patchFaceGraphic(drag.elementId, updateBezierHandle(element, drag.pointIndex, drag.handle, point, interactionSnapCm));
       return;
     }
+    if (drag.type === "fabrication-path-move") {
+      const moved = movedShape(drag.original, movement.x, movement.y, interactionSnapCm);
+      onChange({
+        ...designer,
+        fabricationPaths: designer.fabricationPaths.map((path) => path.id === drag.pathId ? { ...path, ...moved } : path)
+      });
+      return;
+    }
     if (drag.type === "text-move") {
       onChange({
         ...designer,
@@ -853,7 +911,16 @@ export function DesignerStudioCanvas({
         onChange({ ...designer, routes: moveRouteTerminals(designer.routes, drag.jointGroup, nextPoint) });
         return;
       }
-      onChange({ ...designer, routes: moveRoutePoint(designer.routes, drag.routeId, drag.pointIndex, nextPoint) });
+      onChange({
+        ...designer,
+        routes: moveRoutePointWithRetraction(
+          designer.routes,
+          drag.routeId,
+          drag.pointIndex,
+          nextPoint,
+          worldHitTolerance(viewport, canvasSize) * 0.5
+        )
+      });
     }
   }
 
@@ -907,6 +974,11 @@ export function DesignerStudioCanvas({
   }
 
   function handleCanvasPointerDown(event: React.PointerEvent<HTMLCanvasElement>) {
+    if (event.button === 2) {
+      event.preventDefault();
+      startPanDrag(event);
+      return;
+    }
     if (presentation === "animate") {
       const point = eventPoint(event);
       const tolerance = worldHitTolerance(viewport, canvasSize) * 2;
@@ -1124,7 +1196,7 @@ export function DesignerStudioCanvas({
     ));
     const rawHit = selectedFilletHit
       ?? (tool === "select" ? selectedShapePointHit : null)
-      ?? (tool === "select" && !pickedOwnerIsSelected ? pickedOwner : pickedHit);
+      ?? (tool === "select" ? designerInitialSelectHit(pickedHit, pickedOwnerIsSelected) : pickedHit);
     const hit = tool === "move" ? designerWholeObjectHit(rawHit) : rawHit;
     if (tool === "fillet") {
       const target = designerFilletCornerForHit(designer, hit);
@@ -1136,9 +1208,14 @@ export function DesignerStudioCanvas({
       if (target && targetsSelectedObject) onFilletCorner(target);
       return;
     }
-    if (tool === "pan" || (tool === "select" && !hit)) {
-      onSelect(null);
+    if (tool === "pan") {
       startPanDrag(event);
+      return;
+    }
+    if (tool === "select" && !hit) {
+      event.stopPropagation();
+      event.currentTarget.setPointerCapture(event.pointerId);
+      setMarquee({ start: point, end: point, clientStart: { x: event.clientX, y: event.clientY } });
       return;
     }
     if (!hit) {
@@ -1150,9 +1227,11 @@ export function DesignerStudioCanvas({
       const additiveSelection: DesignerSelection = hit.type === "build_area" ? { type: "build_area", id: hit.id }
         : hit.type === "zone" ? { type: "zone", id: hit.id }
           : hit.type === "face_graphic" ? { type: "face_graphic", id: hit.id }
+            : hit.type === "fabrication_path" ? { type: "fabrication_path", id: hit.id }
             : hit.type === "projection" ? { type: "projection", id: hit.id }
               : hit.type === "derived_geometry" ? { type: "derived_geometry", id: hit.id }
-                : hit.type === "text" ? { type: "text", id: hit.id }
+              : hit.type === "text" ? { type: "text", id: hit.id }
+                : hit.type === "route" ? { type: "route", id: hit.id }
               : null;
       if (additiveSelection) {
         onSelect(additiveSelection, true);
@@ -1162,6 +1241,12 @@ export function DesignerStudioCanvas({
 
     event.stopPropagation();
     event.currentTarget.setPointerCapture(event.pointerId);
+    const selectedDiffusorKeys = selectedGeometryKeys?.filter((key) => key.startsWith("zone:") || key.startsWith("channel:")) ?? [];
+    const hitSelectionKey = hit.type === "zone" || hit.type === "channel" ? `${hit.type}:${hit.id}` : null;
+    if (tool === "move" && hitSelectionKey && selectedDiffusorKeys.length > 1 && selectedDiffusorKeys.includes(hitSelectionKey)) {
+      if (!designer.layers.zones.locked) setDrag({ type: "diffusor-selection-move", start: point, original: designer, selectionKeys: selectedDiffusorKeys, anchorKey: hitSelectionKey });
+      return;
+    }
     if (hit.type === "build_area") {
       const buildArea = designer.buildAreas.find((entry) => entry.id === hit.id);
       if (!buildArea) return;
@@ -1231,6 +1316,16 @@ export function DesignerStudioCanvas({
       onSelect({ type: "face_graphic", id: element.id });
       if (tool !== "move" || designer.layers.faceGraphic.locked || element.locked) return;
       setDrag({ type: "face-graphic-move", elementId: element.id, start: point, original: element });
+    }
+    if (hit.type === "fabrication_path") {
+      const path = designer.fabricationPaths.find((entry) => entry.id === hit.id);
+      if (!path) return;
+      onSelect({ type: "fabrication_path", id: path.id });
+      const part = designer.fabricationParts.find((entry) => entry.id === path.partId);
+      if (tool === "move" && !designer.layers.fabrication.locked && !part?.locked && !path.locked) {
+        setDrag({ type: "fabrication-path-move", pathId: path.id, start: point, original: path });
+      }
+      return;
     }
     if (hit.type === "face_graphic_resize") {
       const element = designer.faceGraphics.find((entry) => entry.id === hit.id);
@@ -1376,9 +1471,11 @@ export function DesignerStudioCanvas({
           aria-label="Designer studio canvas"
           onPointerDown={handleCanvasPointerDown}
           onPointerMove={handlePointerMove}
+          onContextMenu={(event) => event.preventDefault()}
           onWheel={handleCanvasWheel}
           onPointerUp={(event) => {
             const endedDrag = drag;
+            const endedMarquee = marquee;
             if (endedDrag?.type === "channel-point" || endedDrag?.type === "channel-handle") commitChannelDragPreview();
             const endedPrimitiveDraft = primitiveDraft;
             const point = eventPoint(event);
@@ -1393,7 +1490,14 @@ export function DesignerStudioCanvas({
             const finalPoint = { ...snappedFinalPoint, joint: false };
             if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
             setDrag(null);
+            setMarquee(null);
             setPrimitiveDraft(null);
+            if (endedMarquee) {
+              const draggedPixels = Math.hypot(event.clientX - endedMarquee.clientStart.x, event.clientY - endedMarquee.clientStart.y);
+              if (draggedPixels >= POINTER_DRAG_THRESHOLD_PX) onMarqueeSelect(designerMarqueeSelection(displayedDesigner, activeLayer, endedMarquee.start, point));
+              else onSelect(null);
+              return;
+            }
             if (endedPrimitiveDraft) {
               const bounds = primitiveShapeBounds(endedPrimitiveDraft.start, point, interactionSnapCm, {
                 preserveAspect: event.ctrlKey || event.metaKey,
@@ -1457,10 +1561,34 @@ export function DesignerStudioCanvas({
             if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
             commitChannelDragPreview(false);
             setDrag(null);
+            setMarquee(null);
             setPrimitiveDraft(null);
           }}
           onDoubleClick={handleCanvasDoubleClick}
         />
+        {wiringSurfaceAtmosphere ? (
+          <>
+            <div
+              data-wiring-surface-atmosphere={wiringSurfaceAtmosphere}
+              className={`pointer-events-none absolute inset-0 z-10 ring-2 ring-inset ${wiringSurfaceAtmosphere === "front"
+                ? colorMode === "night"
+                  ? "ring-sky-300/35 shadow-[inset_0_0_56px_rgba(56,189,248,0.14)]"
+                  : "ring-sky-500/30 shadow-[inset_0_0_48px_rgba(14,165,233,0.10)]"
+                : colorMode === "night"
+                  ? "ring-violet-300/35 shadow-[inset_0_0_56px_rgba(167,139,250,0.14)]"
+                  : "ring-violet-500/30 shadow-[inset_0_0_48px_rgba(139,92,246,0.10)]"}`}
+              aria-hidden="true"
+            />
+            <div
+              className={`pointer-events-none absolute right-3 top-3 z-20 rounded border px-2 py-1 font-mono text-[10px] font-semibold tracking-[0.16em] shadow-sm backdrop-blur-sm ${wiringSurfaceAtmosphere === "front"
+                ? colorMode === "night" ? "border-sky-300/40 bg-sky-950/70 text-sky-200" : "border-sky-500/35 bg-white/75 text-sky-800"
+                : colorMode === "night" ? "border-violet-300/40 bg-violet-950/70 text-violet-200" : "border-violet-500/35 bg-white/75 text-violet-800"}`}
+              aria-hidden="true"
+            >
+              {wiringSurfaceAtmosphere === "front" ? "TOP · FRONT" : "DOWN · REAR"}
+            </div>
+          </>
+        ) : null}
         {presentation === "design" && designer.layers.artwork.visible ? (
           <div className="pointer-events-none absolute inset-0">
             {designer.artwork.map((artwork) => {
@@ -1489,6 +1617,18 @@ export function DesignerStudioCanvas({
               );
             })}
           </div>
+        ) : null}
+        {marquee ? (
+          <div
+            className="pointer-events-none absolute border border-cyan-400 bg-cyan-400/10"
+            data-designer-marquee="true"
+            style={{
+              left: `${((Math.min(marquee.start.x, marquee.end.x) - viewport.x) / viewport.width) * 100}%`,
+              top: `${((Math.min(marquee.start.y, marquee.end.y) - viewport.y) / viewport.height) * 100}%`,
+              width: `${(Math.abs(marquee.end.x - marquee.start.x) / viewport.width) * 100}%`,
+              height: `${(Math.abs(marquee.end.y - marquee.start.y) / viewport.height) * 100}%`
+            }}
+          />
         ) : null}
       </div>
     </div>

@@ -70,7 +70,7 @@ The Designer is intentionally fabrication-oriented. It is not a raw matrix edito
 
 ### Canonical geometry checkpoint
 
-Normalized documents now write `designerSchemaVersion: 14`. Version 2 introduced
+Normalized documents now write `designerSchemaVersion: 19`. Version 2 introduced
 the canonical `designer.geometries` collection and stable `geometryId`
 references; version 3 added the Designer-wide CNC cutter diameter/display unit,
 version 4 added the persisted Channel router-bit diameter, version 5 briefly
@@ -81,8 +81,15 @@ version 9 introduced `filletRadiusMm`; the field now retains the last Custom
 direct-fillet radius across Save/reload. Version 12 added persisted Face Graphic visibility presets and
 native offset defaults; version 13 adds the independent Diffusors visibility
 preset collection; version 14 adds same-layer vector authoring groups, kept
-separate from electrical/effect Zone groups. Fillet radius is no longer exposed in Setup; live derived profiles persist
+separate from electrical/effect Zone groups. Version 15 adds the Channel
+`fabricationSurface` (`front` or `rear`), defaulting legacy Channels to `front`;
+it is fabrication metadata and remains outside electrical and optical
+compilation. Fillet radius is no longer exposed in Setup; live derived profiles persist
 their own radius and Channel corner nodes persist `radiusMm` directly.
+Version 19 adds the optional `lightingHost` relation to LED strings. An unset
+host preserves geometric targeting; an explicit Zone or Channel owner narrows
+Compile membership when stacked construction makes geometric overlap ambiguous.
+Strings generated from a Channel inherit that Channel as their host.
 Legacy documents receive the 3.175 mm (1/8 in) cutter default during
 normalization. For compatibility with the current Paper renderer, semantic
 records still carry synchronized inline bounds/points; on load canonical
@@ -140,9 +147,12 @@ background.
 The contextual `Project Geometry` command resolves the selected canonical
 source once and immediately creates an independent native build area, Zone or
 Face Graphic object. It does not add a `designer.projections` record, expose a
-`Break Link` step, activate the target layer or replace the current selection.
-The operator therefore remains on the source plane while making successive
-projections.
+`Break Link` step or retain a source dependency. The command reveals and
+target layer but preserves the source layer and source selection so the operator
+can project successive objects without navigating back. Because this is an
+explicit cross-layer creation command, it may append the new object while the
+target layer is locked; the lock continues to protect existing geometry and
+subsequent editing.
 
 `designer.projections` remains supported for legacy documents as linked,
 read-only references with stable IDs, `sourceGeometryId` and `targetLayer`.
@@ -150,12 +160,29 @@ Resolve those records through `resolveDesignerProjectionGeometry`; missing
 sources remain recoverable through the contextual source selector and cycles
 remain invalid. New authoring must not create more linked projection records.
 
+`Fabrication Plans` is a separate strict authoring category for geometry that
+has already been assigned to a physical piece but has not yet been exported.
+A `Fabrication Part` records the piece name, material, thickness, machining
+side and visibility/lock state. Projecting to this category creates an
+independent `Fabrication Path` under an existing or newly named part and assigns
+one operation (`cut`, `pocket`, `drill`, `engrave` or `reference`). These paths
+are materialized snapshots and never participate in optical/electrical Compile
+or Animate.
+When Diffusors is active, visible Fabrication Paths are also rendered above it
+as a non-interactive magenta dashed overlay labeled with the physical part and
+operation. The Fabrication Plans visibility eye controls this orthogonal
+feedback; editing and selection remain exclusive to the Fabrication Plans
+category.
+
 ### Fabrication export
 
 The Design global bar exposes `Export`. Its modal selects Reference/substrate,
-Diffusors and Face Graphic output categories, DXF curve tolerance and minimum-
-feature guidance. Both download actions run the same validation pass; errors
-block the file while warnings remain downloadable.
+Diffusors, Face Graphic and Fabrication Plans output categories, DXF curve
+tolerance and minimum-feature guidance. Both download actions run the same
+validation pass; errors block the file while warnings remain downloadable.
+Each visible Fabrication Part becomes its own SVG or DXF and uses the exact
+operator-defined part name as the download base name; its visible paths are
+grouped by `cut`, `pocket`, `drill`, `engrave` or `reference` operation.
 
 SVG is millimeter-based, path-only, preserves native Beziers and compound
 contours, and produces separate files for Reference, Zones, Channels and Face
@@ -435,8 +462,31 @@ Do not assume one addressable pixel is always one physical LED.
 
 - `Pixels/m` means addressable WS281x pixels per meter. This is the density used to sample LED routes, output counts, serial indices, pixelMap rows and firmware frames.
 - `LEDs/m` means physical light emitters per meter. This is used by the Designer/simulator to preview how a real 5V, 12V or 24V strip may look.
-- `LEDs/px` is derived from `LEDs/m / Pixels/m`. Examples: WS2812B 5V is normally `1 LED/px`; many WS2811 12V strips are around `3 LEDs/px`; some 24V strips may be around `6 LEDs/px`.
+- `LED package` is the physical square emitter footprint in millimeters. It defaults to 5 mm (5050), is drawn at physical scale in Design and supplies the footprint used for Channel membership.
+- `PCB width` is the physical strip-board width in millimeters. It defaults to 10 mm and is rendered at physical scale behind the light sources.
+- `LEDs/px` is an independently persisted manufacturer fact. Examples: WS2812B 5V is normally `1 LED/px`; many WS2811 12V strips are around `3 LEDs/px`; some 24V strips may be around `6 LEDs/px`.
 - The firmware still emits WS281x frames by addressable pixel. Electrical implementation beyond the data output is not part of the partitura contract.
+
+Setup selects a PostgreSQL-backed LED-strip profile and applies it as a resolved
+`designer.stripConfiguration` snapshot. Catalog id/revision is provenance only:
+Save persists the copied values and Compile consumes only the partitura JSON.
+Applying a profile preserves routes and invalidates stale compile/generated
+state. Preset selection and manual LED-strip edits first update a transient live
+canvas preview. `Apply changes` copies that preview into the editable partitura;
+`Cancel` or closing Setup discards it. The global `Save` remains the only action
+that persists the resulting partitura to the database. Other Setup sections
+retain their existing live-edit behavior. The canvas renders the configured PCB width and either discrete LED
+packages or a continuous COB band. `marked_segments` profiles render physical
+cut marks at `cutSegmentLengthMm` intervals; `free_cut` profiles show neither
+an interval control nor cut marks. COB construction alone never implies free
+cutting. Setup exposes this mode only for continuous strips. Discrete strips
+show four independently editable commercial facts: `Pixels/m`, `LEDs/m`,
+`physicalLedsPerAddressablePixel` as `LEDs / pixel`, and
+`physicalLedsPerCutSegment` as `LEDs / cut`. No edit silently recalculates
+another field. Their millimeter cut interval is calculated only by the canvas
+as `1000 × LEDs/cut ÷ LEDs/m`; it is neither required from the operator nor
+written back into the discrete-strip snapshot. Continuous marked-cut products
+keep their explicit manufacturer interval.
 
 ### Canvas Layers
 
@@ -449,9 +499,11 @@ The Designer separates five persisted visual layers:
   Graphic and appear directly in that category, or remain global. They select
   after productive objects unless the operator intentionally selected the line.
 - `Zones`: visual targets such as letters, logos, background and full sign.
-- `Channels`: neon-flex bands belonging to the Zones plane. A channel reuses the
+- `Channels`: routed lighting or fabrication paths belonging to the Zones plane. A channel reuses the
   Bezier trajectory as an editable center line and derives two parallel borders
-  from a width. It behaves as a zone for pixel mapping and effects.
+  from a width. Its `fabricationSurface` identifies the physical face machined
+  by the router independently from Front/Halo/Wall Wash Lighting Setup. It
+  behaves as a zone for pixel mapping and effects.
 - `Hardware`: the Layers category groups the physical construction rows into
   `Strings`, `Data cables` and `Controller` folders. The controller is drawn as
   a small PCB (board, two cosmetic chips and a status dot); the chips are
@@ -460,26 +512,34 @@ The Designer separates five persisted visual layers:
   cables, terminals and joints (no controller). It remains distinct from the
   persisted controller layer even though both appear under the `Hardware`
   category in Layers.
-  Routes also carry `designSurface: rear | front`, an editor-only mounting-face
+  Routes also carry `designSurface: rear | front`, a mounting and electrical-plane
   classification normalized to `rear` for legacy documents. Hardware's shared
   transient `Rear / Front / Both` filter applies that classification to route
-  rendering, hit testing, snapping and folder rows in Design. It never changes
-  the electrical graph or optical setup and is excluded from the compile
-  signature, Animate and fabrication output.
+  rendering, hit testing, snapping and folder rows in Design. The transient
+  filter itself never changes authored data, but the persisted classification
+  isolates terminal joints and serial traversal by plane and therefore belongs
+  to the compile signature. It remains outside optical setup, Animate rendering
+  and fabrication output.
 
 `Light Sources` is deliberately absent from Layers. The persisted
 `designer.lightSources` collection currently stores what the product calls
 Lighting Setups: Front, Halo-Lit or Wall Washer configuration owned by a zone
-or channel and referencing physical LED strings. These records have no
+or channel. Compile derives their physical LED strings from orthogonal pixel
+membership, construction surface and the string's optional Lighting host;
+persisted `stringIds` is a compiled
+compatibility cache, never an operator-authored assignment. These records have no
 independent canvas geometry or drawing tool, so they are not an activatable
 canvas plane. Do not restore that category. Keep the legacy persisted name only
 for backward compatibility until an explicit model migration is designed.
 
 Each Zone and Channel row has a visible lightbulb action that selects the owner
 and opens its Lighting Setup modal. The contextual bar does not repeat that
-modal button; it shows read-only mounting/material status icons. Only enabled
-setups with at least one assigned LED string count as configured. Enabled
-records without strings show an incomplete warning instead of pretending that
+modal button; it shows read-only mounting/material status icons. The modal
+shows the strings calculated by the current Compile as read-only information.
+The Layers lightbulb turns amber whenever the owner has at least one enabled
+Lighting Setup; that status is persisted configuration and never depends on
+Compile freshness or compiled string membership. Enabled records without strings
+still show an incomplete warning inside the setup instead of pretending that
 Front/Halo/Wall Washer is installed. Zone/channel rows omit their geometry
 description. Zone geometry is edited on the canvas and its contextual bar
 exposes only selected-node properties; Channel path properties remain
@@ -494,13 +554,17 @@ Electrical/effect `Groups` are not a canvas layer and have no geometry. They are
 `Channel` is a Zones-plane tool for neon-flex routing. The operator traces the
 center line with the same point-by-point workflow as the Zone path tool, then
 finishes with a double-click or `Enter` (open ends) or by clicking the first
-node (closed loop). The operator
+node (closed loop). `Enter` finishes and deselects the current open Channel but
+keeps the Channel tool active, so the next click begins a new Channel. The operator
 only edits the center nodes and Bezier handles; the two parallel borders are
 derived and are never manipulated separately.
 
 Manual tracing remains the default. The active Channel context can also create
 independent Channels from selected canonical profiles, aligned on the source
-center, left edge or right edge. Open profiles are joined only when endpoints
+center, left edge or right edge, or at a numeric offset inside or outside a
+closed profile. Inside/outside is semantic rather than dependent on winding
+direction. The prospective offset is previewed on the canvas; an inward offset
+that collapses is rejected. Open profiles are joined only when endpoints
 coincide within the fixed geometry tolerance; disconnected components become
 separate Channels. A node with more than two incident paths is a branch and is
 rejected rather than guessing fabrication intent. The operator traces each
@@ -509,7 +573,8 @@ Channel`, and a Channel generated from one Zone inherits that Zone's name.
 
 - Persisted form is `designer.channels` with the center `points`, `pathMode`,
   `widthMm` (3-20 mm), explicit `closed` topology and endpoint `cap`
-  (`butt` / `round`). Legacy documents that encoded closure as `cap: "closed"`
+  (`butt` / `round`) plus `fabricationSurface` (`front` / `rear`). Legacy
+  Channels without a surface normalize to `front`. Legacy documents that encoded closure as `cap: "closed"`
   are normalized to `closed: true` plus `cap: "butt"`. The generated band is
   never stored, only the center trajectory, topology and width.
 - `channelBorderPolylines` derives independent left/right borders for a closed
@@ -532,13 +597,21 @@ Channel`, and a Channel generated from one Zone inherits that Zone's name.
   index 0 is the visual foreground and hit-test priority; Channels remain in
   front of Zones when the two kinds overlap. Width and ends also appear in the
   top contextual bar when a channel is selected.
-- While the Channel tool is active, the contextual bar configures a persisted
-  router-bit diameter through one selector of common metric and fractional-inch
-  sizes. Every option shows both units and millimeters remain canonical. The
-  draft renders at that physical width and a finished channel copies it into
-  `widthMm`; the CNC cutter setting remains independent. Changing the diameter
-  on either the active tool or a selected Channel persists it as the last-used
-  value for the next manual or generated Channel.
+- Setup configures the persisted Channel router-bit diameter through one
+  selector of common metric and fractional-inch sizes. Every option shows both
+  units and millimeters remain canonical. The draft renders at that physical
+  width and a finished Channel copies it into `widthMm`; existing Channels are
+  not retroactively changed and the general CNC cutter setting remains
+  independent. Do not duplicate this selector in the contextual bar.
+- The Layers-panel header owns one stable `Construction · Front / Rear / Both` viewport filter
+  shared by Channels, LED strings and data cables. A single-side view determines
+  the surface of newly traced or generated Channels; in `Both`, the Channel
+  context exposes `Create on` and remembers the last explicit side. Changing a
+  selected Channel's fabrication side switches the viewport to that side.
+  Zones and groups have no surface and remain available in every view. New Zones
+  receive a Front setup by default; a new Front Channel receives Front and a new
+  Rear Channel receives Halo. These are editable defaults, not permanent
+  constraints; Wall Washer remains explicit.
 - New open channels default to `cap: "round"`, matching the semicircular end
   left by a single center-line router pass (`radius = widthMm / 2`). `Butt`
   remains an explicit edit for workflows that trim or extend the groove.
@@ -553,10 +626,18 @@ Channel`, and a Channel generated from one Zone inherits that Zone's name.
   and the inner side is the intersection of the two offset legs. Do not round,
   miter or otherwise edit both borders independently.
 - `Project Geometry` accepts a selected Channel without introducing another
-  command. The Channel remains the centerline object; the generated independent
-  native object receives the same swept outline used by Designer and Animate.
-  Projecting to Face Graphic supplies the perimeter without changing the active
-  layer or current selection.
+  command. The Channel remains the centerline object. A Fabrication Plans
+  destination receives an independent snapshot of that canonical open or
+  closed centerline as the CNC router-bit path. Area destinations receive the
+  swept outline used by Designer and Animate; projecting to Face Graphic thus
+  supplies a closed perimeter without changing the active layer or selection.
+- A selected Channel can generate an independent LED string on its sampled
+  centerline, in forward or reverse direction, and inherits the Channel's
+  construction surface. For a closed Channel, the selected Channel node (or the
+  first node when none is selected) becomes the coincident DIN/DOUT seam. The
+  generated string has no live dependency on the Channel, so either object may
+  subsequently be edited or deleted without changing the other. Designer warns
+  when the configured strip PCB is wider than the Channel.
 
 ### Artwork Tool
 
@@ -635,11 +716,19 @@ Artwork source files live in the project Assets library (`iluminate.assets` + R2
 
 - `LED string`: amber/orange LED strip. It generates addressable pixel points and pixelMap data. Fabrication legs are derived between its nodes; they are not normal effect targets.
 - `Data cable`: green signal cable. It is visual/planning geometry only and does not generate LEDs.
+- While the Hardware/Strings plane is active, a single-face view adds only a
+  theme-aware peripheral canvas cue: sky `TOP · FRONT` or violet
+  `DOWN · REAR`. `Both` remains neutral. This overlay is pointer-transparent
+  and does not participate in geometry, rendering or optical preview.
 
 ### Terminals And Direction
 
 - Route green terminal: input/start/DIN.
 - Route red terminal: output/end/DOUT.
+- Route terminals use screen-constant high-contrast rings and remain visibly
+  larger than internal fabrication nodes in both themes. DIN's outer ring is
+  larger than DOUT's so both colors remain legible at a coincident closed-loop
+  seam without moving either electrical coordinate.
 - Controller port: red output terminal.
 - Internal fabrication node/bend/cut point: violet. It is not a LED, terminal or solder joint.
 - Route arrows show flow from green to red.
@@ -675,9 +764,18 @@ Route-to-route soldering:
 
 - Green route terminal + red route terminal on the same snap point solders.
 - Green-to-green and red-to-red never solder.
+- Both terminals must belong to the same `Front` or `Rear` construction plane.
+  Coincident coordinates across planes remain electrically independent, even
+  when both planes are visible.
 - It does not matter whether the route is `LED string` or `Data cable`.
 - Same-kind routes merge into one route and the duplicate terminal disappears.
 - Mixed `Data cable` + `LED string` remains two route types, but both terminal points are marked `joint: true`.
+- Ctrl/Command/Shift selection may select multiple LED strings. With exactly
+  two selected, `Connect strings` is enabled only when exactly one string
+  already resolves to a controller output, both strings share a construction
+  surface, and the upstream DOUT and downstream DIN are free. The action adds a
+  normal editable orthogonal data-cable route and persists explicit solder
+  joints at both ends. It does not perform obstacle avoidance.
 
 Controller-to-cable soldering:
 
@@ -698,13 +796,18 @@ Deletion cleanup:
 - Deleting a route must clear orphaned/floating `joint: true` markers on remaining terminals.
 - The final remaining route is deletable. `routes: []` is valid persisted
   authored state, and deletion also removes that route id from every light
-  source `stringIds` assignment.
+  source `stringIds` compatibility cache. Compile recalculates that cache.
 - A terminal remains cyan only if another compatible terminal is on the same snap point, or if a data-cable green terminal is on a controller red port.
 
 Drag behavior:
 
 - Dragging a cyan solder joint moves all terminals in that joint together.
 - Dragging a route with a soldered endpoint keeps connected route terminals attached.
+- Dragging an unsoldered LED-string DIN or DOUT backward along that string's
+  existing polyline shortens it and consumes every internal node crossed by the
+  terminal. Leaving the existing path remains an ordinary free terminal move.
+  This topology-changing retraction does not apply to data cables or soldered
+  terminal groups.
 - Dragging the controller moves data cables soldered to its ports with it.
 - Dragging a data cable that is soldered to a controller port must keep the cable input terminal anchored to that port; the controller does not move.
 - To avoid detach bugs during controller drag, use a snapshot of the original routes captured at drag start.
@@ -721,15 +824,25 @@ Detach behavior:
 
 Left toolbox:
 
-- Select.
+- Select: click uses the active-plane hit order; dragging from empty canvas
+  creates an orthogonal marquee. It selects all touched visible profiles from
+  one compatible category (preferring the active category, otherwise the
+  largest touched set) so they can be grouped or used by profile operations.
+  Diffusors includes both Zones and Channels in the marquee highlight; mixed
+  selections do not expose profile-only Group or boolean operations. Move on
+  any selected Zone or Channel drags the complete transient selection with the
+  existing axis, modifier, snap and lock behavior. Images, routes, Work Lines
+  and the controller retain click selection.
 - Move: whole-object movement constrained to contextual X or Y; Ctrl/Command
   temporarily permits both axes.
 - Pan.
+- Secondary/right-button drag always pans without changing the active tool or
+  opening the browser context menu on the canvas.
 - Measure.
 - Rectangle zone.
 - Ellipse zone.
-- LED string: click-to-trace tool. First canvas click places the green DIN/start terminal, second click creates the first real segment and red DOUT/end terminal, each later click appends a bend/cut node and moves the red terminal to the new end.
-- Data cable: same click-to-trace behavior as LED string, but green signal-only rendering and no LED generation.
+- LED string: click-to-trace tool. First canvas click places the green DIN/start terminal, second click creates the first real segment and red DOUT/end terminal, each later click appends a bend/cut node and moves the red terminal to the new end. Enter finishes and deselects the current trace without leaving the tool, so the next click starts a new LED string; with only the provisional start point, Enter cancels that incomplete trace.
+- Data cable: same click-to-trace and Enter-to-finish behavior as LED string, but green signal-only rendering and no LED generation.
 - Cut route.
 
 Delete is a contextual action and keyboard command. Fit is a global view
@@ -813,6 +926,9 @@ The mandatory placement rules live in `.agent/DESIGNER_UX_CONTRACT.md`.
   while zoomed.
 - Compile derives and persists the physical pixelMap from controller ports,
   data cables, LED strings, zones and groups.
+- Compile shows a real busy state from before layout derivation begins until
+  the compiled document finishes saving; repeated Compile and Save actions are
+  disabled during that interval.
 - Animate is disabled until the current Designer signature has compiled with no electrical errors. Any change to controller, routes, addressable density, zones or groups makes the compilation stale. Artwork and reference-only changes do not.
 
 Layer panel:
@@ -889,6 +1005,10 @@ Required behavior:
 
 - `Save` persists the current `document_json` only. It must not silently compile.
 - `Compile` regenerates `compiledLayout`, clears stale animation preview/generated artifacts, and saves the compiled document.
+- Compile validation retains the legacy `errors[]` and `warnings[]` strings for
+  runtime compatibility and also emits structured `issues[]` with selectable
+  route/zone/channel/controller targets. The Designer modal renders names rather
+  than internal route IDs and uses those targets for locate/edit actions.
 - `Compile` belongs to Design mode. Do not show it inside Animate.
 - Animate/Preview must use the current `document_json` plus a fresh `compiledLayout`. It must not reuse an old generated partitura after Designer or clip edits.
 - Designer physical edits invalidate `compiledLayout`, animation preview and generated firmware artifact.
@@ -940,7 +1060,9 @@ Current renderer module:
   receiver. Halo-Lit supports an opaque face over the emitted field; Wall Washer
   supports direction, throw, beam angle, softness and falloff.
 - `DiffuserRenderSettings` remains a temporary global preview calibration for
-  intensity and outlines. Animate exposes only `As built` (all persisted mounts)
+  intensity and the outline presentation filter (`All`, active source targets,
+  zones, channels or none). The filter never changes optical evaluation,
+  document visibility or persisted construction. Animate exposes only `As built` (all persisted mounts)
   and `LED map` (raw addressable pixels); physical configuration belongs to the
   selected zone or channel in Designer.
 - Animate exposes the same persisted mounts in a calibration-only side panel.

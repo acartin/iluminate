@@ -13,6 +13,26 @@ export function designerClipTargetIdsForSelection(designer: DesignerForm, select
   return [...sourceIds, selection.id];
 }
 
+/** Resolves a clip target to the zone/channel owners that Animate can calibrate. */
+export function designerOpticalTargetsForClipTarget(designer: DesignerForm, targetId: string | null) {
+  if (!targetId) return [];
+  const globalMode = designerGlobalLightSourceMode(targetId);
+  const sources = globalMode
+    ? designer.lightSources.filter((source) => source.mode === globalMode && source.enabled && source.stringIds.length > 0)
+    : designer.lightSources.filter((source) => source.id === targetId);
+  const targets = sources.flatMap((source) => {
+    const exists = source.targetType === "zone"
+      ? designer.zones.some((zone) => zone.id === source.targetId)
+      : designer.channels.some((channel) => channel.id === source.targetId);
+    return exists ? [{ type: source.targetType, id: source.targetId }] : [];
+  });
+  if (!globalMode && !sources.length) {
+    if (designer.zones.some((zone) => zone.id === targetId)) targets.push({ type: "zone", id: targetId });
+    if (designer.channels.some((channel) => channel.id === targetId)) targets.push({ type: "channel", id: targetId });
+  }
+  return targets.filter((target, index) => targets.findIndex((entry) => entry.type === target.type && entry.id === target.id) === index);
+}
+
 /** Keeps each independently addressable source available when creating a clip for one canvas target. */
 export function clipTargetsForSelection<T extends { id: string }>(targets: T[], selectedTargetIds: string[]) {
   const selected = new Set(selectedTargetIds);
@@ -46,17 +66,17 @@ export function clipScopeTargets<T extends { id: string; name: string; mode: Des
 }
 
 /** Keeps an explicitly selected clip, otherwise selects the first clip for the canvas target. */
-export function clipIdForSelectedTargets(clips: ClipForm[], selectedClipId: string | undefined, targetIds: string[]) {
+export function clipIdForSelectedTargets(clips: ClipForm[], selectedClipId: string | undefined, targetIds: string[], selectedClipCompatibleTargetIds: string[] = []) {
   if (!targetIds.length) return undefined;
   const targets = new Set(targetIds);
   const selectedClip = clips.find((clip) => clip.id === selectedClipId);
-  if (selectedClip && targets.has(selectedClip.target)) return selectedClip.id;
+  if (selectedClip && (targets.has(selectedClip.target) || selectedClipCompatibleTargetIds.some((targetId) => targets.has(targetId)))) return selectedClip.id;
   return clips.find((clip) => targets.has(clip.target))?.id;
 }
 
 /** Waits for canvas selection to catch up with an explicit timeline click. */
-export function explicitClipTargetSelectionSettled(clips: ClipForm[], clipId: string, targetIds: string[]) {
+export function explicitClipTargetSelectionSettled(clips: ClipForm[], clipId: string, targetIds: string[], compatibleTargetIds: string[] = []) {
   const clip = clips.find((entry) => entry.id === clipId);
   if (!clip || !targetIds.length) return true;
-  return targetIds.includes(clip.target);
+  return targetIds.includes(clip.target) || compatibleTargetIds.some((targetId) => targetIds.includes(targetId));
 }

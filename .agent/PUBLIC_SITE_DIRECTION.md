@@ -96,11 +96,18 @@ preview may be added when available. YouTube is optional distribution and may
 be embedded or linked, but it is not the canonical project record or media
 store and customer work must never be uploaded without explicit authorization.
 
+The detailed, authoritative handoff between projects, shares, the app-hosted
+Viewer, public catalog and showroom is defined in
+`docs/public-showroom-viewer-architecture.md`. The Viewer remains in
+`services/web/iluminate`; the public site must not copy or import its React
+components. Interactive showroom playback is opened or embedded from
+`app.iluminate.space` under the security and fallback rules in that contract.
+
 The intended visitor flow is:
 
 ```text
 discover project
--> interact with scenes, effects and colors
+-> inspect the published presentation and, when enabled, play its scenes
 -> choose Use this template
 -> authenticate/register
 -> create a private tenant-owned copy
@@ -109,13 +116,15 @@ discover project
 
 `/simulator` is the primary product-led discovery page. Its first delivery may
 reuse the existing conceptual public preview and placeholder content. It must
-remain clearly labelled as conceptual until immutable published bundles can be
-played with canonical Iluminate semantics.
+remain clearly labelled as conceptual until it can open or embed immutable
+published bundles through the canonical app-hosted Viewer.
 
-The public configurator is deliberately limited. It may expose scene, palette,
-effect, speed, intensity, play/pause and diffuser presentation. It must not
-expose private persistence, deployment, controller credentials, arbitrary
-compilation or the full fabrication workflow.
+The app-hosted public Viewer is deliberately limited. Viewer v1 may expose
+play/pause/stop, scene selection, timeline scrubbing, viewport controls,
+supported presentation modes and fullscreen. Palette, effect, speed or
+intensity experiments require an explicit future contract expansion. It must
+not expose private persistence, deployment, controller credentials, arbitrary
+compilation or the fabrication workflow.
 
 Template cloning must create a new private document resolved from the trusted
 session `client_id`. It must never edit the public source or copy deployments,
@@ -133,8 +142,10 @@ controllers, credentials, authorship/audit records or stale generated artifacts.
 - `/share/[slug]` is video-first and reads a short-lived public manifest from
   the public media origin. It does not load the editor or connect to the
   application database.
-- Optional interactive public playback may consume an immutable published
-  bundle in the future, but must use the same reusable player locally.
+- Optional interactive public playback is hosted by the canonical Viewer under
+  `app.iluminate.space` and may be opened or embedded by the public site only
+  under `docs/public-showroom-viewer-architecture.md`. The public application
+  must not implement, copy or import the player runtime.
 - The public Next.js application must not connect directly to PostgreSQL.
 - The public container must not receive database credentials, R2 write
   credentials, session secrets or device tokens.
@@ -260,10 +271,11 @@ Do not require a custom video hosting or LMS platform for the first version.
 4. **Initial version complete:** publish the first curated concept projects from local typed content.
 5. **Complete in the authenticated app:** consolidate the reusable read-only
    player under `services/web/iluminate/components/lighting/player`; public
-   interactive playback may reuse that contract in a later delivery.
+   interactive playback may open or embed its app-hosted Viewer in a later
+   delivery.
 6. **Initial conceptual version complete:** add `/simulator`; replace its
-   presentation preview with the restricted canonical public configurator when
-   immutable published bundles are available.
+   presentation preview with an app-hosted Viewer handoff when immutable
+   published bundles are available.
 7. Add `/learn`, Designer and Animate YouTube collections.
 8. Add authenticated `Use this template` handoff and safe private cloning.
 9. Introduce persistent publication/template models only after the content and

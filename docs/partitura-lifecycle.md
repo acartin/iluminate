@@ -19,7 +19,7 @@ iluminate.partituras.document_json
 
 `document_json` stores the authoring document used by the browser workspace:
 
-- project settings such as canvas size, snap, pixels per meter and LEDs per meter;
+- project settings such as canvas size, snap and the independently authored LED-strip facts pixels/m, LEDs/m, LEDs/pixel and LEDs/cut;
 - Designer geometry: controller, data cables, LED strings, references, artwork, zones and groups;
 - `compiledLayout`, when the Designer has been explicitly compiled;
 - scenes;
@@ -59,7 +59,34 @@ root, multiple data-cable starts on the same output, or serial branching is an
 error. Disconnected LED strings are warnings unless no mapped pixels can be
 generated at all.
 
-Operators must not edit `compiledLayout` directly. Any change to controller outputs, data cables, LED strings, zones, groups, pixel density or snap can make `compiledLayout` stale. The UI must then require a new `Compile` before Animate, Generate or firmware export uses the layout.
+Operators must not edit `compiledLayout` directly. Any change to controller outputs, data cables, LED strings, zones, channels, Lighting Setup mode, groups, pixel density or snap can make `compiledLayout` stale. Compile derives each Lighting Setup's strings from geometric pixel membership: Front consumes intersecting Front strings, while Halo-Lit and Wall Wash consume intersecting Rear strings. The UI must then require a new `Compile` before Animate, Generate or firmware export uses the layout.
+
+Geometric membership starts from the generated addressable pixel coordinates
+already stored in `pixelMap`. A zone contains the pixel center when it is inside
+or within a fixed 0.5 mm boundary tolerance. Channel membership uses the
+configured square LED-package footprint, oriented with the string, and requires
+at least 90% of that footprint to fall inside the physical channel band after
+the same boundary tolerance. Pixel pitch controls sampling along a string, but
+never expands the LED footprint. The separately persisted PCB width is physical
+placement/fabrication metadata rendered at physical scale. Render, Animate and
+device ordering continue to consume the same generated pixel IDs, coordinates
+and serial indices.
+
+The selected LED-strip catalog record is copied into
+`document_json.designer.stripConfiguration`. Its catalog identity is provenance;
+the copied physical/control values are the editable source of truth. Compile is
+deterministic from `document_json` and never reads the current catalog row.
+Applying a catalog profile preserves routes, invalidates stale compiled and
+generated artifacts, and uses the normal Save/Compile lifecycle.
+The copied `cutMode` distinguishes manufacturer-marked segments from genuine
+free-cut products; continuous COB appearance does not determine cut behavior.
+Only continuous products can use `free_cut`. Discrete strips remain marked
+segments and expose their physical LED count per cut in Setup.
+
+Each data cable and LED string persists a `front` or `rear` construction plane.
+Coincident terminals connect only when their planes also match; changing this
+classification can change serial traversal and therefore invalidates Compile.
+The transient `Front / Rear / Both` viewport filter does not.
 
 Fabrication SVG/DXF export is separate from firmware generation and does not
 consume or mutate `compiledLayout`. It reads canonical Designer geometry,
@@ -68,6 +95,22 @@ memory and downloads a 1:1 vector interchange file. Electrical routes,
 controller graphics, pixelMap, linked construction projections and persistent
 work lines are not part of these files. Work lines are editable Designer-only
 references and do not invalidate electrical Compile.
+
+Fabrication Parts and their materialized Fabrication Paths are editable records
+in `document_json`. A part represents one physical machining plane; its paths
+carry `cut`, `pocket`, `drill`, `engrave` or `reference` intent. Creating or
+editing them does not invalidate `compiledLayout`, because they are neither
+optical targets nor electrical topology. Projection into a Fabrication Part is
+an authoring operation, not an SVG/DXF download or CAM generation.
+
+Channels persist a fabrication face (`front` or `rear`). It supplies the default
+Lighting Setup only when the Channel is created (Front or Halo respectively) and
+participates in the compiled optical mapping; the operator may later change the
+mode and Wall Wash remains explicit. Legacy Channels normalize to `front`.
+Fabrication export preserves one canonical unmirrored 1:1 centerline and marks
+it as `CHANNEL_FRONT_TOOLPATH` or `CHANNEL_REAR_TOOLPATH`; the face does not
+change serial traversal or pixelMap coordinates, but changing it invalidates
+Compile because optical membership must be recalculated.
 
 Designer Setup persists a CNC cutter diameter canonically in millimeters plus
 an independent display unit. The default is 3.175 mm (1/8 in). This value only
@@ -200,6 +243,10 @@ Edit Designer geometry/settings -> Save optional, Compile required before Animat
 Edit scenes/clips/effect params -> Save optional, Compile not required if physical map is current, Preview/Generate must be regenerated.
 Click Save -> persists current document_json; it does not compile secretly.
 Click Compile -> regenerates compiledLayout, clears stale preview/generated artifacts, and saves the compiled document.
+
+`compiledLayout.validation` keeps its error/warning text arrays and may include
+structured `issues` that reference affected Designer objects. These references
+are editor navigation metadata only; they do not change firmware output.
 Compile belongs to Design; Animate consumes an already compiled document.
 Click Play/Preview -> requires a fresh compiledLayout; it may generate a temporary preview artifact but must not persist it as truth.
 Click Generate -> creates and saves generated_json from the current document_json + fresh compiledLayout.

@@ -13,15 +13,17 @@ export type DiffuserRenderSettings = {
   intensity: number;
   afterZoneEffectCm: number;
   afterZoneOpacity: number;
-  showOutlines: boolean;
+  outlineMode: PlayerOutlineMode;
 };
+
+export type PlayerOutlineMode = "all" | "active" | "zones" | "channels" | "none";
 
 export const DEFAULT_DIFFUSER_RENDER_SETTINGS: DiffuserRenderSettings = {
   diffuserDistanceCm: 10,
   intensity: 1,
   afterZoneEffectCm: 0,
   afterZoneOpacity: 0.26,
-  showOutlines: true
+  outlineMode: "all"
 };
 
 export type OpticalRgb = { r: number; g: number; b: number };

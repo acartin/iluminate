@@ -74,10 +74,6 @@ export function DesignerAnimateTimeline({
   const timelineViewportRef = React.useRef<HTMLDivElement | null>(null);
   const timelineRef = React.useRef<HTMLDivElement | null>(null);
   const selectedClip = activeScene?.clips.find((clip) => clip.id === selectedClipId);
-  const zoneTargetIds = React.useMemo(
-    () => new Set([...(document.designer?.lightSources ?? []).map((source) => source.id), ...(document.designer?.zones ?? []).map((zone) => zone.id), ...(document.designer?.channels ?? []).map((channel) => channel.id)]),
-    [document.designer?.lightSources, document.designer?.zones, document.designer?.channels]
-  );
   const durationMs = Math.max(100, activeScene?.durationMs ?? 4000);
   const laneCount = Math.max(1, activeScene?.laneCount ?? inferLaneCount(activeScene?.clips ?? []));
   const availableAxisWidth = Math.max(320, timelineViewportWidth - TRACK_GUTTER_WIDTH);
@@ -101,12 +97,19 @@ export function DesignerAnimateTimeline({
     if (!activeScene) return;
     const pendingClipId = pendingExplicitClipIdRef.current;
     if (pendingClipId) {
-      if (!explicitClipTargetSelectionSettled(activeScene.clips, pendingClipId, selectedTargetIds)) return;
+      const pendingClip = activeScene.clips.find((clip) => clip.id === pendingClipId);
+      const compatibleTargetIds = pendingClip && designerGlobalLightSourceMode(pendingClip.target)
+        ? clipScopeTargets(lightSources, pendingClip.target).map((target) => target.id)
+        : [];
+      if (!explicitClipTargetSelectionSettled(activeScene.clips, pendingClipId, selectedTargetIds, compatibleTargetIds)) return;
       pendingExplicitClipIdRef.current = undefined;
       return;
     }
     if (!selectedTargetIds.length) return;
-    const nextClipId = clipIdForSelectedTargets(activeScene.clips, selectedClipId, selectedTargetIds);
+    const compatibleTargetIds = selectedClip && designerGlobalLightSourceMode(selectedClip.target)
+      ? clipScopeTargets(lightSources, selectedClip.target).map((target) => target.id)
+      : [];
+    const nextClipId = clipIdForSelectedTargets(activeScene.clips, selectedClipId, selectedTargetIds, compatibleTargetIds);
     if (nextClipId !== selectedClipId) setSelectedClipId(nextClipId);
   }, [activeScene, selectedClipId, selectedTargetIdsKey, setSelectedClipId]);
 
@@ -158,7 +161,7 @@ export function DesignerAnimateTimeline({
   function selectClip(clip: ClipForm) {
     if (onClipTargetSelect) pendingExplicitClipIdRef.current = clip.id;
     setSelectedClipId(clip.id);
-    onClipTargetSelect?.(zoneTargetIds.has(clip.target) ? clip.target : null);
+    onClipTargetSelect?.(clip.target);
   }
 
   function addLane() {
@@ -378,7 +381,7 @@ export function DesignerAnimateTimeline({
                 updateClip(selectedClip.id, patch);
                 if (patch.target !== undefined) {
                   onSelectedClipTargetChange?.(patch.target);
-                  onClipTargetSelect?.(zoneTargetIds.has(patch.target) ? patch.target : null);
+                  onClipTargetSelect?.(patch.target);
                 }
               }}
               onDelete={() => removeClip(selectedClip.id)}

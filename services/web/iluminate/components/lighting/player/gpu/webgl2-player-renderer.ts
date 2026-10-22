@@ -1,6 +1,6 @@
 import type { Partitura, VisualOpticalTreatment, VisualPoint, VisualSceneV1, VisualShape } from "@iluminate/lighting-core";
 import type { DesignerAnimationDiffuser } from "../../designer/designer-paper-canvas";
-import type { DiffuserRenderSettings } from "../optical-model";
+import type { DiffuserRenderSettings, PlayerOutlineMode } from "../optical-model";
 import type { DesignerViewport } from "../../designer/types";
 
 export type Webgl2PlayerScene = {
@@ -57,6 +57,8 @@ export class Webgl2PlayerRenderer {
   private directPixels: DrawBatch | null = null;
   private zoneOutlines: OutlineBatch | null = null;
   private channelOutlines: OutlineBatch | null = null;
+  private activeZoneOutlines: OutlineBatch | null = null;
+  private activeChannelOutlines: OutlineBatch | null = null;
   private selectedOutline: OutlineBatch | null = null;
   private outlineSelection: PlayerOutlineSelection = null;
   private treatments: PreparedTreatment[] = [];
@@ -68,7 +70,7 @@ export class Webgl2PlayerRenderer {
     intensity: 1,
     afterZoneEffectCm: 0,
     afterZoneOpacity: 0.26,
-    showOutlines: true
+    outlineMode: "all"
   };
   private width = 1;
   private height = 1;
@@ -170,6 +172,8 @@ export class Webgl2PlayerRenderer {
     this.directPixels = this.createBatch(allIndices.filter((index) => !opticalIndices.has(index)));
     this.zoneOutlines = this.createOutlineBatch(buildOutlineSegments(scene.visualScene.shapes.filter((shape) => shape.kind === "zone")));
     this.channelOutlines = this.createOutlineBatch(buildOutlineSegments(scene.visualScene.shapes.filter((shape) => shape.kind === "channel")));
+    this.activeZoneOutlines = this.createOutlineBatch(buildOutlineSegments(outlineShapesForMode(scene.visualScene.shapes, scene.visualScene.treatments, "active", "zone")));
+    this.activeChannelOutlines = this.createOutlineBatch(buildOutlineSegments(outlineShapesForMode(scene.visualScene.shapes, scene.visualScene.treatments, "active", "channel")));
     this.prepareSelectedOutline();
   }
 
@@ -377,13 +381,17 @@ export class Webgl2PlayerRenderer {
     gl.useProgram(this.outlineProgram);
     gl.uniform4f(this.outlineUniforms.viewport, this.viewport.x, this.viewport.y, Math.max(0.0001, this.viewport.width), Math.max(0.0001, this.viewport.height));
     gl.uniform2f(this.outlineUniforms.canvasPx, this.width * this.pixelRatio, this.height * this.pixelRatio);
-    if (this.settings.showOutlines) {
+    if (this.settings.outlineMode !== "none") {
       gl.uniform1f(this.outlineUniforms.widthPx, 1.35 * this.pixelRatio);
       const zoneColor = this.colorMode === "night" ? [0.38, 0.72, 1, 0.72] : [0.04, 0.31, 0.72, 0.78];
       const channelColor = this.colorMode === "night" ? [1, 0.65, 0.12, 0.82] : [0.72, 0.31, 0.02, 0.82];
-      this.drawOutlineBatch(this.zoneOutlines, zoneColor);
-      this.drawOutlineBatch(this.channelOutlines, channelColor);
-      if (this.selectedOutline) {
+      if (this.settings.outlineMode === "all" || this.settings.outlineMode === "zones") this.drawOutlineBatch(this.zoneOutlines, zoneColor);
+      if (this.settings.outlineMode === "all" || this.settings.outlineMode === "channels") this.drawOutlineBatch(this.channelOutlines, channelColor);
+      if (this.settings.outlineMode === "active") {
+        this.drawOutlineBatch(this.activeZoneOutlines, zoneColor);
+        this.drawOutlineBatch(this.activeChannelOutlines, channelColor);
+      }
+      if (this.selectedOutline && outlineSelectionVisible(this.settings.outlineMode, this.outlineSelection, this.scene?.visualScene.treatments ?? [])) {
         gl.uniform1f(this.outlineUniforms.widthPx, 7 * this.pixelRatio);
         this.drawOutlineBatch(this.selectedOutline, this.colorMode === "night" ? [0.25, 0.72, 1, 0.2] : [0.02, 0.35, 0.9, 0.2]);
         gl.uniform1f(this.outlineUniforms.widthPx, 2.8 * this.pixelRatio);
@@ -473,9 +481,11 @@ export class Webgl2PlayerRenderer {
     this.allPixels = null;
     this.directPixels = null;
     this.treatments = [];
-    for (const outline of [this.zoneOutlines, this.channelOutlines, this.selectedOutline]) this.releaseOutlineBatch(outline);
+    for (const outline of [this.zoneOutlines, this.channelOutlines, this.activeZoneOutlines, this.activeChannelOutlines, this.selectedOutline]) this.releaseOutlineBatch(outline);
     this.zoneOutlines = null;
     this.channelOutlines = null;
+    this.activeZoneOutlines = null;
+    this.activeChannelOutlines = null;
     this.selectedOutline = null;
   }
 
@@ -707,6 +717,35 @@ function flattenContour(points: VisualPoint[], pathMode: "straight" | "bezier", 
 
 export function opticalTargetShape(shapes: VisualShape[], source: Pick<VisualOpticalTreatment, "targetType" | "targetId">) {
   return shapes.find((shape) => shape.kind === source.targetType && shape.id === source.targetId) ?? null;
+}
+
+export function outlineShapesForMode(
+  shapes: VisualShape[],
+  treatments: Pick<VisualOpticalTreatment, "targetType" | "targetId">[],
+  mode: PlayerOutlineMode,
+  kind?: "zone" | "channel"
+) {
+  if (mode === "none") return [];
+  const allowedKinds = kind ? new Set([kind]) : null;
+  if (mode !== "active") {
+    return shapes.filter((shape) => (shape.kind === "zone" || shape.kind === "channel")
+      && (!allowedKinds || allowedKinds.has(shape.kind))
+      && (mode === "all" || mode === `${shape.kind}s`));
+  }
+  const activeTargets = new Set(treatments.map((source) => `${source.targetType}:${source.targetId}`));
+  return shapes.filter((shape) => (shape.kind === "zone" || shape.kind === "channel")
+    && (!allowedKinds || allowedKinds.has(shape.kind))
+    && activeTargets.has(`${shape.kind}:${shape.id}`));
+}
+
+export function outlineSelectionVisible(
+  mode: PlayerOutlineMode,
+  selection: PlayerOutlineSelection,
+  treatments: Pick<VisualOpticalTreatment, "targetType" | "targetId">[]
+) {
+  if (!selection || mode === "none") return false;
+  if (mode === "all" || mode === `${selection.type}s`) return true;
+  return mode === "active" && treatments.some((source) => source.targetType === selection.type && source.targetId === selection.id);
 }
 
 /** Front light stays on its face; reflected/rear light stays off every physical face. */

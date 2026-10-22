@@ -5,13 +5,13 @@
 
 ## Snapshot
 
-- Generated UTC: `2026-10-07T06:52:07Z`
+- Generated UTC: `2026-10-17T20:57:55Z`
 - Repository root: `/srv/iluminate`
-- Git branch: `HETZNER-DEV-2026-Octubre-6`
-- Git commit: `e18e2e0`
-- Worktree: `dirty` (118 changed paths, excluding generated context files)
-- Status fingerprint: `806ad5bb47a8db74d6fa077184dbf18d2e63967336d00fa7781e00ec506986a2`
-- Tracked diff fingerprint: `deea6532705e636054b65de603777ad7d969936cb2634b8981b2ba4d12ba195a`
+- Git branch: `HETZNER-DEV-2026-Octubre-17B`
+- Git commit: `6890d15`
+- Worktree: `dirty` (5 changed paths, excluding generated context files)
+- Status fingerprint: `287c781a6f5942745e56eb7ba3bb7d4c246e0df538d185256c524443f5068404`
+- Tracked diff fingerprint: `7006d5e3edf44688e5f41558d7eabf10d6dd0140bc431fd9bf0dde4490c78fb9`
 
 The commit identifies the base revision. When the worktree is dirty, the two
 fingerprints distinguish the local state without copying diffs or secrets into
@@ -35,10 +35,10 @@ this file. Untracked file contents are never read for fingerprinting.
 ## Compose Services
 
 ```text
-iluminate-public-web
-iluminate-web
 postgres
+iluminate-web
 render-worker
+iluminate-public-web
 ```
 
 ## Context Inventory
@@ -61,6 +61,7 @@ render-worker
 | `.agent/EXECUTION_MAP.md` | Validation routes and commands. |
 | `services/web/iluminate-prompt-builder/README.md` | Internal prompt-builder usage and ownership. |
 | `docs/partitura-lifecycle.md` | Partitura source/compile/generate/device lifecycle. |
+| `docs/public-showroom-viewer-architecture.md` | Project shares, app-hosted Viewer and showroom architecture. |
 | `docs/production-deployment.md` | Production operations runbook. |
 | `docs/upgrade.doc` | Completed Designer upgrade specification and regression history. |
 

@@ -56,11 +56,11 @@ spanning several areas may combine rows, but duplicated documents are read once.
 | Composer, routes, controller, LED density or generated pixelMap | `.agent/PIXELMAP_COMPOSER_DIRECTION.md`, `.agent/DESIGNER_HANDOFF.md` | `.agent/EFFECT_TARGETING_MODEL.md` when targets/effect coordinates change; `docs/partitura-lifecycle.md` when Compile/Generate state changes. |
 | Effects, zones, groups, simulator or playback semantics | `.agent/EFFECT_TARGETING_MODEL.md` | `.agent/PIXELMAP_COMPOSER_DIRECTION.md`, `docs/partitura-lifecycle.md`, and current effect/player code as applicable. |
 | Partitura schema, Compile, Generate, publication or device artifact | `docs/partitura-lifecycle.md` | `.agent/DATABASE_MODEL.md`, schema/validator fixtures and device/firmware README files. |
-| Player bundles, review/public shares, offline render or render media | `docs/partitura-lifecycle.md`, `.agent/DATABASE_MODEL.md`, `services/render-worker/README.md` | Animate/player headings in `.agent/DESIGNER_HANDOFF.md`; `.agent/PUBLIC_SITE_DIRECTION.md` for the public viewer; `.agent/EXECUTION_MAP.md` and `docs/production-deployment.md` for operation; `docs/upgrade.doc` only for regression history or unfinished acceptance checks. |
+| Player bundles, review/public shares, offline render or render media | `docs/partitura-lifecycle.md`, `.agent/DATABASE_MODEL.md`, `services/render-worker/README.md` | `docs/public-showroom-viewer-architecture.md` when the Viewer, embedding, showroom publication or catalog handoff is involved; Animate/player headings in `.agent/DESIGNER_HANDOFF.md`; `.agent/PUBLIC_SITE_DIRECTION.md` for the public experience; `.agent/EXECUTION_MAP.md` and `docs/production-deployment.md` for operation; `docs/upgrade.doc` only for regression history or unfinished acceptance checks. |
 | PostgreSQL, persistence, tenancy or migrations | `.agent/DATABASE_MODEL.md` | `.agent/FILESYSTEM_GUARDRAILS.md`; `docs/production-deployment.md` only when production operation is involved. |
 | Auth, sessions, roles or permissions | `.agent/FILESYSTEM_GUARDRAILS.md`, relevant `services/auth` README/code | `.agent/DATABASE_MODEL.md` for persisted ownership; production runbook only for deployment. |
 | Authenticated web UI outside Designer | `.agent/ILUMINATE_UI_STANDARDS.md` | `.agent/DESIGNER_UX_CONTRACT.md` only for shared Designer surfaces. |
-| Public site, catalog, templates, SEO or learning | `.agent/PUBLIC_SITE_DIRECTION.md` | `.agent/ILUMINATE_UI_STANDARDS.md` only for intentionally shared primitives; production runbook for publishing. |
+| Public site, catalog, templates, SEO or learning | `.agent/PUBLIC_SITE_DIRECTION.md` | `docs/public-showroom-viewer-architecture.md` for project catalog, Viewer embedding, publication or CMS work; `.agent/ILUMINATE_UI_STANDARDS.md` only for intentionally shared primitives; production runbook for publishing. |
 | Internal prompt builder or domain/guardrail catalog | `services/web/iluminate-prompt-builder/README.md`, `.agent/RULES.md` | `.agent/FILESYSTEM_GUARDRAILS.md` when ownership or service topology changes. |
 | Compose, environment, infrastructure or production deployment | `.agent/EXECUTION_MAP.md`, `docs/production-deployment.md` | `.agent/FILESYSTEM_GUARDRAILS.md` for ownership changes. |
 | External firmware or device protocol | `docs/partitura-lifecycle.md`, relevant `services/firmware` or `services/device-protocol` README | `.agent/EFFECT_TARGETING_MODEL.md` if playback contract changes. |
@@ -75,6 +75,9 @@ too detailed for the permanent AI rules:
   generated and device-facing partitura states.
 - `docs/production-deployment.md` is the human operational runbook and is read
   only for infrastructure, production or deployment work.
+- `docs/public-showroom-viewer-architecture.md` is the authoritative target
+  contract for project shares, the app-hosted Viewer, showroom publication,
+  public catalog handoff and embedding.
 - `docs/upgrade.doc` records the Designer upgrade specification, completed
   phases and regression expectations. It is historical/supporting context, not
   routine Designer startup context.

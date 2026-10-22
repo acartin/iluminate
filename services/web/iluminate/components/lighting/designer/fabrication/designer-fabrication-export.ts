@@ -6,13 +6,14 @@ import { pointInPolygon, shapeOutlinePoints } from "../designer-geometry";
 import { validateDesignerGeometryTopology } from "../geometry/designer-geometry-boolean";
 
 export type FabricationExportFormat = "svg" | "dxf";
-export type FabricationLayer = "reference" | "zones" | "channels" | "faceGraphic";
+export type FabricationLayer = "reference" | "zones" | "channels" | "faceGraphic" | "fabrication";
 
 export type FabricationExportOptions = {
   includeReference: boolean;
   includeZones: boolean;
   includeChannels: boolean;
   includeFaceGraphic: boolean;
+  includeFabricationPlans: boolean;
   includeAlignmentMarks: boolean;
   flattenToleranceMm: number;
   minimumFeatureMm: number;
@@ -23,6 +24,7 @@ export const DEFAULT_FABRICATION_EXPORT_OPTIONS: FabricationExportOptions = {
   includeZones: true,
   includeChannels: true,
   includeFaceGraphic: true,
+  includeFabricationPlans: true,
   includeAlignmentMarks: true,
   flattenToleranceMm: 0.1,
   minimumFeatureMm: 0.5
@@ -41,6 +43,8 @@ export type FabricationExportResult = {
   files: Array<{
     layer: FabricationLayer;
     fileSuffix: string;
+    /** Exact operator-defined name for files that must not use the generated project prefix. */
+    downloadBaseName?: string;
     svg: string;
     dxf: string;
     pathCount: number;
@@ -66,6 +70,12 @@ type FabricationPath = {
   geometry: DesignerGeometry;
   passMode?: DesignerFaceGraphicPassMode;
   filterColor?: string;
+  fabricationSurface?: "front" | "rear";
+  fabricationPartId?: string;
+  fabricationOperation?: "cut" | "pocket" | "drill" | "engrave" | "reference";
+  fabricationDepthMm?: number;
+  fabricationMaterial?: string;
+  fabricationThicknessMm?: number;
 };
 
 type FabricationContour = {
@@ -104,8 +114,8 @@ export async function generateDesignerFabricationExport(args: {
     : paths;
   const svg = serializeSvg(combinedPaths, args.designer, args.identity, generatedAt, sourceChecksum);
   const dxf = serializeDxf(combinedPaths, args.designer, args.identity, generatedAt, sourceChecksum, options.flattenToleranceMm);
-  const fileSuffix: Record<FabricationLayer, string> = { reference: "reference", zones: "zones", channels: "channels-toolpath", faceGraphic: "face-graphic" };
-  const files = (["reference", "zones", "channels", "faceGraphic"] as const).flatMap((layer) => {
+  const fileSuffix: Record<Exclude<FabricationLayer, "fabrication">, string> = { reference: "reference", zones: "zones", channels: "channels-toolpath", faceGraphic: "face-graphic" };
+  const files: FabricationExportResult["files"] = (["reference", "zones", "channels", "faceGraphic"] as const).flatMap((layer) => {
     const layerPaths = paths.filter((path) => path.layer === layer);
     const serializedPaths = options.includeAlignmentMarks && args.designer.alignmentMarks.enabled
       ? [...layerPaths, ...alignmentMarkPaths(args.designer, layer)]
@@ -118,6 +128,23 @@ export async function generateDesignerFabricationExport(args: {
       pathCount: layerPaths.length
     }] : [];
   });
+  if (options.includeFabricationPlans) {
+    args.designer.fabricationParts.filter((part) => part.visible !== false).forEach((part) => {
+      const partPaths = paths.filter((path) => path.layer === "fabrication" && path.fabricationPartId === part.id);
+      if (!partPaths.length) return;
+      const serializedPaths = options.includeAlignmentMarks && args.designer.alignmentMarks.enabled
+        ? [...partPaths, ...alignmentMarkPaths(args.designer, "fabrication")]
+        : partPaths;
+      files.push({
+        layer: "fabrication",
+        fileSuffix: part.name,
+        downloadBaseName: part.name,
+        svg: serializeSvg(serializedPaths, args.designer, args.identity, generatedAt, sourceChecksum, "fabrication"),
+        dxf: serializeDxf(serializedPaths, args.designer, args.identity, generatedAt, sourceChecksum, options.flattenToleranceMm, "fabrication"),
+        pathCount: partPaths.length
+      });
+    });
+  }
   return { svg, dxf, files, sourceChecksum, issues: deduplicateIssues(issues), pathCount: paths.length, layerCount: files.length };
 }
 
@@ -157,8 +184,8 @@ function alignmentMarkPaths(designer: DesignerForm, layer: FabricationLayer): Fa
 function collectFabricationPaths(designer: DesignerForm, fontDataById: Map<string, ArrayBuffer>, options: FabricationExportOptions, issues: FabricationExportIssue[]) {
   const paths: FabricationPath[] = [];
   const canonical = new Map((designer.geometries ?? []).map((geometry) => [geometry.id, geometry]));
-  const enabled = (layer: FabricationLayer) => layer === "reference" ? options.includeReference : layer === "zones" ? options.includeZones : layer === "channels" ? options.includeChannels : options.includeFaceGraphic;
-  const nativeGeometry = (record: { id: string; geometryId?: string; shape: "rect" | "ellipse" | "polygon"; x: number; y: number; width: number; height: number; points?: DesignerPoint[]; contours?: DesignerContour[]; pathMode?: "straight" | "bezier"; fillRule?: "nonzero" | "evenodd" }, prefix: string): DesignerGeometry => {
+  const enabled = (layer: FabricationLayer) => layer === "reference" ? options.includeReference : layer === "zones" ? options.includeZones : layer === "channels" ? options.includeChannels : layer === "fabrication" ? options.includeFabricationPlans : options.includeFaceGraphic;
+  const nativeGeometry = (record: { id: string; geometryId?: string; shape: "rect" | "ellipse" | "polygon"; x: number; y: number; width: number; height: number; points?: DesignerPoint[]; contours?: DesignerContour[]; pathMode?: "straight" | "bezier"; closed?: boolean; fillRule?: "nonzero" | "evenodd" }, prefix: string): DesignerGeometry => {
     const stored = record.geometryId ? canonical.get(record.geometryId) : null;
     if (stored) return stored;
     return {
@@ -166,7 +193,7 @@ function collectFabricationPaths(designer: DesignerForm, fontDataById: Map<strin
       kind: record.shape === "polygon" ? "path" : record.shape,
       x: record.x, y: record.y, width: record.width, height: record.height,
       points: record.points, contours: record.contours, pathMode: record.pathMode,
-      closed: true, fillRule: record.fillRule ?? "nonzero"
+      closed: record.closed ?? true, fillRule: record.fillRule ?? "nonzero"
     };
   };
   if (enabled("reference")) {
@@ -186,7 +213,8 @@ function collectFabricationPaths(designer: DesignerForm, fontDataById: Map<strin
         id: channel.id,
         name: channel.name,
         layer: "channels",
-        groupName: "CHANNEL_TOOLPATH",
+        groupName: channel.fabricationSurface === "rear" ? "CHANNEL_REAR_TOOLPATH" : "CHANNEL_FRONT_TOOLPATH",
+        fabricationSurface: channel.fabricationSurface === "rear" ? "rear" : "front",
         geometry: geometry ?? geometryFromChannel(channel)
       });
     });
@@ -201,6 +229,26 @@ function collectFabricationPaths(designer: DesignerForm, fontDataById: Map<strin
       passMode: item.passMode,
       filterColor: normalizeColor(item.filterColor)
     }));
+  }
+  if (enabled("fabrication")) {
+    const visibleParts = new Map(designer.fabricationParts.filter((part) => part.visible !== false).map((part) => [part.id, part]));
+    designer.fabricationPaths.filter((item) => item.visible !== false).forEach((item) => {
+      const part = visibleParts.get(item.partId);
+      if (!part) return;
+      paths.push({
+        id: item.id,
+        name: item.name,
+        layer: "fabrication",
+        groupName: fabricationOperationGroup(item.operation, item.depthMm),
+        geometry: nativeGeometry(item, "geometry_fabrication_path"),
+        fabricationPartId: part.id,
+        fabricationOperation: item.operation,
+        fabricationDepthMm: item.depthMm,
+        fabricationSurface: part.machiningSide,
+        fabricationMaterial: part.material,
+        fabricationThicknessMm: part.thicknessMm
+      });
+    });
   }
   designer.derivedGeometries.filter((operation) => enabled(operation.targetLayer) && operation.visible !== false).forEach((operation) => {
     const resolved = resolveDesignerDerivedGeometry(designer, operation.id);
@@ -246,7 +294,7 @@ function collectFabricationPaths(designer: DesignerForm, fontDataById: Map<strin
 }
 
 function validateFabricationPath(path: FabricationPath, designer: DesignerForm, options: FabricationExportOptions, issues: FabricationExportIssue[]) {
-  validateDesignerGeometryTopology(path.geometry).filter((issue) => path.layer !== "channels" || issue !== "open-profile").forEach((issue) => issues.push({
+  validateDesignerGeometryTopology(path.geometry).filter((issue) => path.layer !== "channels" && path.fabricationOperation !== "reference" || issue !== "open-profile").forEach((issue) => issues.push({
     severity: "error",
     code: issue,
     objectId: path.id,
@@ -273,8 +321,10 @@ function serializeSvg(paths: FabricationPath[], designer: DesignerForm, identity
     const isAlignmentGuide = groupName === "ALIGNMENT_GUIDES_NO_CUT";
     const attributes = isAlignmentGuide
       ? ` data-purpose="alignment-calibration" data-operation-mode="no-cut" data-spacing-mm="${formatNumber(designer.alignmentMarks.spacingMm)}"`
+      : representative.layer === "fabrication"
+      ? ` data-fabrication-operation="${representative.fabricationOperation}" data-depth-mm="${formatNumber(representative.fabricationDepthMm ?? 0)}" data-material="${escapeXml(representative.fabricationMaterial ?? "")}" data-thickness-mm="${formatNumber(representative.fabricationThicknessMm ?? 0)}" data-machining-side="${representative.fabricationSurface ?? "front"}"`
       : representative.layer === "channels"
-      ? ` data-toolpath="router-centerline"`
+      ? ` data-toolpath="router-centerline" data-fabrication-surface="${representative.fabricationSurface ?? "front"}"`
       : representative.passMode
       ? ` data-pass-mode="${representative.passMode}" data-filter-color="${escapeXml(representative.filterColor ?? "#FFFFFF")}"`
       : "";
@@ -438,6 +488,11 @@ function geometryFromChannel(channel: DesignerChannelForm): DesignerGeometry {
 
 function faceGraphicGroup(passMode: DesignerFaceGraphicPassMode, filterColor: string) {
   return `FACE_${passMode.toUpperCase()}${passMode === "translucent" ? `_${normalizeColor(filterColor).slice(1)}` : ""}`;
+}
+
+function fabricationOperationGroup(operation: "cut" | "pocket" | "drill" | "engrave" | "reference", depthMm?: number) {
+  const depth = depthMm && depthMm > 0 ? `_DEPTH_${formatNumber(depthMm)}MM` : "";
+  return `FAB_${operation.toUpperCase()}${depth}`;
 }
 
 function groupPaths(paths: FabricationPath[]) {

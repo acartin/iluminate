@@ -4,6 +4,7 @@ import type {
   DesignerControllerForm,
   DesignerForm,
   DesignerFaceGraphicForm,
+  DesignerFabricationPathForm,
   DesignerArtworkForm,
   DesignerAlignmentMarksForm,
   DesignerLayersForm,
@@ -26,6 +27,7 @@ export type DesignerSelection =
   | { type: "work_line"; id: string; pointIndex?: number }
   | { type: "zone"; id: string; pointIndex?: number }
   | { type: "face_graphic"; id: string; pointIndex?: number }
+  | { type: "fabrication_path"; id: string; pointIndex?: number }
   | { type: "projection"; id: string }
   | { type: "derived_geometry"; id: string }
   | { type: "text"; id: string }
@@ -44,6 +46,9 @@ export function designerAdditiveSelectionRequested(event: { shiftKey: boolean; c
 export function routeMatchesSurfaceView(surface: DesignerRouteSurface | undefined, view: DesignerRouteSurfaceView) {
   return view === "both" || (surface ?? "rear") === view;
 }
+export function channelMatchesSurfaceView(surface: DesignerRouteSurface | undefined, view: DesignerRouteSurfaceView) {
+  return view === "both" || (surface ?? "front") === view;
+}
 export type DesignerRouteDraft = { kind: DesignerRouteKind; points: DesignerPoint[]; routeId?: string };
 export type DesignerShapeDraft = { target: "build_area" | "zone" | "channel" | "face_graphic" | "work_line"; mode: "straight" | "bezier"; points: DesignerPoint[]; widthMm?: number };
 export type DesignerPrimitiveDraft = {
@@ -60,6 +65,7 @@ export function designerLayerForSelection(selection: DesignerSelection): Designe
   if (selection.type === "artwork" || selection.type === "build_area" || selection.type === "work_line") return "artwork";
   if (selection.type === "zone" || selection.type === "channel") return "zones";
   if (selection.type === "face_graphic") return "faceGraphic";
+  if (selection.type === "fabrication_path") return "fabrication";
   if (selection.type === "light_source") return "lightSources";
   if (selection.type === "controller") return "hardware";
   if (selection.type === "route") return "strings";
@@ -80,6 +86,7 @@ export function designerSelectionForClipTarget(designer: DesignerForm, targetId:
 }
 
 export type DesignerDrag =
+  | { type: "diffusor-selection-move"; start: DesignerPoint; original: DesignerForm; selectionKeys: string[]; anchorKey: string }
   | { type: "alignment-guide-move"; start: { x: number; y: number }; original: DesignerAlignmentMarksForm }
   | { type: "artwork-move"; artworkId: string; start: { x: number; y: number }; original: DesignerArtworkForm }
   | { type: "artwork-resize"; artworkId: string; handle: ResizeHandle; start: { x: number; y: number }; original: DesignerArtworkForm }
@@ -98,6 +105,7 @@ export type DesignerDrag =
   | { type: "face-graphic-resize"; elementId: string; handle: ResizeHandle; start: { x: number; y: number }; original: DesignerFaceGraphicForm }
   | { type: "face-graphic-point"; elementId: string; pointIndex: number }
   | { type: "face-graphic-handle"; elementId: string; pointIndex: number; handle: "in" | "out" }
+  | { type: "fabrication-path-move"; pathId: string; start: { x: number; y: number }; original: DesignerFabricationPathForm }
   | { type: "text-move"; textId: string; start: { x: number; y: number }; original: DesignerText }
   | { type: "channel-move"; channelId: string; start: { x: number; y: number }; original: DesignerChannelForm }
   | { type: "channel-point"; channelId: string; pointIndex: number }
@@ -119,6 +127,7 @@ export type DesignerCanvasHit =
   | { type: "zone_handle"; id: string; pointIndex: number; handle: "in" | "out" }
   | { type: "zone_resize"; id: string; handle: ResizeHandle }
   | { type: "face_graphic"; id: string }
+  | { type: "fabrication_path"; id: string }
   | { type: "face_graphic_point"; id: string; pointIndex: number }
   | { type: "face_graphic_resize"; id: string; handle: ResizeHandle }
   | { type: "projection"; id: string }
@@ -147,6 +156,16 @@ export function designerWholeObjectHit(hit: DesignerCanvasHit): DesignerCanvasHi
   if (hit.type === "channel_point") return { type: "channel", id: hit.id };
   if (hit.type === "route_point") return { type: "route", id: hit.id };
   return hit;
+}
+
+/**
+ * Select normally promotes the first node hit to its owner, but electrical
+ * terminals must retain their hit so a deliberate drag can start immediately.
+ * The drag threshold still keeps an ordinary terminal click selection-only.
+ */
+export function designerInitialSelectHit(hit: DesignerCanvasHit, ownerIsSelected: boolean): DesignerCanvasHit {
+  if (ownerIsSelected || hit?.type === "route_point") return hit;
+  return designerWholeObjectHit(hit);
 }
 export type DesignerRouteSummary = { lengthCm: number; pixels: number; leds: number };
 export type PaperApi = typeof import("paper");

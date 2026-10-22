@@ -64,7 +64,7 @@ Owns:
 
 - Public experience at `iluminate.space`.
 - Project and template discovery pages.
-- Restricted interactive project configurator.
+- Editorial presentation and lazy embedding of the app-hosted public Viewer.
 - Public SEO, editorial content and generated project imagery presentation.
 - Learning pages and curated YouTube tutorials for Designer and Animate.
 
