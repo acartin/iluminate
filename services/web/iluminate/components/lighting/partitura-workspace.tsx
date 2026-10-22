@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Partitura } from "@iluminate/lighting-core";
-import { AlertCircle, ArrowLeft, Cable, Circle, ClipboardPaste, Copy, Download, FlipHorizontal as SquareCenterlineDashedVertical, Group, Hammer, Hand, Image as ImageIcon, Layers, Layers2, Magnet, Maximize2, MousePointer2, Move, Pause, PenLine, Play, Plus, Radius, Redo2, Ruler, Route, RotateCcw, Save, Scissors, Settings2, Share2, Sparkles, Spline, Square, Tally2, Trash2, Undo2, Ungroup, Waves, X } from "lucide-react";
+import { AlertCircle, ArrowLeft, Cable, Circle, CircleDot, ClipboardPaste, Copy, Cpu, Download, FlipHorizontal as SquareCenterlineDashedVertical, Group, Hammer, Hand, Image as ImageIcon, Layers, Layers2, Lightbulb, LoaderCircle, Magnet, Maximize2, MousePointer2, Move, Pause, PenLine, Play, Plus, Radius, Redo2, Ruler, RotateCcw, Save, Scissors, Settings2, Share2, Sparkles, Spline, Square, Tally2, Trash2, Undo2, Ungroup, Waves, Waypoints, X } from "lucide-react";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -12,11 +12,12 @@ import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Modal } from "@/components/ui/modal";
 import { Tabs } from "@/components/ui/tabs";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
-import { buildDocumentFromDesigner, designerCompileSignature } from "./designer/designer-compiler";
+import { buildDocumentFromDesigner, compiledStringIdsForSource, designerCompileSignature } from "./designer/designer-compiler";
 import { DesignerAnimateTimeline } from "./designer/designer-animate-timeline";
-import { clipLightSourcesForTarget, designerClipTargetIdsForSelection } from "./designer/designer-animation-selection";
+import { clipLightSourcesForTarget, designerClipTargetIdsForSelection, designerOpticalTargetsForClipTarget } from "./designer/designer-animation-selection";
 import {
   clamp,
+  clampViewport,
   designerBooleanResultName,
   designerDerivedGeometryName,
   designerProjectionName,
@@ -24,6 +25,7 @@ import {
   formatDecimal,
   missingWorkLineHolePoints,
   nextDesignerItemNumber,
+  routeBounds,
   snapValue,
   updatedDesignerOffsetName,
   workLineIntersectionPoints
@@ -48,27 +50,31 @@ import {
 import {
   clearFloatingTerminalJoints,
   canSolderRoutes,
+  createLedStringFromChannel,
+  createRouteFromDraft,
   deleteDesignerRoute,
   detachSolderedRoutePoint,
   findMatchingControllerPort,
   findMatchingSolderTerminal,
   isRouteTerminal,
-  moveRoutePoint,
+  moveRoutePointWithRetraction,
   moveRouteTerminals,
   nearestRouteInsertIndex,
   resolveRouteOutputs,
   routeLengthCm,
   sameSnapPoint,
   sampleRouteLedDots,
+  selectedStringConnectionPlan,
   summarizeRoute
 } from "./designer/electrical/designer-electrical-engine";
 import { DesignerStudioCanvas, type DesignerAnimationDiffuser } from "./designer/designer-paper-canvas";
 import { DEFAULT_DIFFUSER_RENDER_SETTINGS, type DiffuserRenderSettings } from "./player/optical-model";
 import { DesignerLayersPanel, NodeTypePicker, ToolbarField, ToolbarNumber, ToolButton } from "./designer/designer-ui";
-import { designerLayerForSelection, designerSelectionForClipTarget, type DesignerActiveLayer, type DesignerFilletCornerTarget, type DesignerMoveAxis, type DesignerRouteSurfaceView, type DesignerRouteTerminal, type DesignerSelection, type DesignerTool, type DesignerViewport } from "./designer/types";
+import { designerLayerForSelection, type DesignerActiveLayer, type DesignerFilletCornerTarget, type DesignerMoveAxis, type DesignerRouteSurfaceView, type DesignerRouteTerminal, type DesignerSelection, type DesignerTool, type DesignerViewport } from "./designer/types";
 import type { EffectDefinition, EffectParameterDefinition } from "@/lib/lighting/effect-catalog";
 import {
   canonicalizeDesignerGeometry,
+  addDefaultLightSourcesForNewTargets,
   clonePartituraDocument,
   createDefaultOpticalTreatment,
   createClipIdentity,
@@ -78,12 +84,18 @@ import {
   DesignerBuildAreaForm,
   DesignerChannelForm,
   DesignerControllerForm,
+  DesignerCompileIssue,
+  DesignerCompileIssueTarget,
   DesignerDerivedGeometry,
   DesignerForm,
   DesignerFaceGraphicForm,
+  DesignerFabricationOperation,
+  DesignerFabricationPartForm,
+  DesignerFabricationPathForm,
   DesignerGroupForm,
   DesignerGeometry,
   DesignerLayerSettings,
+  DesignerLedStripConfiguration,
   DesignerLayersForm,
   DesignerOpticalMode,
   DesignerOpticalTreatment,
@@ -97,6 +109,7 @@ import {
   DesignerVectorGroupMember,
   DesignerWorkLineForm,
   DesignerZoneForm,
+  LedStripCatalogProfile,
   designerGlobalLightSourceMode,
   nextEmptyClipLayer,
   normalizeDefaultSignLayout,
@@ -116,10 +129,11 @@ import { designerTextToGeometry } from "@/lib/lighting/designer-text-geometry";
 import { DEFAULT_FABRICATION_EXPORT_OPTIONS, generateDesignerFabricationExport, sha256Hex, type FabricationExportFormat, type FabricationExportOptions, type FabricationExportResult } from "./designer/fabrication/designer-fabrication-export";
 import { applyDiffusorObjectVisibility, visibleDiffusorObjectKeys } from "./designer/designer-diffusor-visibility";
 import { applyFaceGraphicObjectVisibility, visibleFaceGraphicObjectKeys } from "./designer/designer-face-graphic-visibility";
-import { channelPathsFromGeometries, type ChannelPathAlignment } from "./designer/geometry/designer-channel-from-path";
+import { channelPathsFromGeometries, generatedChannelName, type ChannelPathAlignment } from "./designer/geometry/designer-channel-from-path";
 import { applyDesignerNativeFillet } from "./designer/geometry/designer-geometry-commands";
 import { resolveDesignerProjectionGeometry } from "./designer/geometry/designer-projected-geometry";
 import { canvasInteractionSnapCm, CHANNEL_ROUTER_BIT_PRESETS, channelWidthForRouterDiameter, geometryToolPolicy } from "./designer/canvas/designer-tool-policy";
+import type { DesignerMarqueeSelectionResult } from "./designer/canvas/designer-marquee-selection";
 import { PlayerSurface, type PlayerSurfaceHandle } from "./player/player-surface";
 import type { PlayerStatus } from "./player/player-controller";
 
@@ -130,6 +144,14 @@ type ProjectAsset = {
 };
 
 type DesignerGeometrySelection = Extract<Exclude<DesignerSelection, null>, { type: "build_area" | "zone" | "face_graphic" | "projection" | "derived_geometry" }>;
+
+const MIN_COMPILE_INDICATOR_MS = 700;
+
+function waitForCompileIndicatorPaint() {
+  return new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  });
+}
 
 function isDesignerGeometrySelection(selection: DesignerSelection): selection is DesignerGeometrySelection {
   return selection?.type === "build_area" || selection?.type === "zone" || selection?.type === "face_graphic" || selection?.type === "projection" || selection?.type === "derived_geometry";
@@ -175,6 +197,51 @@ type DesignerHistoryEntry = {
 
 type OpticalTargetRef = { type: "zone" | "channel"; id: string };
 
+type LedStripSetupDraft = {
+  stripConfiguration: DesignerLedStripConfiguration;
+  addressablePixelsPerMeter: number;
+  ledsPerMeter: number;
+  ledPackageSizeMm: number;
+  ledPcbWidthMm: number;
+};
+
+function ledStripSetupDraftFromDesigner(designer: DesignerForm): LedStripSetupDraft {
+  const stripConfiguration = designer.stripConfiguration ?? {
+    name: "Custom LED strip",
+    construction: "discrete" as const,
+    nativeControlProtocol: "ws281x",
+    colorModel: "rgb" as const,
+    voltageV: 5,
+    cutMode: "marked_segments" as const,
+    addressablePixelsPerCutSegment: 1,
+    physicalLedsPerCutSegment: 1,
+    physicalLedsPerAddressablePixel: 1,
+    addressablePixelsPerMeter: designer.addressablePixelsPerMeter,
+    physicalLedsPerMeter: designer.ledsPerMeter,
+    pcbWidthMm: designer.ledPcbWidthMm,
+    ledPackageSizeMm: designer.ledPackageSizeMm
+  };
+  return {
+    stripConfiguration,
+    addressablePixelsPerMeter: designer.addressablePixelsPerMeter,
+    ledsPerMeter: designer.ledsPerMeter,
+    ledPackageSizeMm: designer.ledPackageSizeMm,
+    ledPcbWidthMm: designer.ledPcbWidthMm
+  };
+}
+
+function designerWithLedStripSetupDraft(designer: DesignerForm, draft: LedStripSetupDraft): DesignerForm {
+  return {
+    ...designer,
+    stripConfiguration: draft.stripConfiguration,
+    addressablePixelsPerMeter: draft.addressablePixelsPerMeter,
+    ledsPerMeter: draft.ledsPerMeter,
+    ledDensityPerMeter: draft.addressablePixelsPerMeter,
+    ledPackageSizeMm: draft.ledPackageSizeMm,
+    ledPcbWidthMm: draft.ledPcbWidthMm
+  };
+}
+
 type EditableNativeOffset = {
   target: "build_area" | "zone" | "face_graphic";
   id: string;
@@ -198,6 +265,7 @@ const ACTIVE_LAYER_LABELS: Record<DesignerActiveLayer, string> = {
   reference: "Reference",
   zones: "Zones",
   faceGraphic: "Face Graphic",
+  fabrication: "Fabrication Plans",
   lightSources: "Light Sources",
   hardware: "Hardware",
   strings: "Strings"
@@ -343,7 +411,7 @@ function PrimitiveDimensionNumber({ label, value, onCommit }: { label: string; v
 }
 
 function designerToolInstruction(tool: DesignerTool) {
-  if (tool === "select") return "Click an object to edit its properties";
+  if (tool === "select") return "Click an object, or drag empty canvas to select visible profiles";
   if (tool === "move") return "Drag a whole object on the fixed axis; hold Ctrl for both axes";
   if (tool === "path_trim") return "Hover a crossed segment to preview it, then click to remove it";
   if (tool === "fillet") return "Click corner nodes to apply the configured tangent radius; Esc finishes";
@@ -385,6 +453,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
   const savedDocumentSignatureRef = useRef(persistedDocumentSignature(document));
   const generatedPartituraStaleRef = useRef(false);
   const [saving, setSaving] = useState(false);
+  const [compiling, setCompiling] = useState(false);
   const [editorMode, setEditorMode] = useState<"design" | "animate">("design");
   const [effectCatalog, setEffectCatalog] = useState<EffectCatalog>({});
   const [animationResult, setAnimationResult] = useState<ApiResult | null>(null);
@@ -409,7 +478,9 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
   const [faceGraphicVinylPreview, setFaceGraphicVinylPreview] = useState(false);
   const [routeSurfaceView, setRouteSurfaceView] = useState<DesignerRouteSurfaceView>("both");
   const [routeCreationSurface, setRouteCreationSurface] = useState<"rear" | "front">("rear");
+  const [channelCreationSurface, setChannelCreationSurface] = useState<"rear" | "front">("front");
   const [channelPathAlignment, setChannelPathAlignment] = useState<ChannelPathAlignment>("center");
+  const [channelPathOffsetMm, setChannelPathOffsetMm] = useState(10);
   const [moveAxis, setMoveAxis] = useState<DesignerMoveAxis>("x");
   const [directFilletRadiusMm, setDirectFilletRadiusMm] = useState(() => Math.max(0, document.designer?.filletRadiusMm ?? 2));
   const [directFilletRadiusSource, setDirectFilletRadiusSource] = useState<"custom" | "router_bit">("custom");
@@ -417,9 +488,14 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
   // No work plane is active until the operator picks a category in the Layers
   // panel. Until then the canvas must not select or drag any object.
   const [activeLayer, setActiveLayer] = useState<DesignerActiveLayer | null>(null);
-  const [projectionTargetLayer, setProjectionTargetLayer] = useState<DesignerProjectionLayer>("faceGraphic");
+  const [projectionTargetLayer, setProjectionTargetLayer] = useState<DesignerProjectionLayer | "fabrication">("faceGraphic");
+  const [projectionFabricationPartId, setProjectionFabricationPartId] = useState<"new" | string>("new");
+  const [projectionFabricationPartName, setProjectionFabricationPartName] = useState("Fabrication part 1");
+  const [projectionFabricationOperation, setProjectionFabricationOperation] = useState<DesignerFabricationOperation>("cut");
   const [selection, setSelection] = useState<DesignerSelection>(null);
   const [geometrySelections, setGeometrySelections] = useState<DesignerGeometrySelection[]>([]);
+  const [marqueeChannelIds, setMarqueeChannelIds] = useState<string[]>([]);
+  const [selectedRouteIds, setSelectedRouteIds] = useState<string[]>([]);
   const [opticalTargetSelection, setOpticalTargetSelection] = useState<OpticalTargetRef[]>([]);
   const undoHistoryRef = useRef<DesignerHistoryEntry[]>([]);
   const redoHistoryRef = useRef<DesignerHistoryEntry[]>([]);
@@ -445,6 +521,9 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
   const [animationFaceMaskEnabled, setAnimationFaceMaskEnabled] = useState(true);
   const [diffuserSettings, setDiffuserSettings] = useState<DiffuserRenderSettings>(DEFAULT_DIFFUSER_RENDER_SETTINGS);
   const [projectAssets, setProjectAssets] = useState<ProjectAsset[]>([]);
+  const [ledStripProfiles, setLedStripProfiles] = useState<LedStripCatalogProfile[]>([]);
+  const [selectedLedStripProfileId, setSelectedLedStripProfileId] = useState(() => document.designer?.stripConfiguration?.sourceProfileId ?? "");
+  const [ledStripSetupDraft, setLedStripSetupDraft] = useState<LedStripSetupDraft | null>(null);
   const [assetsVersion, setAssetsVersion] = useState(0);
   const [importingSvgZones, setImportingSvgZones] = useState(false);
   const artworkUrls = useMemo(() => Object.fromEntries(projectAssets.map((asset) => [asset.id, `/api/lighting/projects/${encodeURIComponent(document.projectId)}/assets/${encodeURIComponent(asset.id)}`])), [document.projectId, projectAssets]);
@@ -506,6 +585,10 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
   const designerState = document.designer;
   if (!designerState) return null;
   const designer: DesignerForm = designerState;
+  const appliedLedStripSetup = ledStripSetupDraftFromDesigner(designer);
+  const ledStripPreview = ledStripSetupDraft ?? appliedLedStripSetup;
+  const ledStripPreviewDesigner = designerWithLedStripSetupDraft(designer, ledStripPreview);
+  const ledStripSetupDirty = Boolean(ledStripSetupDraft && JSON.stringify(ledStripSetupDraft) !== JSON.stringify(appliedLedStripSetup));
   const interactionSnapCm = canvasInteractionSnapCm(designer.snapCm, snapToGrid);
   const activeDirectFilletRadiusMm = directFilletRadiusSource === "router_bit"
     ? designer.fabricationCutterDiameterMm / 2
@@ -528,6 +611,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
   const selectedFaceGraphic = selection?.type === "face_graphic" ? designer.faceGraphics.find((element) => element.id === selection.id) ?? null : null;
   const selectedFaceGraphicPointIndex = selection?.type === "face_graphic" ? selection.pointIndex : undefined;
   const selectedFaceGraphicPointLocation = selectedFaceGraphic && typeof selectedFaceGraphicPointIndex === "number" ? designerShapePointLocation(selectedFaceGraphic, selectedFaceGraphicPointIndex) : null;
+  const selectedFabricationPath = selection?.type === "fabrication_path" ? designer.fabricationPaths.find((path) => path.id === selection.id) ?? null : null;
   const selectedDirectFilletTarget: DesignerFilletCornerTarget | null = selectedBuildArea && typeof selectedBuildAreaPointIndex === "number"
     ? { type: "build_area", id: selectedBuildArea.id, cornerIndex: selectedBuildAreaPointIndex }
     : selectedZone && selection?.type === "zone" && typeof selectedZonePointIndex === "number"
@@ -552,7 +636,6 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
   const selectedText = selection?.type === "text" ? designer.texts.find((entry) => entry.id === selection.id) ?? null : null;
   const selectedChannel = selection?.type === "channel" ? designer.channels.find((channel) => channel.id === selection.id) ?? null : selectedLightSource?.targetType === "channel" ? designer.channels.find((channel) => channel.id === selectedLightSource.targetId) ?? null : null;
   const selectedProjectionSourceChannel = selectedProjection ? designer.channels.find((channel) => channel.geometryId === selectedProjection.sourceGeometryId) ?? null : null;
-  const selectedChannelRouterPreset = selectedChannel ? CHANNEL_ROUTER_BIT_PRESETS.find((preset) => Math.abs(preset.diameterMm - selectedChannel.widthMm) < 1e-6) : null;
   const selectedChannelPointIndex = selection?.type === "channel" ? selection.pointIndex : undefined;
   const selectedChannelPoint = selectedChannel && typeof selectedChannelPointIndex === "number" ? selectedChannel.points[selectedChannelPointIndex] : null;
   const selectedChannelNodeType = selectedChannelPoint?.nodeType ?? (selectedChannel?.pathMode === "bezier" ? "smooth" : "corner");
@@ -560,6 +643,10 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
     && (selectedChannel.closed || selectedChannelPointIndex > 0 && selectedChannelPointIndex < selectedChannel.points.length - 1)
     && (selectedChannelNodeType === "corner" || selectedChannelNodeType === "straight"));
   const selectedRoute = selection?.type === "route" ? designer.routes.find((route) => route.id === selection.id) ?? null : null;
+  const selectedRouteLightingHostValue = selectedRoute?.lightingHost ? `${selectedRoute.lightingHost.type}:${selectedRoute.lightingHost.id}` : "auto";
+  const selectedRouteLightingHostExists = !selectedRoute?.lightingHost || (selectedRoute.lightingHost.type === "zone"
+    ? designer.zones.some((zone) => zone.id === selectedRoute.lightingHost?.id)
+    : designer.channels.some((channel) => channel.id === selectedRoute.lightingHost?.id));
   const selectedRoutePointIndex = selection?.type === "route" ? selection.pointIndex : undefined;
   const selectedController = selection?.type === "controller" ? designer.controller : null;
   const selectedObjectLocked = selection?.type === "artwork" || selection?.type === "build_area"
@@ -568,6 +655,8 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
       ? designer.layers.zones.locked
       : selection?.type === "face_graphic"
         ? designer.layers.faceGraphic.locked || selectedFaceGraphic?.locked === true
+      : selection?.type === "fabrication_path"
+        ? designer.layers.fabrication.locked || selectedFabricationPath?.locked === true || designer.fabricationParts.find((part) => part.id === selectedFabricationPath?.partId)?.locked === true
       : selection?.type === "derived_geometry" && selectedDerivedGeometry
         ? designer.layers[selectedDerivedGeometry.targetLayer === "reference" ? "artwork" : selectedDerivedGeometry.targetLayer].locked
       : selection?.type === "text" && selectedText
@@ -579,7 +668,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
           : selection?.type === "controller"
             ? designer.layers.hardware.locked
             : false;
-  const selectedGeometryId = selectedBuildArea?.geometryId ?? selectedZone?.geometryId ?? selectedFaceGraphic?.geometryId ?? selectedProjection?.geometryId ?? selectedDerivedGeometry?.geometryId ?? selectedChannel?.geometryId;
+  const selectedGeometryId = selectedBuildArea?.geometryId ?? selectedZone?.geometryId ?? selectedFaceGraphic?.geometryId ?? selectedFabricationPath?.geometryId ?? selectedProjection?.geometryId ?? selectedDerivedGeometry?.geometryId ?? selectedChannel?.geometryId;
   const directFilletAvailable = Boolean(selectedBuildArea || selectedZone || selectedFaceGraphic);
   const selectedNativeShape = selectedBuildArea ?? selectedZone ?? selectedFaceGraphic;
   const pathTrimAvailable = Boolean(
@@ -590,13 +679,19 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
     ...designer.buildAreas.map((entry) => ({ geometryId: entry.geometryId, label: `Reference · ${entry.name}` })),
     ...designer.zones.map((entry) => ({ geometryId: entry.geometryId, label: `Zone · ${entry.name}` })),
     ...designer.faceGraphics.map((entry) => ({ geometryId: entry.geometryId, label: `Face Graphic · ${entry.name}` })),
+    ...designer.fabricationPaths.map((entry) => ({ geometryId: entry.geometryId, label: `Fabrication · ${entry.name}` })),
     ...designer.channels.map((entry) => ({ geometryId: entry.geometryId, label: `Channel · ${entry.name}` })),
     ...designer.projections.map((entry) => ({ geometryId: entry.geometryId, label: `Projection · ${entry.name}` })),
     ...designer.derivedGeometries.map((entry) => ({ geometryId: entry.geometryId, label: `${entry.operation === "offset" ? "Offset" : "Fillet"} · ${entry.name}` }))
   ].filter((entry): entry is { geometryId: string; label: string } => Boolean(entry.geometryId));
-  const selectedGeometryKeys = geometrySelections.map(designerGeometrySelectionKey);
+  const selectedProfileKeys = geometrySelections.map(designerGeometrySelectionKey);
+  const selectedGeometryKeys = [...selectedProfileKeys, ...marqueeChannelIds.map((id) => `channel:${id}`)];
   const hasMultipleGeometrySelection = geometrySelections.length >= 2;
-  const selectedGeometryKeySet = new Set(selectedGeometryKeys);
+  const activeSelectedRouteIds = selectedRouteIds.filter((id) => designer.routes.some((route) => route.id === id));
+  const selectedLedStringIds = activeSelectedRouteIds.filter((id) => designer.routes.some((route) => route.id === id && route.kind === "led_string"));
+  const selectedCanvasCount = geometrySelections.length + marqueeChannelIds.length + activeSelectedRouteIds.length;
+  const hasMultipleCanvasSelection = selectedCanvasCount >= 2;
+  const selectedGeometryKeySet = new Set(selectedProfileKeys);
   const selectedVectorGroup = designer.vectorGroups.find((group) => group.members.length === selectedGeometryKeySet.size
     && group.members.every((member) => selectedGeometryKeySet.has(designerGeometrySelectionKey(member)))) ?? null;
   const canGroupGeometrySelection = hasMultipleGeometrySelection && geometrySelections.every(isDesignerVectorGroupMember);
@@ -619,22 +714,73 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
     : null;
   const selectedAnimationGlobalMode = selectedAnimationClipTargetId ? designerGlobalLightSourceMode(selectedAnimationClipTargetId) : null;
   const selectedAnimationTargetsFullSign = selectedAnimationClipTargetId === "full_sign";
+  const animationOpticalTargetEntries = selectedOpticalTargetEntries.map((entry) => ({
+    ...entry,
+    treatments: selectedAnimationGlobalMode ? entry.treatments.filter((source) => source.mode === selectedAnimationGlobalMode) : entry.treatments
+  }));
   const selectedAnimationTargetIds = useMemo(
     () => designerClipTargetIdsForSelection(designer, selection),
     [designer, selection]
   );
   const routeSummaries = designer.routes.map((route) => summarizeRoute(route, designer));
   const routeOutputs = resolveRouteOutputs(designer.controller, designer.routes, designer.snapCm);
+  const stringConnectionPlan = selectedStringConnectionPlan(designer, selectedLedStringIds);
+  const channelGenerationPreview = tool === "channel_bezier" && geometrySelections.length
+    ? channelPathsFromGeometries(selectedChannelSourceGeometries(), channelPathAlignment, designer.channelRouterDiameterMm, channelPathOffsetMm).paths.map((path, index): DesignerChannelForm => ({
+      id: `channel_generation_preview_${index}`,
+      name: "Channel preview",
+      points: path.points,
+      pathMode: path.pathMode,
+      widthMm: channelWidthForRouterDiameter(designer.channelRouterDiameterMm),
+      closed: path.closed,
+      cap: "round",
+      fabricationSurface: channelCreationSurface,
+      visible: true,
+      locked: true,
+      opacity: 0.65
+    }))
+    : [];
   const totalGeneratedPixels = routeSummaries.reduce((total, route) => total + route.pixels, 0);
-  const ledsPerAddressablePixel = designer.ledsPerMeter / Math.max(1, designer.addressablePixelsPerMeter);
+  const stripConsistencyNotice = (() => {
+    const strip = ledStripPreviewDesigner.stripConfiguration;
+    if (!strip || strip.construction !== "discrete") return null;
+    const ledsPerPixel = strip.physicalLedsPerAddressablePixel;
+    const ledsPerCut = strip.physicalLedsPerCutSegment;
+    if (ledsPerPixel !== undefined) {
+      const impliedLedsPerMeter = ledStripPreviewDesigner.addressablePixelsPerMeter * ledsPerPixel;
+      if (Math.abs(impliedLedsPerMeter - ledStripPreviewDesigner.ledsPerMeter) > Math.max(0.1, ledStripPreviewDesigner.ledsPerMeter * 0.02)) {
+        return `Review specification: ${formatDecimal(ledStripPreviewDesigner.addressablePixelsPerMeter)} pixels/m × ${formatDecimal(ledsPerPixel)} LEDs/pixel implies ${formatDecimal(impliedLedsPerMeter)} LEDs/m.`;
+      }
+    }
+    if (ledsPerPixel !== undefined && ledsPerCut !== undefined) {
+      const pixelsPerCut = ledsPerCut / ledsPerPixel;
+      if (Math.abs(pixelsPerCut - Math.round(pixelsPerCut)) > 0.02) {
+        return `Review specification: ${formatDecimal(ledsPerCut)} LEDs/cut does not contain a whole number of ${formatDecimal(ledsPerPixel)}-LED pixels.`;
+      }
+    }
+    return null;
+  })();
   const activeViewport = viewport ?? { x: 0, y: 0, width: designer.canvasWidthCm, height: designer.canvasHeightCm };
   const activeGeometryToolPolicy = geometryToolPolicy(tool);
   const nodeCreationToolActive = activeGeometryToolPolicy?.construction === "path" && tool !== "work_line";
   const compileIsCurrent = Boolean(document.compiledLayout && document.compiledDesignerSignature === designerCompileSignature(designer));
   const compileErrors = document.compiledLayout?.validation.errors ?? [];
   const compileWarnings = document.compiledLayout?.validation.warnings ?? [];
+  const compileIssueDetails = document.compiledLayout?.validation.issues ?? [
+    ...compileErrors.map((message, index) => ({ id: `legacy-error:${index}`, severity: "error" as const, message, targets: [] })),
+    ...compileWarnings.map((message, index) => ({ id: `legacy-warning:${index}`, severity: "warning" as const, message, targets: [] }))
+  ];
+  const compileErrorDetails = compileIssueDetails.filter((issue) => issue.severity === "error");
+  const compileWarningDetails = compileIssueDetails.filter((issue) => issue.severity === "warning");
   const compileIssueCount = compileErrors.length + compileWarnings.length;
   const canAnimate = compileIsCurrent && compileErrors.length === 0;
+  const compileControlLabel = compiling
+    ? "Compiling…"
+    : !compileIsCurrent
+    ? "Compile required"
+    : canAnimate
+      ? "Compiled · Animate ready"
+      : "Compiled · Animate blocked";
   const hasUnsavedChanges = persistedDocumentSignature(document) !== savedDocumentSignatureRef.current;
 
   useEffect(() => {
@@ -646,6 +792,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
     if (!nodeCreationToolActive) return;
     setNodeCreationType(activeGeometryToolPolicy?.mode === "bezier" ? "smooth" : "corner");
     setSelection(null);
+    setSelectedRouteIds([]);
     // Channel can consume profiles selected immediately before the tool is
     // activated. Other path tools still begin with an empty operand set.
     if (tool !== "channel_bezier") setGeometrySelections([]);
@@ -664,6 +811,20 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
       cancelled = true;
     };
   }, [document.projectId, assetsVersion]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadLedStripProfiles() {
+      const response = await fetch("/api/lighting/led-strip-profiles", { cache: "no-store" });
+      const payload = (await response.json()) as { records?: LedStripCatalogProfile[] };
+      if (!cancelled && response.ok) {
+        setLedStripProfiles(payload.records ?? []);
+        setSelectedLedStripProfileId((current) => current || payload.records?.[0]?.id || "");
+      }
+    }
+    void loadLedStripProfiles();
+    return () => { cancelled = true; };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -887,7 +1048,9 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
         const url = URL.createObjectURL(blob);
         const anchor = window.document.createElement("a");
         anchor.href = url;
-        anchor.download = `${baseName}-fabrication-${file.fileSuffix}.${format}`;
+        anchor.download = file.downloadBaseName
+          ? `${file.downloadBaseName}.${format}`
+          : `${baseName}-fabrication-${file.fileSuffix}.${format}`;
         anchor.hidden = true;
         window.document.body.appendChild(anchor);
         try {
@@ -911,11 +1074,88 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
   }
 
   function updateDesigner(nextDesigner: DesignerForm, options: { recordHistory?: boolean } = {}) {
-    commitCanonicalDesigner(canonicalizeDesignerGeometry(nextDesigner), options);
+    commitCanonicalDesigner(canonicalizeDesignerGeometry(addDefaultLightSourcesForNewTargets(designer, nextDesigner)), options);
   }
 
   function patchDesigner(patch: Partial<DesignerForm>) {
     updateDesigner({ ...designer, ...patch });
+  }
+
+  function previewSelectedLedStripProfile(profileId: string) {
+    setSelectedLedStripProfileId(profileId);
+    if (!profileId) {
+      setLedStripSetupDraft(ledStripSetupDraftFromDesigner(designer));
+      return;
+    }
+    const profile = ledStripProfiles.find((entry) => entry.id === profileId);
+    if (!profile) return;
+    const { id, profileKey: _profileKey, revision, clientId: _clientId, sourceUrl: _sourceUrl, ...configuration } = profile;
+    const stripConfiguration: DesignerLedStripConfiguration = {
+      ...configuration,
+      sourceProfileId: id,
+      sourceProfileRevision: revision
+    };
+    setLedStripSetupDraft({
+      stripConfiguration,
+      addressablePixelsPerMeter: configuration.addressablePixelsPerMeter,
+      ledsPerMeter: configuration.physicalLedsPerMeter ?? configuration.addressablePixelsPerMeter,
+      ledPackageSizeMm: configuration.ledPackageSizeMm ?? designer.ledPackageSizeMm,
+      ledPcbWidthMm: configuration.pcbWidthMm
+    });
+  }
+
+  function patchCustomLedStripConfiguration(patch: Partial<DesignerLedStripConfiguration>) {
+    setSelectedLedStripProfileId("");
+    setLedStripSetupDraft((currentDraft) => {
+      const current = currentDraft ?? ledStripSetupDraftFromDesigner(designer);
+      const next = {
+        ...current.stripConfiguration,
+        ...patch,
+        name: "Custom LED strip",
+        sourceProfileId: undefined,
+        sourceProfileRevision: undefined
+      };
+      return {
+        stripConfiguration: next,
+        addressablePixelsPerMeter: next.addressablePixelsPerMeter,
+        ledsPerMeter: next.physicalLedsPerMeter ?? current.ledsPerMeter,
+        ledPackageSizeMm: next.ledPackageSizeMm ?? current.ledPackageSizeMm,
+        ledPcbWidthMm: next.pcbWidthMm
+      };
+    });
+  }
+
+  function applyLedStripSetupDraft() {
+    if (!ledStripSetupDraft) return;
+    patchDesigner({
+      stripConfiguration: ledStripSetupDraft.stripConfiguration,
+      addressablePixelsPerMeter: ledStripSetupDraft.addressablePixelsPerMeter,
+      ledsPerMeter: ledStripSetupDraft.ledsPerMeter,
+      ledDensityPerMeter: ledStripSetupDraft.addressablePixelsPerMeter,
+      ledPackageSizeMm: ledStripSetupDraft.ledPackageSizeMm,
+      ledPcbWidthMm: ledStripSetupDraft.ledPcbWidthMm
+    });
+    setFabricationNotice(`${ledStripSetupDraft.stripConfiguration.name} applied to this partitura.`);
+    setLedStripSetupDraft(null);
+    if (setupDetailsRef.current) setupDetailsRef.current.open = false;
+  }
+
+  function cancelLedStripSetupDraft() {
+    setLedStripSetupDraft(null);
+    setSelectedLedStripProfileId(designer.stripConfiguration?.sourceProfileId ?? "");
+    if (setupDetailsRef.current) setupDetailsRef.current.open = false;
+  }
+
+  function updateDesignerFromCanvas(nextDesigner: DesignerForm, options: { recordHistory?: boolean } = {}) {
+    updateDesigner(ledStripSetupDraft ? {
+      ...nextDesigner,
+      stripConfiguration: designer.stripConfiguration,
+      addressablePixelsPerMeter: designer.addressablePixelsPerMeter,
+      ledsPerMeter: designer.ledsPerMeter,
+      ledDensityPerMeter: designer.ledDensityPerMeter,
+      ledPackageSizeMm: designer.ledPackageSizeMm,
+      ledPcbWidthMm: designer.ledPcbWidthMm
+    } : nextDesigner, options);
   }
 
   function patchWorkLine(workLineId: string, patch: Partial<Pick<DesignerWorkLineForm, "name" | "layer" | "points">>) {
@@ -1345,6 +1585,28 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
       setOpticalTargetSelection(opticalTarget ? [opticalTarget] : []);
     } else {
       setOpticalTargetSelection([]);
+      setMarqueeChannelIds([]);
+      if (nextSelection?.type === "route") {
+        const route = designer.routes.find((entry) => entry.id === nextSelection.id);
+        const base = route?.kind === "led_string"
+          ? activeSelectedRouteIds.filter((id) => designer.routes.some((entry) => entry.id === id && entry.kind === "led_string"))
+          : [];
+        const nextRouteIds = additive && route?.kind === "led_string"
+          ? base.includes(route.id) ? base.filter((id) => id !== route.id) : [...base, route.id]
+          : route ? [route.id] : [];
+        setSelectedRouteIds(nextRouteIds);
+        setGeometrySelections([]);
+        const primaryRouteId = nextRouteIds.at(-1);
+        setSelection(primaryRouteId ? {
+          type: "route",
+          id: primaryRouteId,
+          pointIndex: !additive && primaryRouteId === nextSelection.id ? nextSelection.pointIndex : undefined
+        } : null);
+        setActiveLayer("strings");
+        setLayersPanelOpen(true);
+        return;
+      }
+      setSelectedRouteIds([]);
       const projection = nextSelection?.type === "projection" ? designer.projections.find((entry) => entry.id === nextSelection.id) : null;
       const derived = nextSelection?.type === "derived_geometry" ? designer.derivedGeometries.find((entry) => entry.id === nextSelection.id) : null;
       const text = nextSelection?.type === "text" ? designer.texts.find((entry) => entry.id === nextSelection.id) : null;
@@ -1388,11 +1650,44 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
     }
   }
 
+  function selectAnimationClipTarget(targetId: string | null) {
+    const targets = designerOpticalTargetsForClipTarget(designer, targetId);
+    setOpticalTargetSelection(targets);
+    const primary = targets[0];
+    setSelection(primary ? { type: primary.type, id: primary.id } : null);
+    setLightingEditorOpen(Boolean(primary));
+  }
+
+  function selectDesignerMarqueeItems(result: DesignerMarqueeSelectionResult) {
+    if (!result.layer || !result.selections.length) {
+      setGeometrySelections([]);
+      setMarqueeChannelIds([]);
+      setSelectedRouteIds([]);
+      setSelection(null);
+      return;
+    }
+    const profileSelections = result.selections.filter(isDesignerGeometrySelection);
+    const expanded = profileSelections.flatMap((candidate) => {
+      const group = designer.vectorGroups.find((entry) => entry.members.some((member) => designerGeometrySelectionKey(member) === designerGeometrySelectionKey(candidate)));
+      return group?.members.map((member) => ({ ...member })) ?? [candidate];
+    });
+    const unique = expanded.filter((candidate, index, entries) => entries.findIndex((entry) => designerGeometrySelectionKey(entry) === designerGeometrySelectionKey(candidate)) === index);
+    setOpticalTargetSelection([]);
+    setSelectedRouteIds([]);
+    setGeometrySelections(unique);
+    setMarqueeChannelIds(result.selections.filter((candidate) => candidate.type === "channel").map((candidate) => candidate.id));
+    setSelection(result.selections.at(-1) ?? null);
+    setActiveLayer(result.layer);
+    setLayersPanelOpen(true);
+  }
+
   function activateDesignerLayer(layer: DesignerActiveLayer) {
     setActiveLayer(layer);
     setTool("select");
     setSelection(null);
     setGeometrySelections([]);
+    setMarqueeChannelIds([]);
+    setSelectedRouteIds([]);
   }
 
   function openLightingSetup(target: OpticalTargetRef) {
@@ -1430,6 +1725,41 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
         ? { ...patch, points: undefined }
         : patch;
     updateDesigner({ ...designer, faceGraphics: designer.faceGraphics.map((element) => element.id === elementId ? { ...element, ...nextPatch } : element) });
+  }
+
+  function addFabricationPart() {
+    const next = nextDesignerItemNumber(designer.fabricationParts, "fabrication_part_");
+    const part: DesignerFabricationPartForm = {
+      id: `fabrication_part_${next}`,
+      name: `Fabrication part ${next}`,
+      material: "Unspecified",
+      thicknessMm: 3,
+      machiningSide: "front",
+      visible: true,
+      locked: false,
+      opacity: 1
+    };
+    updateDesigner({ ...designer, fabricationParts: [...designer.fabricationParts, part] });
+    setProjectionFabricationPartId(part.id);
+    setActiveLayer("fabrication");
+  }
+
+  function patchFabricationPart(partId: string, patch: Partial<DesignerFabricationPartForm>) {
+    if (designer.layers.fabrication.locked) return;
+    updateDesigner({
+      ...designer,
+      fabricationParts: designer.fabricationParts.map((part) => part.id === partId ? { ...part, ...patch } : part)
+    });
+  }
+
+  function patchFabricationPath(pathId: string, patch: Partial<DesignerFabricationPathForm>) {
+    const current = designer.fabricationPaths.find((path) => path.id === pathId);
+    const part = current ? designer.fabricationParts.find((entry) => entry.id === current.partId) : null;
+    if (!current || designer.layers.fabrication.locked || part?.locked || current.locked && !Object.keys(patch).every((key) => key === "locked" || key === "visible")) return;
+    updateDesigner({
+      ...designer,
+      fabricationPaths: designer.fabricationPaths.map((path) => path.id === pathId ? { ...path, ...patch } : path)
+    });
   }
 
   function createTextAt(point: DesignerPoint) {
@@ -1817,10 +2147,9 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
     if (!alreadyEditingSelectedNode) applyDirectFillet(selectedDirectFilletTarget);
   }
 
-  function createChannelsFromSelectedGeometry() {
-    if (designer.layers.zones.locked || !geometrySelections.length) return;
+  function selectedChannelSourceGeometries() {
     const canonical = new Map((designer.geometries ?? []).map((geometry) => [geometry.id, geometry]));
-    const geometries = geometrySelections.flatMap((entry) => {
+    return geometrySelections.flatMap((entry) => {
       if (entry.type === "projection") {
         const resolved = resolveDesignerProjectionGeometry(designer, entry.id);
         return resolved.geometry ? [resolved.geometry] : [];
@@ -1837,13 +2166,22 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
       const geometry = owner?.geometryId ? canonical.get(owner.geometryId) : null;
       return geometry ? [geometry] : [];
     });
+  }
+
+  function createChannelsFromSelectedGeometry() {
+    if (designer.layers.zones.locked || !geometrySelections.length) return;
+    const geometries = selectedChannelSourceGeometries();
     if (geometries.length !== geometrySelections.length) {
       setFabricationNotice("Channel creation blocked: one selected path is missing or broken.");
       return;
     }
-    const result = channelPathsFromGeometries(geometries, channelPathAlignment, designer.channelRouterDiameterMm);
+    const result = channelPathsFromGeometries(geometries, channelPathAlignment, designer.channelRouterDiameterMm, channelPathOffsetMm);
     if (result.issue === "branch") {
       setFabricationNotice("Channel creation blocked: the selected paths contain a branch. Trace each route manually as an independent Channel.");
+      return;
+    }
+    if (result.issue === "offset") {
+      setFabricationNotice("Channel creation blocked: this offset collapses or requires a closed source contour.");
       return;
     }
     if (result.issue || !result.paths.length) {
@@ -1856,12 +2194,13 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
       : undefined;
     const channels = result.paths.map((path, index): DesignerChannelForm => ({
       id: `channel_${firstNumber + index}`,
-      name: sourceZoneName ?? `Channel ${firstNumber + index}`,
+      name: generatedChannelName(sourceZoneName, `Channel ${firstNumber + index}`, channelPathAlignment, channelPathOffsetMm),
       points: path.points,
       pathMode: path.pathMode,
       widthMm: channelWidthForRouterDiameter(designer.channelRouterDiameterMm),
       closed: path.closed,
       cap: "round",
+      fabricationSurface: channelCreationSurface,
       visible: true,
       locked: false,
       opacity: 1
@@ -1872,6 +2211,24 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
     setGeometrySelections([]);
     setTool("select");
     setFabricationNotice(`${channels.length} Channel${channels.length === 1 ? "" : "s"} created from ${geometrySelections.length} selected path${geometrySelections.length === 1 ? "" : "s"}.`);
+  }
+
+  function generateLedStringFromSelectedChannel() {
+    if (!selectedChannel || designer.layers.strings.locked) return;
+    const route = createLedStringFromChannel(selectedChannel, designer, false, selectedChannelPointIndex ?? 0);
+    if (!route) {
+      setFabricationNotice("LED string creation blocked: this Channel has no usable center path.");
+      return;
+    }
+    updateDesigner({ ...designer, routes: [...designer.routes, route] });
+    setSelectedRouteIds([route.id]);
+    setSelection({ type: "route", id: route.id });
+    setActiveLayer("strings");
+    setRouteSurfaceView(route.designSurface ?? "rear");
+    const widthWarning = designer.ledPcbWidthMm > selectedChannel.widthMm
+      ? ` · Warning: ${designer.ledPcbWidthMm} mm PCB is wider than the ${selectedChannel.widthMm} mm Channel.`
+      : "";
+    setFabricationNotice(`${route.name} created independently from the Channel${widthWarning}`);
   }
 
   function breakDerivedGeometryLink(derivedId: string) {
@@ -1909,39 +2266,94 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
 
   function projectSelectedGeometry() {
     if (!selectedGeometryId) return;
-    const layerKey = projectionTargetLayer === "reference" ? "artwork" : projectionTargetLayer;
-    if (designer.layers[layerKey].locked) return;
     const next = nextDesignerItemNumber(designer.projections, "projection_");
     const sourceLabel = projectionSourceOptions.find((entry) => entry.geometryId === selectedGeometryId)?.label.replace(/^.* · /, "") ?? `Geometry ${next}`;
+    const nativeTargetLayer: DesignerProjectionLayer = projectionTargetLayer === "fabrication" ? "reference" : projectionTargetLayer;
     const projection: DesignerProjection = {
       id: `projection_${next}`,
-      name: selectedChannel ? `${sourceLabel} perimeter` : projectionTargetLayer === "faceGraphic" ? designerProjectionName(sourceLabel) : `${sourceLabel} projection`,
+      name: selectedChannel ? `${sourceLabel} perimeter` : nativeTargetLayer === "faceGraphic" ? designerProjectionName(sourceLabel) : `${sourceLabel} projection`,
       geometryId: `geometry_projection_${next}`,
       sourceGeometryId: selectedGeometryId,
-      targetLayer: projectionTargetLayer,
+      targetLayer: nativeTargetLayer,
       linked: true,
       visible: true
     };
-    const resolved = resolveDesignerProjectionGeometry({ ...designer, projections: [...designer.projections, projection] }, projection.id);
+    const resolved = resolveDesignerProjectionGeometry(
+      { ...designer, projections: [...designer.projections, projection] },
+      projection.id,
+      projectionTargetLayer
+    );
     if (!resolved.geometry) {
       setFabricationNotice("Projection could not be created because its source geometry is unresolved.");
       return;
     }
     const shape = designerGeometryAsShape(resolved.geometry);
+    if (projectionTargetLayer === "fabrication") {
+      const existingPart = projectionFabricationPartId !== "new"
+        ? designer.fabricationParts.find((part) => part.id === projectionFabricationPartId)
+        : undefined;
+      const partNumber = nextDesignerItemNumber(designer.fabricationParts, "fabrication_part_");
+      const part: DesignerFabricationPartForm = existingPart ?? {
+        id: `fabrication_part_${partNumber}`,
+        name: projectionFabricationPartName.trim() || `Fabrication part ${partNumber}`,
+        material: "Unspecified",
+        thicknessMm: 3,
+        machiningSide: "front",
+        visible: true,
+        locked: false,
+        opacity: 1
+      };
+      const pathNumber = nextDesignerItemNumber(designer.fabricationPaths, "fabrication_path_");
+      const path: DesignerFabricationPathForm = {
+        id: `fabrication_path_${pathNumber}`,
+        name: selectedChannel ? `${sourceLabel} centerline` : `${sourceLabel} projection`,
+        partId: part.id,
+        ...shape,
+        operation: projectionFabricationOperation,
+        visible: true,
+        locked: false,
+        opacity: 1
+      };
+      updateDesigner({
+        ...designer,
+        layers: { ...designer.layers, fabrication: { ...designer.layers.fabrication, visible: true } },
+        fabricationParts: existingPart ? designer.fabricationParts : [...designer.fabricationParts, part],
+        fabricationPaths: [...designer.fabricationPaths, path]
+      });
+      setProjectionFabricationPartId(part.id);
+      setFabricationNotice(`Independent ${projectionFabricationOperation} path created in ${part.name}; source layer and selection preserved.`);
+      return;
+    }
     if (projectionTargetLayer === "reference") {
       const next = nextDesignerItemNumber(designer.buildAreas, "build_area_");
       const buildArea: DesignerBuildAreaForm = { id: `build_area_${next}`, name: projection.name, ...shape, visible: true, locked: false, opacity: 1 };
-      updateDesigner({ ...designer, buildAreas: [...designer.buildAreas, buildArea] });
+      updateDesigner({
+        ...designer,
+        layers: {
+          ...designer.layers,
+          artwork: { ...designer.layers.artwork, visible: true },
+          reference: { ...designer.layers.reference, visible: true }
+        },
+        buildAreas: [...designer.buildAreas, buildArea]
+      });
     } else if (projectionTargetLayer === "zones") {
       const next = nextDesignerItemNumber(designer.zones, "zone_");
       const zone: DesignerZoneForm = { id: `zone_${next}`, name: projection.name, ...shape, visible: true, locked: false, opacity: 1 };
-      updateDesigner({ ...designer, zones: [...designer.zones, zone] });
+      updateDesigner({
+        ...designer,
+        layers: { ...designer.layers, zones: { ...designer.layers.zones, visible: true } },
+        zones: [...designer.zones, zone]
+      });
     } else {
       const next = nextDesignerItemNumber(designer.faceGraphics, "face_graphic_");
       const element: DesignerFaceGraphicForm = { id: `face_graphic_${next}`, name: projection.name, ...shape, passMode: "translucent", filterColor: "#FFFFFF", visible: true, locked: false, opacity: 1 };
-      updateDesigner({ ...designer, faceGraphics: [...designer.faceGraphics, element] });
+      updateDesigner({
+        ...designer,
+        layers: { ...designer.layers, faceGraphic: { ...designer.layers.faceGraphic, visible: true } },
+        faceGraphics: [...designer.faceGraphics, element]
+      });
     }
-    setFabricationNotice(`Independent projection created in ${projectionTargetLayer === "faceGraphic" ? "Face Graphic" : projectionTargetLayer === "zones" ? "Diffusors" : "Reference"}; current layer and selection preserved.`);
+    setFabricationNotice(`Independent projection created in ${projectionTargetLayer === "faceGraphic" ? "Face Graphic" : projectionTargetLayer === "zones" ? "Diffusors" : "Reference"}; source layer and selection preserved.`);
   }
 
   function groupSelectedGeometry() {
@@ -2079,16 +2491,6 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
       channels: designer.channels.map((channel) => (channel.id === channelId ? { ...channel, ...patch } : channel))
     });
     if (patch.id && patch.id !== channelId) setSelection({ type: "channel", id: patch.id });
-  }
-
-  function setChannelRouterDiameter(channelId: string, diameterMm: number) {
-    if (designer.layers.zones.locked) return;
-    const widthMm = channelWidthForRouterDiameter(diameterMm);
-    updateDesigner({
-      ...designer,
-      channelRouterDiameterMm: widthMm,
-      channels: designer.channels.map((channel) => channel.id === channelId ? { ...channel, widthMm } : channel)
-    });
   }
 
   function removeChannel(channelId: string) {
@@ -2326,6 +2728,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
     if (!route || route.points.length <= 2 || pointIndex <= 0 || pointIndex >= route.points.length - 1) return;
     patchRoute(routeId, { points: route.points.filter((_, index) => index !== pointIndex) });
     setSelection({ type: "route", id: routeId });
+    setFabricationNotice("String node deleted.");
   }
 
   function splitRoute(routeId: string, pointIndex: number) {
@@ -2367,16 +2770,18 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
   }
 
   function autoSolderRoutePoint(routeId: string, pointIndex: number, finalPoint?: DesignerPoint, allowSolder = false) {
-    const routes = finalPoint ? moveRoutePoint(designer.routes, routeId, pointIndex, finalPoint) : designer.routes;
+    const routes = finalPoint ? moveRoutePointWithRetraction(designer.routes, routeId, pointIndex, finalPoint, 0.02) : designer.routes;
     const route = routes.find((entry) => entry.id === routeId);
-    if (!route || !isRouteTerminal(route, pointIndex)) {
+    const effectivePointIndex = route && pointIndex !== 0 ? Math.min(pointIndex, route.points.length - 1) : pointIndex;
+    if (!route || !isRouteTerminal(route, effectivePointIndex)) {
       return;
     }
     if (!allowSolder) {
       if (finalPoint) updateDesigner({ ...designer, routes });
+      setSelection({ type: "route", id: routeId, pointIndex: effectivePointIndex });
       return;
     }
-    const controllerPort = findMatchingControllerPort(designer.controller, routes, routeId, pointIndex, designer.snapCm);
+    const controllerPort = findMatchingControllerPort(designer.controller, routes, routeId, effectivePointIndex, designer.snapCm);
     if (controllerPort !== null) {
       updateDesigner({
         ...designer,
@@ -2384,7 +2789,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
           entry.id === routeId
             ? {
               ...entry,
-              points: entry.points.map((point, index) => index === pointIndex ? { ...point, joint: true } : point)
+              points: entry.points.map((point, index) => index === effectivePointIndex ? { ...point, joint: true } : point)
             }
             : entry
         ))
@@ -2392,9 +2797,9 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
       setFabricationNotice(`Data cable soldered to controller output ${controllerPort + 1}.`);
       return;
     }
-    const matchingTerminal = findMatchingSolderTerminal(routes, routeId, pointIndex, designer.snapCm);
+    const matchingTerminal = findMatchingSolderTerminal(routes, routeId, effectivePointIndex, designer.snapCm);
     if (matchingTerminal) {
-      solderRouteTerminals({ routeId, pointIndex }, matchingTerminal, routes);
+      solderRouteTerminals({ routeId, pointIndex: effectivePointIndex }, matchingTerminal, routes);
       return;
     }
     if (finalPoint) updateDesigner({ ...designer, routes });
@@ -2407,6 +2812,50 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
       routes: moveRouteTerminals(designer.routes, terminals, { ...finalPoint, joint: true })
     });
     setFabricationNotice("Soldered joint moved.");
+  }
+
+  function connectSelectedStrings() {
+    if (stringConnectionPlan.reason || !stringConnectionPlan.upstream || !stringConnectionPlan.downstream) return;
+    const upstream = stringConnectionPlan.upstream;
+    const downstream = stringConnectionPlan.downstream;
+    const start = upstream.points[upstream.points.length - 1];
+    const end = downstream.points[0];
+    if (!start || !end) return;
+    const cable = createRouteFromDraft("data_cable", start, end, designer, upstream.designSurface ?? "rear");
+    const middleX = snapValue((start.x + end.x) / 2, designer.snapCm);
+    const cableDraftPoints: DesignerPoint[] = [
+      { ...start, joint: true },
+      { x: middleX, y: start.y },
+      { x: middleX, y: end.y },
+      { ...end, joint: true }
+    ];
+    const cablePoints = cableDraftPoints.reduce<DesignerPoint[]>((points, point) => {
+      const previous = points[points.length - 1];
+      if (previous && previous.x === point.x && previous.y === point.y) {
+        points[points.length - 1] = { ...previous, ...point, joint: previous.joint || point.joint ? true : undefined };
+      }
+      else points.push(point);
+      return points;
+    }, []);
+    const connectedCable = {
+      ...cable,
+      name: `${upstream.name} → ${downstream.name}`,
+      points: cablePoints
+    };
+    updateDesigner({
+      ...designer,
+      routes: [
+        ...designer.routes.map((route) => {
+          if (route.id === upstream.id) return { ...route, points: route.points.map((point, index) => index === route.points.length - 1 ? { ...point, joint: true } : point) };
+          if (route.id === downstream.id) return { ...route, points: route.points.map((point, index) => index === 0 ? { ...point, joint: true } : point) };
+          return route;
+        }),
+        connectedCable
+      ]
+    });
+    setSelectedRouteIds([connectedCable.id]);
+    setSelection({ type: "route", id: connectedCable.id });
+    setFabricationNotice(`${upstream.name} connected to ${downstream.name} on output ${stringConnectionPlan.output}.`);
   }
 
   function solderRouteTerminals(source: DesignerRouteTerminal, target: DesignerRouteTerminal, routeSet = designer.routes) {
@@ -2550,6 +2999,15 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
       setSelection(null);
       return;
     }
+    if (selection.type === "fabrication_path") {
+      const path = designer.fabricationPaths.find((entry) => entry.id === selection.id);
+      const part = path ? designer.fabricationParts.find((entry) => entry.id === path.partId) : null;
+      if (designer.layers.fabrication.locked || path?.locked || part?.locked) return;
+      updateDesigner({ ...designer, fabricationPaths: designer.fabricationPaths.filter((entry) => entry.id !== selection.id) });
+      setSelection(null);
+      setFabricationNotice("Fabrication path deleted.");
+      return;
+    }
     if (selection.type === "projection") {
       const projection = designer.projections.find((entry) => entry.id === selection.id);
       const layerKey = projection?.targetLayer === "reference" ? "artwork" : projection?.targetLayer;
@@ -2593,6 +3051,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
     if (selection.type === "route") {
       updateDesigner(deleteDesignerRoute(designer, selection.id));
       setSelection(null);
+      setSelectedRouteIds([]);
       setFabricationNotice("Electrical route deleted.");
       return;
     }
@@ -2675,15 +3134,30 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
     setViewport(fitViewportToDesigner(designer));
   }
 
-  function compileLayout() {
-    const nextDocument = buildDocumentFromDesigner(normalizeDefaultSignLayout(documentRef.current));
-    replaceDocument(nextDocument);
-    discardRuntimeArtifacts();
-    const layout = nextDocument.compiledLayout;
-    setFabricationNotice(layout?.validation.errors.length
-      ? layout.validation.errors[0]
-      : `Compiled: ${layout?.pixelMap.length ?? 0} mapped pixels across ${layout?.outputs.filter((output) => output.pixelCount > 0).length ?? 0} outputs.`);
-    void save(nextDocument, null);
+  async function compileLayout() {
+    if (compiling || saving) return;
+    const compileStartedAt = performance.now();
+    setCompiling(true);
+    setFabricationNotice("Compiling physical layout…");
+    try {
+      await waitForCompileIndicatorPaint();
+      const nextDocument = buildDocumentFromDesigner(normalizeDefaultSignLayout(documentRef.current));
+      replaceDocument(nextDocument);
+      discardRuntimeArtifacts();
+      const layout = nextDocument.compiledLayout;
+      setFabricationNotice(layout?.validation.errors.length
+        ? layout.validation.errors[0]
+        : `Compiled: ${layout?.pixelMap.length ?? 0} mapped pixels across ${layout?.outputs.filter((output) => output.pixelCount > 0).length ?? 0} outputs.`);
+      await save(nextDocument, null);
+    } catch (error) {
+      setFabricationNotice(error instanceof Error ? `Compile failed: ${error.message}` : "Compile failed.");
+    } finally {
+      const indicatorRemainingMs = MIN_COMPILE_INDICATOR_MS - (performance.now() - compileStartedAt);
+      if (indicatorRemainingMs > 0) {
+        await new Promise<void>((resolve) => setTimeout(resolve, indicatorRemainingMs));
+      }
+      setCompiling(false);
+    }
   }
 
   function openAnimationViewer() {
@@ -2825,7 +3299,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
         ...current,
         designer: {
           ...currentDesigner,
-          lightSources: currentDesigner.lightSources.map((treatment) => treatment.id === treatmentId ? { ...treatment, ...patch } : treatment)
+          lightSources: currentDesigner.lightSources.map((treatment) => treatment.id === treatmentId ? { ...treatment, ...patch, ...(patch.mode ? { stringIds: [] } : {}) } : treatment)
         }
       };
     });
@@ -2835,10 +3309,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
     if (!selectedOpticalTarget || selectedOpticalTreatments.some((treatment) => treatment.mode === mode)) return;
     const treatment = {
       ...createDefaultOpticalTreatment(selectedOpticalTarget.type, selectedOpticalTarget.id, mode),
-      name: `${selectedZone?.name ?? selectedChannel?.name ?? selectedOpticalTarget.id} · ${mode === "front" ? "Front" : mode === "halo" ? "Halo" : "Wall Wash"}`,
-      stringIds: Array.from(new Set((document.compiledLayout?.zones.find((zone) => zone.id === selectedOpticalTarget.id)?.pixelIds ?? [])
-        .map((pixelId) => document.compiledLayout?.pixelMap.find((pixel) => pixel.id === pixelId)?.stringId)
-        .filter((stringId): stringId is string => Boolean(stringId))))
+      name: `${selectedZone?.name ?? selectedChannel?.name ?? selectedOpticalTarget.id} · ${mode === "front" ? "Front" : mode === "halo" ? "Halo" : "Wall Wash"}`
     };
     updateLiveDocument((current) => {
       const currentDesigner = current.designer ?? designer;
@@ -2875,10 +3346,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
             : currentDesigner.channels.find((channel) => channel.id === target.id)?.name;
           const source = {
             ...createDefaultOpticalTreatment(target.type, target.id, mode),
-            name: `${targetName ?? target.id} · ${mode === "front" ? "Front" : mode === "halo" ? "Halo" : "Wall Wash"}`,
-            stringIds: Array.from(new Set((current.compiledLayout?.zones.find((zone) => zone.id === target.id)?.pixelIds ?? [])
-              .map((pixelId) => current.compiledLayout?.pixelMap.find((pixel) => pixel.id === pixelId)?.stringId)
-              .filter((stringId): stringId is string => Boolean(stringId))))
+            name: `${targetName ?? target.id} · ${mode === "front" ? "Front" : mode === "halo" ? "Halo" : "Wall Wash"}`
           };
           lightSources.push(source);
         });
@@ -2954,6 +3422,120 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
     && !(selection?.type === "light_source" && designer.layers.lightSources.locked)
     && !(selection?.type === "route" && designer.layers.strings.locked);
   const selectedArtworkCanCreateZones = Boolean(selectedArtwork && selectedArtworkAsset && (selectedArtworkAsset.mimeType.toLowerCase().includes("svg") || selectedArtworkAsset.fileName.toLowerCase().endsWith(".svg")));
+  function changeConstructionSide(view: DesignerRouteSurfaceView) {
+    setRouteSurfaceView(view);
+    if (view !== "both") {
+      setRouteCreationSurface(view);
+      setChannelCreationSurface(view);
+    }
+    if (view !== "both" && selectedChannel && (selectedChannel.fabricationSurface ?? "front") !== view) {
+      setSelection(null);
+      setGeometrySelections([]);
+      setMarqueeChannelIds([]);
+    }
+    if (view !== "both" && selectedRoute && (selectedRoute.designSurface ?? "rear") !== view) setSelection(null);
+  }
+
+  function focusCompileIssueTarget(target: DesignerCompileIssueTarget) {
+    const route = target.type === "route" ? designer.routes.find((entry) => entry.id === target.id) : null;
+    const zone = target.type === "zone" ? designer.zones.find((entry) => entry.id === target.id) : null;
+    const channel = target.type === "channel" ? designer.channels.find((entry) => entry.id === target.id) : null;
+    const controller = target.type === "controller" ? designer.controller : null;
+    if (!route && !zone && !channel && !controller) return;
+
+    setCompileIssuesOpen(false);
+    setEditorMode("design");
+    setTool("select");
+    if (route) changeConstructionSide(route.designSurface === "front" ? "front" : "rear");
+    if (channel) changeConstructionSide(channel.fabricationSurface === "rear" ? "rear" : "front");
+    const nextSelection: DesignerSelection = route
+      ? { type: "route", id: route.id }
+      : zone
+        ? { type: "zone", id: zone.id }
+        : channel
+          ? { type: "channel", id: channel.id }
+          : { type: "controller", id: designer.controller.id };
+    selectDesignerItem(nextSelection);
+    if (target.action === "lighting_setup" && (zone || channel)) setLightingEditorOpen(true);
+
+    const bounds = route
+      ? routeBounds([route])
+      : zone
+        ? { minX: zone.x, minY: zone.y, maxX: zone.x + zone.width, maxY: zone.y + zone.height }
+        : channel
+          ? routeBounds([{ id: channel.id, name: channel.name, kind: "data_cable", points: channel.points }])
+          : controller
+            ? { minX: controller.x, minY: controller.y, maxX: controller.x + controller.width, maxY: controller.y + controller.height }
+            : null;
+    if (!bounds) return;
+    const objectWidth = Math.max(1, bounds.maxX - bounds.minX);
+    const objectHeight = Math.max(1, bounds.maxY - bounds.minY);
+    const padding = Math.max(3, Math.max(objectWidth, objectHeight) * 0.18);
+    const aspect = Math.max(0.1, activeViewport.width / activeViewport.height);
+    const width = Math.max(Math.min(activeViewport.width, 45), objectWidth + padding * 2, (objectHeight + padding * 2) * aspect);
+    const height = width / aspect;
+    setViewport(clampViewport({
+      x: (bounds.minX + bounds.maxX) / 2 - width / 2,
+      y: (bounds.minY + bounds.maxY) / 2 - height / 2,
+      width,
+      height
+    }, designer));
+  }
+
+  function compileIssueTargetIcon(target: DesignerCompileIssueTarget) {
+    if (target.type === "route") {
+      const route = designer.routes.find((entry) => entry.id === target.id);
+      return route?.kind === "data_cable" ? <Cable className="h-3.5 w-3.5" /> : <Waypoints className="h-3.5 w-3.5" />;
+    }
+    if (target.type === "zone") return <CircleDot className="h-3.5 w-3.5" />;
+    if (target.type === "channel") return <Waves className="h-3.5 w-3.5" />;
+    return <Cpu className="h-3.5 w-3.5" />;
+  }
+
+  function compileIssueTargetTone(target: DesignerCompileIssueTarget) {
+    if (target.type === "route") {
+      const route = designer.routes.find((entry) => entry.id === target.id);
+      return route?.kind === "data_cable"
+        ? "!border-emerald-500 !bg-emerald-100 !text-emerald-800 dark:!bg-emerald-950/40 dark:!text-emerald-300"
+        : "!border-amber-500 !bg-amber-100 !text-amber-900 dark:!bg-amber-950/40 dark:!text-amber-300";
+    }
+    if (target.type === "zone") return "!border-sky-500 !bg-sky-100 !text-sky-800 dark:!bg-sky-950/40 dark:!text-sky-300";
+    if (target.type === "channel") return "!border-amber-500 !bg-amber-100 !text-amber-900 dark:!bg-amber-950/40 dark:!text-amber-300";
+    return "!border-slate-400 !bg-slate-100 !text-slate-700 dark:!bg-slate-900/50 dark:!text-slate-300";
+  }
+
+  function compileIssueLightingHostEditor(issue: DesignerCompileIssue) {
+    if (!issue.id.includes("shared-pixels:")) return null;
+    const routeTarget = issue.targets.find((target) => target.type === "route");
+    const route = routeTarget ? designer.routes.find((entry) => entry.id === routeTarget.id && entry.kind === "led_string") : null;
+    if (!route) return null;
+    const candidates = issue.targets
+      .filter((target): target is DesignerCompileIssueTarget & { type: "zone" | "channel" } => target.type === "zone" || target.type === "channel")
+      .filter((target, index, entries) => entries.findIndex((entry) => entry.type === target.type && entry.id === target.id) === index);
+    if (candidates.length < 2) return null;
+    const value = route.lightingHost ? `${route.lightingHost.type}:${route.lightingHost.id}` : "auto";
+    const currentHostIsCandidate = !route.lightingHost || candidates.some((target) => target.type === route.lightingHost?.type && target.id === route.lightingHost?.id);
+    return (
+      <label className="mt-3 grid gap-1.5 rounded-md border border-amber-500/35 bg-card/80 p-2 text-xs font-semibold text-foreground">
+        <span>Lighting host for {route.name}</span>
+        <select className="h-9 rounded-md border border-input bg-card px-3 text-sm font-normal text-foreground" value={value} onChange={(event) => {
+          if (event.target.value === "auto") {
+            patchRoute(route.id, { lightingHost: undefined });
+            return;
+          }
+          const separator = event.target.value.indexOf(":");
+          const type = event.target.value.slice(0, separator);
+          const id = event.target.value.slice(separator + 1);
+          if ((type === "zone" || type === "channel") && id) patchRoute(route.id, { lightingHost: { type, id } });
+        }}>
+          <option value="auto">Auto · geometry</option>
+          {!currentHostIsCandidate ? <option value={value}>Current · {route.lightingHost?.id}</option> : null}
+          {candidates.map((target) => <option key={`${target.type}:${target.id}`} value={`${target.type}:${target.id}`}>{target.type === "zone" ? "Zone" : "Channel"} · {target.label}</option>)}
+        </select>
+        <span className="font-normal text-muted-foreground">Choose the physical owner of this string, then Compile again.</span>
+      </label>
+    );
+  }
 
   return (
     <div className="flex h-screen w-screen flex-col overflow-hidden bg-background text-foreground">
@@ -2981,14 +3563,22 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
         <div className="h-7 w-px shrink-0 bg-border" />
         {editorMode === "design" ? (
           <>
-            <details ref={setupDetailsRef} className="group relative shrink-0">
+            <details ref={setupDetailsRef} className="group relative shrink-0" onToggle={(event) => {
+              if (event.currentTarget.open) {
+                setLedStripSetupDraft(ledStripSetupDraftFromDesigner(designer));
+                setSelectedLedStripProfileId(designer.stripConfiguration?.sourceProfileId ?? "");
+              } else {
+                setLedStripSetupDraft(null);
+                setSelectedLedStripProfileId(designer.stripConfiguration?.sourceProfileId ?? "");
+              }
+            }}>
               <summary className="flex h-8 cursor-pointer list-none items-center gap-1.5 rounded-md border border-input bg-card px-2 text-body-sm hover:bg-surface-hover [&::-webkit-details-marker]:hidden">
                 <Settings2 className="h-4 w-4" /> Setup
               </summary>
-              <div className="absolute left-0 top-10 z-50 w-72 space-y-3 rounded-lg border border-border-2 bg-card p-3 shadow-xl">
+              <div className="absolute left-0 top-10 z-50 max-h-[calc(100vh-5rem)] w-[560px] max-w-[calc(100vw-2rem)] space-y-3 overflow-x-hidden overflow-y-auto rounded-lg border border-border-2 bg-card p-4 shadow-xl">
                 <div className="flex items-center justify-between gap-2">
                   <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Canvas</div>
-                  <Button type="button" variant="ghost" className="h-7 w-7 px-0" title="Close Setup" aria-label="Close Setup" onClick={() => { if (setupDetailsRef.current) setupDetailsRef.current.open = false; }}>
+                  <Button type="button" variant="ghost" className="h-7 w-7 px-0" title="Close Setup" aria-label="Close Setup" onClick={cancelLedStripSetupDraft}>
                     <X className="h-4 w-4" />
                   </Button>
                 </div>
@@ -3027,35 +3617,86 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
                   </>
                 ) : null}
                 <div className="border-t border-border pt-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">CNC fabrication</div>
-                <ToolbarNumber label="Hole diameter" value={designer.holeDiameterMm} suffix="mm" onChange={(holeDiameterMm) => patchDesigner({ holeDiameterMm: Math.max(0.001, holeDiameterMm) })} />
-                <ToolbarField label="Router bit preset">
-                  <select className="h-8 rounded-md border border-input bg-card px-2 text-body-sm" value={fabricationCutterPreset ? String(fabricationCutterPreset) : "custom"} onChange={(event) => {
-                    if (event.target.value !== "custom") patchDesigner({ fabricationCutterDiameterMm: Number(event.target.value) });
-                  }}>
-                    <option value="1.5">Ø1.5 mm</option>
-                    <option value="2">Ø2 mm</option>
-                    <option value="3">Ø3 mm</option>
-                    <option value="3.175">Ø3.175 mm · 1/8 in</option>
-                    <option value="4">Ø4 mm</option>
-                    <option value="6">Ø6 mm</option>
-                    <option value="6.35">Ø6.35 mm · 1/4 in</option>
-                    <option value="custom">Custom</option>
-                  </select>
-                </ToolbarField>
-                <div className="flex items-center gap-3">
-                  <ToolbarNumber label="Router bit diameter" value={cutterDiameterForDisplay(designer.fabricationCutterDiameterMm, designer.fabricationCutterUnit)} suffix={designer.fabricationCutterUnit} onChange={(value) => patchDesigner({ fabricationCutterDiameterMm: Math.max(0.001, cutterDiameterFromDisplay(value, designer.fabricationCutterUnit)) })} />
-                  <ToolbarField label="Router bit unit">
-                    <select className="h-8 rounded-md border border-input bg-card px-2 text-body-sm" value={designer.fabricationCutterUnit} onChange={(event) => patchDesigner({ fabricationCutterUnit: event.target.value as DesignerForm["fabricationCutterUnit"] })}>
+                <div className="grid grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)] items-center gap-3">
+                  <ToolbarField label="Router bit preset" className="min-w-0">
+                    <select className="h-8 min-w-0 flex-1 rounded-md border border-input bg-card px-2 text-body-sm" value={fabricationCutterPreset ? String(fabricationCutterPreset) : "custom"} onChange={(event) => {
+                      if (event.target.value !== "custom") patchDesigner({ fabricationCutterDiameterMm: Number(event.target.value) });
+                    }}>
+                      <option value="1.5">Ø1.5 mm</option>
+                      <option value="2">Ø2 mm</option>
+                      <option value="3">Ø3 mm</option>
+                      <option value="3.175">Ø3.175 mm · 1/8 in</option>
+                      <option value="4">Ø4 mm</option>
+                      <option value="6">Ø6 mm</option>
+                      <option value="6.35">Ø6.35 mm · 1/4 in</option>
+                      <option value="custom">Custom</option>
+                    </select>
+                  </ToolbarField>
+                  <ToolbarField label="Router bit unit" className="min-w-0 justify-end">
+                    <select className="h-8 min-w-0 rounded-md border border-input bg-card px-2 text-body-sm" value={designer.fabricationCutterUnit} onChange={(event) => patchDesigner({ fabricationCutterUnit: event.target.value as DesignerForm["fabricationCutterUnit"] })}>
                       <option value="mm">mm</option>
                       <option value="in">inches</option>
                       <option value="cm">cm</option>
                     </select>
                   </ToolbarField>
                 </div>
+                <div className="grid grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)] items-center gap-3">
+                  <ToolbarNumber label="Router bit diameter" value={cutterDiameterForDisplay(designer.fabricationCutterDiameterMm, designer.fabricationCutterUnit)} suffix={designer.fabricationCutterUnit} onChange={(value) => patchDesigner({ fabricationCutterDiameterMm: Math.max(0.001, cutterDiameterFromDisplay(value, designer.fabricationCutterUnit)) })} />
+                  <ToolbarNumber label="Hole diameter" value={designer.holeDiameterMm} suffix="mm" onChange={(holeDiameterMm) => patchDesigner({ holeDiameterMm: Math.max(0.001, holeDiameterMm) })} />
+                </div>
+                <ToolbarField label="Channel router bit">
+                  <select className="h-8 min-w-0 flex-1 rounded-md border border-input bg-card px-2 text-body-sm" value={channelRouterPreset ? String(channelRouterPreset.diameterMm) : "current"} onChange={(event) => {
+                    if (event.target.value !== "current") patchDesigner({ channelRouterDiameterMm: channelWidthForRouterDiameter(Number(event.target.value)) });
+                  }}>
+                    {!channelRouterPreset ? <option value="current">Current · {designer.channelRouterDiameterMm} mm · {(designer.channelRouterDiameterMm / 25.4).toFixed(3)} in</option> : null}
+                    {CHANNEL_ROUTER_BIT_PRESETS.map((preset) => <option key={preset.diameterMm} value={preset.diameterMm}>Ø {preset.label}</option>)}
+                  </select>
+                </ToolbarField>
                 <div className="border-t border-border pt-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">LED layout</div>
-                <div className="flex items-center gap-3">
-                  <ToolbarNumber label="Pixels/m" value={designer.addressablePixelsPerMeter} onChange={(addressablePixelsPerMeter) => patchDesigner({ addressablePixelsPerMeter, ledDensityPerMeter: addressablePixelsPerMeter })} />
-                  <ToolbarNumber label="LEDs/m" value={designer.ledsPerMeter} onChange={(ledsPerMeter) => patchDesigner({ ledsPerMeter })} />
+                <p className="text-meta text-muted-foreground">Changes in this section preview live on the canvas. Apply them to update the partitura.</p>
+                <div className="flex items-end gap-2">
+                  <ToolbarField label="Strip preset" className="min-w-0 flex-1">
+                    <select className="h-8 min-w-0 flex-1 rounded-md border border-input bg-card px-2 text-body-sm" value={selectedLedStripProfileId} onChange={(event) => previewSelectedLedStripProfile(event.target.value)}>
+                      <option value="">Custom / current values</option>
+                      {ledStripProfiles.length ? null : <option value="catalog-unavailable" disabled>Catalog unavailable</option>}
+                      {ledStripProfiles.map((profile) => <option key={profile.id} value={profile.id}>{profile.name}</option>)}
+                    </select>
+                  </ToolbarField>
+                </div>
+                <p className="text-meta text-muted-foreground">
+                  Preview: {ledStripPreviewDesigner.stripConfiguration?.name ?? "Custom LED strip"}
+                  {ledStripPreviewDesigner.stripConfiguration?.construction === "continuous"
+                    ? ledStripPreviewDesigner.stripConfiguration.cutMode === "free_cut"
+                      ? " · Free cut"
+                      : ` · ${formatDecimal(ledStripPreviewDesigner.stripConfiguration.cutSegmentLengthMm ?? 100)} mm per cut`
+                    : ` · ${formatDecimal(ledStripPreviewDesigner.stripConfiguration?.physicalLedsPerCutSegment ?? 1)} LEDs per cut`}
+                </p>
+                <div className="grid grid-cols-2 items-center gap-3">
+                  <ToolbarNumber label="Pixels/m" value={ledStripPreviewDesigner.addressablePixelsPerMeter} onChange={(addressablePixelsPerMeter) => patchCustomLedStripConfiguration({ addressablePixelsPerMeter })} />
+                  <ToolbarNumber label="LEDs/m" value={ledStripPreviewDesigner.ledsPerMeter} onChange={(physicalLedsPerMeter) => patchCustomLedStripConfiguration({ physicalLedsPerMeter })} />
+                </div>
+                {ledStripPreviewDesigner.stripConfiguration?.construction === "continuous" ? <div className="grid grid-cols-2 items-center gap-3">
+                  <ToolbarField label="Cut mode">
+                    <select className="h-8 min-w-0 rounded-md border border-input bg-card px-2 text-body-sm" value={ledStripPreviewDesigner.stripConfiguration.cutMode} onChange={(event) => patchCustomLedStripConfiguration({ cutMode: event.target.value === "free_cut" ? "free_cut" : "marked_segments" })}>
+                      <option value="marked_segments">Marked segments</option>
+                      <option value="free_cut">Free cut</option>
+                    </select>
+                  </ToolbarField>
+                  <ToolbarNumber label="Voltage" value={ledStripPreviewDesigner.stripConfiguration?.voltageV ?? 5} suffix="V" onChange={(voltageV) => patchCustomLedStripConfiguration({ voltageV: Math.max(0.1, voltageV) })} />
+                </div> : <div className="grid grid-cols-2 items-center gap-3">
+                  <ToolbarNumber label="LEDs / pixel" value={ledStripPreviewDesigner.stripConfiguration?.physicalLedsPerAddressablePixel ?? 1} onChange={(physicalLedsPerAddressablePixel) => patchCustomLedStripConfiguration({ physicalLedsPerAddressablePixel: Math.max(0.1, physicalLedsPerAddressablePixel) })} />
+                  <ToolbarNumber label="LEDs / cut" value={ledStripPreviewDesigner.stripConfiguration?.physicalLedsPerCutSegment ?? 1} onChange={(physicalLedsPerCutSegment) => patchCustomLedStripConfiguration({ physicalLedsPerCutSegment: Math.max(0.1, physicalLedsPerCutSegment) })} />
+                </div>}
+                {ledStripPreviewDesigner.stripConfiguration?.construction !== "continuous" ? <ToolbarNumber label="Voltage" value={ledStripPreviewDesigner.stripConfiguration?.voltageV ?? 5} suffix="V" onChange={(voltageV) => patchCustomLedStripConfiguration({ voltageV: Math.max(0.1, voltageV) })} /> : null}
+                {stripConsistencyNotice ? <p className="text-meta text-amber-700 dark:text-amber-300">{stripConsistencyNotice}</p> : null}
+                {ledStripPreviewDesigner.stripConfiguration?.construction === "continuous" && ledStripPreviewDesigner.stripConfiguration.cutMode !== "free_cut" ? <ToolbarNumber label="Cut segment" value={ledStripPreviewDesigner.stripConfiguration.cutSegmentLengthMm ?? 100} suffix="mm" onChange={(cutSegmentLengthMm) => patchCustomLedStripConfiguration({ cutSegmentLengthMm: Math.max(0.1, cutSegmentLengthMm) })} /> : null}
+                <div className="grid grid-cols-2 items-center gap-3">
+                  <ToolbarNumber label="LED package" value={ledStripPreviewDesigner.ledPackageSizeMm} suffix="mm" onChange={(ledPackageSizeMm) => patchCustomLedStripConfiguration({ ledPackageSizeMm: Math.max(0.1, ledPackageSizeMm) })} />
+                  <ToolbarNumber label="PCB width" value={ledStripPreviewDesigner.ledPcbWidthMm} suffix="mm" onChange={(pcbWidthMm) => patchCustomLedStripConfiguration({ pcbWidthMm: Math.max(0.1, pcbWidthMm) })} />
+                </div>
+                <div className="flex justify-end gap-2 border-t border-border pt-3">
+                  <Button type="button" variant="outline" density="compact" onClick={cancelLedStripSetupDraft}>Cancel</Button>
+                  <Button type="button" density="compact" disabled={!ledStripSetupDirty} onClick={applyLedStripSetupDraft}>Apply changes</Button>
                 </div>
               </div>
             </details>
@@ -3093,15 +3734,20 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
               />
               <span>Face mask</span>
             </label>
-            <label className="flex h-8 cursor-pointer items-center gap-2 rounded-md border border-border-2 bg-card px-2 text-body-sm font-medium text-ink-secondary hover:border-border-strong hover:bg-surface-hover hover:text-foreground" title="Show or hide zone and channel outlines">
-              <input
-                type="checkbox"
-                checked={diffuserSettings.showOutlines}
-                onChange={(event) => setDiffuserSettings((current) => ({ ...current, showOutlines: event.target.checked }))}
-                className="h-4 w-4 cursor-pointer accent-blue-600"
-              />
-              <span>Outlines</span>
-            </label>
+            <ToolbarField label="Outlines">
+              <select
+                className="h-8 rounded-md border border-input bg-card px-2 text-body-sm"
+                value={diffuserSettings.outlineMode}
+                title="Choose which zone and channel outlines are shown"
+                onChange={(event) => setDiffuserSettings((current) => ({ ...current, outlineMode: event.target.value as DiffuserRenderSettings["outlineMode"] }))}
+              >
+                <option value="all">All</option>
+                <option value="active">Active sources</option>
+                <option value="zones">Zones</option>
+                <option value="channels">Channels</option>
+                <option value="none">None</option>
+              </select>
+            </ToolbarField>
             <Button type="button" variant="outline" density="compact" className="px-2" title="Open fullscreen viewer" onClick={openAnimationViewer}>
               <Maximize2 className="h-4 w-4" /> <span className="hidden xl:inline">Viewer</span>
             </Button>
@@ -3114,13 +3760,18 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
           </>
         )}
 
-        <div className="ml-auto flex min-w-0 shrink items-center gap-1.5">
-          <Badge className={`hidden shrink-0 xl:inline-flex ${compileIsCurrent ? (compileErrors.length ? "border border-destructive/50 bg-destructive/10 text-destructive" : "border border-emerald-500/50 bg-emerald-500/10 text-emerald-700 dark:text-emerald-300") : "border border-amber-500/50 bg-amber-500/10 text-amber-800 dark:text-amber-200"}`}>
-            {compileIsCurrent ? (compileErrors.length ? `${compileErrors.length} errors` : `${document.compiledLayout?.pixelMap.length ?? 0} px`) : "Compile required"}
-          </Badge>
+        <div className="ml-auto flex min-w-0 shrink items-center gap-1.5" aria-live="polite">
           {compileIsCurrent && compileIssueCount ? (
-            <Button type="button" variant="outline" density="compact" className="px-2" title={`${compileIssueCount} compile issues`} onClick={() => setCompileIssuesOpen(true)}>
-              <AlertCircle className="h-4 w-4" /> {compileIssueCount}
+            <Button
+              type="button"
+              variant="outline"
+              density="compact"
+              className={`px-2 ${compileErrors.length ? "border-destructive/50 bg-destructive/10 text-destructive hover:bg-destructive/20" : "border-amber-500/50 bg-amber-500/10 text-amber-800 hover:bg-amber-500/20 dark:text-amber-200"}`}
+              title={`Review ${compileIssueCount} compile ${compileIssueCount === 1 ? "issue" : "issues"}`}
+              aria-label={`Review ${compileIssueCount} compile ${compileIssueCount === 1 ? "issue" : "issues"}`}
+              onClick={() => setCompileIssuesOpen(true)}
+            >
+              <AlertCircle className="h-4 w-4" /> Review issues ({compileIssueCount})
             </Button>
           ) : null}
           <span className="hidden max-w-[160px] truncate text-meta text-muted-foreground 2xl:inline" title={fabricationNotice}>{fabricationNotice}</span>
@@ -3131,14 +3782,26 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
           <Button type="button" variant="outline" density="compact" className="px-2" title="Redo (Ctrl/Cmd+Shift+Z or Ctrl+Y)" aria-label="Redo" disabled={!redoHistoryRef.current.length} onClick={redoDesignerChange}>
             <Redo2 className="h-4 w-4" />
           </Button>
-          <Button type="button" variant="outline" density="compact" className={`px-2 ${compileIsCurrent ? "text-muted-foreground" : "border-amber-500 bg-amber-500 text-slate-950 hover:border-amber-400 hover:bg-amber-400 hover:text-slate-950"}`} onClick={compileLayout} disabled={saving || compileIsCurrent} title={compileIsCurrent ? "Layout is compiled and current" : "Compile pending Designer changes"} aria-label={compileIsCurrent ? "Layout compiled" : "Compile pending Designer changes"}>
-            <Hammer className="h-4 w-4" /> <span className="hidden xl:inline">{compileIsCurrent ? "Compiled" : "Compile"}</span>
+          <Button type="button" variant="outline" density="compact" className={`px-2 ${compileIsCurrent && !compiling ? "text-muted-foreground" : "border-amber-500 bg-amber-500 text-slate-950 hover:border-amber-400 hover:bg-amber-400 hover:text-slate-950"}`} onClick={() => void compileLayout()} disabled={compiling || saving || compileIsCurrent} title={compileControlLabel} aria-label={compileControlLabel} aria-busy={compiling}>
+            {compiling ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Hammer className="h-4 w-4" />} <span>{compileControlLabel}</span>
           </Button>
-          <Button type="button" variant="outline" density="compact" className={`px-2 ${hasUnsavedChanges ? "border-amber-500 bg-amber-500 text-slate-950 hover:border-amber-400 hover:bg-amber-400 hover:text-slate-950" : "text-muted-foreground"}`} onClick={() => void save()} disabled={saving || !hasUnsavedChanges} title={saving ? "Saving changes" : hasUnsavedChanges ? "Save pending changes" : "All changes are saved"} aria-label={saving ? "Saving changes" : hasUnsavedChanges ? "Save pending changes" : "All changes are saved"}>
+          <Button type="button" variant="outline" density="compact" className={`px-2 ${hasUnsavedChanges ? "border-amber-500 bg-amber-500 text-slate-950 hover:border-amber-400 hover:bg-amber-400 hover:text-slate-950" : "text-muted-foreground"}`} onClick={() => void save()} disabled={compiling || saving || !hasUnsavedChanges} title={saving ? "Saving changes" : hasUnsavedChanges ? "Save pending changes" : "All changes are saved"} aria-label={saving ? "Saving changes" : hasUnsavedChanges ? "Save pending changes" : "All changes are saved"}>
             <Save className="h-4 w-4" /> <span className="hidden xl:inline">{saving ? "Saving" : "Save"}</span>
           </Button>
         </div>
       </header>
+
+      {compiling ? (
+        <div
+          className="fixed right-4 top-14 z-[100] flex items-center gap-2 rounded-md border border-amber-400 bg-amber-400 px-4 py-2 text-sm font-semibold text-slate-950 shadow-xl"
+          role="status"
+          aria-live="assertive"
+          aria-label="Compiling physical layout"
+        >
+          <LoaderCircle className="h-4 w-4 animate-spin" />
+          Compiling physical layout…
+        </div>
+      ) : null}
 
       {editorMode === "design" ? <div className="flex h-10 shrink-0 items-center border-b border-border-2 bg-surface-2 px-3 whitespace-nowrap">
         <div className="min-w-0 flex-1 overflow-x-auto">
@@ -3165,27 +3828,36 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
         ) : null}
         {editorMode === "design" && nodeCreationToolActive && tool === "channel_bezier" ? (
           <>
+            <ToolbarField label="Create on">
+              <select className="h-8 rounded-md border border-input bg-card px-2 text-body-sm disabled:cursor-not-allowed disabled:opacity-60" value={channelCreationSurface} disabled={routeSurfaceView !== "both"} onChange={(event) => setChannelCreationSurface(event.target.value === "rear" ? "rear" : "front")}>
+                <option value="front">Front</option>
+                <option value="rear">Rear</option>
+              </select>
+            </ToolbarField>
             <ToolbarField label="From path">
               <select className="h-8 rounded-md border border-input bg-card px-2 text-body-sm" value={channelPathAlignment} onChange={(event) => setChannelPathAlignment(event.target.value as ChannelPathAlignment)}>
                 <option value="left">Left edge</option>
                 <option value="center">Center</option>
                 <option value="right">Right edge</option>
+                <option value="inside">Inside offset</option>
+                <option value="outside">Outside offset</option>
               </select>
             </ToolbarField>
-            <ToolbarField label="Router bit Ø">
-              <select className="h-8 rounded-md border border-input bg-card px-2 text-body-sm" value={channelRouterPreset ? String(channelRouterPreset.diameterMm) : "current"} onChange={(event) => {
-                if (event.target.value !== "current") patchDesigner({ channelRouterDiameterMm: channelWidthForRouterDiameter(Number(event.target.value)) });
-              }}>
-                {!channelRouterPreset ? <option value="current">Current · {designer.channelRouterDiameterMm} mm · {(designer.channelRouterDiameterMm / 25.4).toFixed(3)} in</option> : null}
-                {CHANNEL_ROUTER_BIT_PRESETS.map((preset) => <option key={preset.diameterMm} value={preset.diameterMm}>Ø {preset.label}</option>)}
-              </select>
-            </ToolbarField>
+            {channelPathAlignment === "inside" || channelPathAlignment === "outside" ? <ToolbarNumber label="Offset" value={channelPathOffsetMm} suffix="mm" onChange={(value) => setChannelPathOffsetMm(Math.max(0, value))} /> : null}
             <Button type="button" variant="outline" density="compact" disabled={!geometrySelections.length || designer.layers.zones.locked} title={geometrySelections.length ? "Create one Channel per non-branching connected chain" : "Select one or more source paths before activating Channel"} onClick={createChannelsFromSelectedGeometry}>
               <Waves className="h-4 w-4" /> Generate Channel
             </Button>
           </>
         ) : null}
-        {!hasMultipleGeometrySelection ? <>
+        {editorMode === "design" && activeSelectedRouteIds.length === 2 && selectedLedStringIds.length === 2 ? (
+          <>
+            <Badge>2 strings</Badge>
+            <Button type="button" variant="outline" density="compact" disabled={Boolean(stringConnectionPlan.reason) || designer.layers.strings.locked} title={stringConnectionPlan.reason ?? `Connect output ${stringConnectionPlan.output} with a soldered data cable`} onClick={connectSelectedStrings}>
+              <Cable className="h-4 w-4" /> Connect strings
+            </Button>
+          </>
+        ) : null}
+        {!hasMultipleCanvasSelection ? <>
         <fieldset disabled={editorMode === "design" && selectedObjectLocked} className="contents">
         {editorMode === "design" && selectedWorkLine ? (
           <>
@@ -3249,6 +3921,21 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
               </>
             ) : null}
           </>
+        ) : editorMode === "design" && selectedFabricationPath ? (
+          <>
+            <Badge>Fabrication Path</Badge>
+            <ToolbarField label="Part">
+              <select className="h-8 max-w-48 rounded-md border border-input bg-card px-2 text-body-sm" value={selectedFabricationPath.partId} onChange={(event) => patchFabricationPath(selectedFabricationPath.id, { partId: event.target.value })}>
+                {designer.fabricationParts.map((part) => <option key={part.id} value={part.id}>{part.name}</option>)}
+              </select>
+            </ToolbarField>
+            <ToolbarField label="Operation">
+              <select className="h-8 rounded-md border border-input bg-card px-2 text-body-sm" value={selectedFabricationPath.operation} onChange={(event) => patchFabricationPath(selectedFabricationPath.id, { operation: event.target.value as DesignerFabricationOperation })}>
+                <option value="cut">Cut</option><option value="pocket">Pocket</option><option value="drill">Drill</option><option value="engrave">Engrave</option><option value="reference">Reference only</option>
+              </select>
+            </ToolbarField>
+            {selectedFabricationPath.operation === "pocket" || selectedFabricationPath.operation === "engrave" ? <ToolbarNumber label="Depth" value={selectedFabricationPath.depthMm ?? 1} suffix="mm" onChange={(depthMm) => patchFabricationPath(selectedFabricationPath.id, { depthMm: Math.max(0, depthMm) })} /> : null}
+          </>
         ) : editorMode === "design" && selectedLightSource ? (
           <>
             <Badge>{selectedLightSource.mode === "front" ? "Front Source" : selectedLightSource.mode === "halo" ? "Halo Source" : "Wall Wash Source"}</Badge>
@@ -3298,26 +3985,9 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
           </>
         ) : editorMode === "design" && selectedChannel ? (
           <>
-            <ToolbarField label="Router bit Ø">
-              <select className="h-8 rounded-md border border-input bg-card px-2 text-body-sm" value={selectedChannelRouterPreset ? String(selectedChannelRouterPreset.diameterMm) : "current"} onChange={(event) => {
-                if (event.target.value !== "current") setChannelRouterDiameter(selectedChannel.id, Number(event.target.value));
-              }}>
-                {!selectedChannelRouterPreset ? <option value="current">Current · {selectedChannel.widthMm} mm · {(selectedChannel.widthMm / 25.4).toFixed(3)} in</option> : null}
-                {CHANNEL_ROUTER_BIT_PRESETS.map((preset) => <option key={preset.diameterMm} value={preset.diameterMm}>Ø {preset.label}</option>)}
-              </select>
-            </ToolbarField>
-            <ToolbarField label="Path">
-              <select className="h-8 rounded-md border border-input bg-card px-2 text-body-sm" value={selectedChannel.closed ? "closed" : "open"} onChange={(event) => patchChannel(selectedChannel.id, { closed: event.target.value === "closed" })}>
-                <option value="open">Open</option>
-                <option value="closed">Closed</option>
-              </select>
-            </ToolbarField>
-            <ToolbarField label="Ends">
-              <select disabled={selectedChannel.closed} className="h-8 rounded-md border border-input bg-card px-2 text-body-sm disabled:cursor-not-allowed disabled:opacity-50" value={selectedChannel.cap} onChange={(event) => patchChannel(selectedChannel.id, { cap: event.target.value as DesignerChannelForm["cap"] })}>
-                <option value="butt">Straight</option>
-                <option value="round">Round</option>
-              </select>
-            </ToolbarField>
+            <Button type="button" variant="outline" density="compact" disabled={designer.layers.strings.locked} title={selectedChannel.closed ? "The selected Channel point becomes the electrical seam" : "Create an independent LED string on this Channel centerline"} onClick={generateLedStringFromSelectedChannel}>
+              <Waypoints className="h-4 w-4" /> Generate LED string
+            </Button>
             {typeof selectedChannelPointIndex === "number" && selectedChannelPoint ? (
               <>
                 <Badge>Point {selectedChannelPointIndex + 1}</Badge>
@@ -3332,6 +4002,27 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
           <ToolbarNumber label="Ports" value={selectedController.dataOutputs} onChange={(dataOutputs) => patchController({ dataOutputs: Math.max(1, Math.round(dataOutputs)) })} />
         ) : editorMode === "design" && selectedRoute ? (
           <>
+            {selectedRoute.kind === "led_string" ? <ToolbarField label="Lighting host">
+              <select className="h-8 max-w-52 rounded-md border border-input bg-card px-2 text-body-sm" value={selectedRouteLightingHostValue} onChange={(event) => {
+                if (event.target.value === "auto") {
+                  patchRoute(selectedRoute.id, { lightingHost: undefined });
+                  return;
+                }
+                const separator = event.target.value.indexOf(":");
+                const type = event.target.value.slice(0, separator);
+                const id = event.target.value.slice(separator + 1);
+                if ((type === "zone" || type === "channel") && id) patchRoute(selectedRoute.id, { lightingHost: { type, id } });
+              }}>
+                <option value="auto">Auto · geometry</option>
+                {!selectedRouteLightingHostExists ? <option value={selectedRouteLightingHostValue}>Missing host · {selectedRoute.lightingHost?.id}</option> : null}
+                <optgroup label="Zones">
+                  {designer.zones.map((zone) => <option key={zone.id} value={`zone:${zone.id}`}>{zone.name}</option>)}
+                </optgroup>
+                <optgroup label="Channels">
+                  {designer.channels.map((channel) => <option key={channel.id} value={`channel:${channel.id}`}>{channel.name}</option>)}
+                </optgroup>
+              </select>
+            </ToolbarField> : null}
             <ToolbarField label="Type">
               <select className="h-8 rounded-md border border-input bg-card px-2 text-body-sm" value={selectedRoute.kind} onChange={(event) => patchRoute(selectedRoute.id, { kind: event.target.value as DesignerRouteKind })}>
                 <option value="led_string">LED string</option>
@@ -3339,7 +4030,13 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
               </select>
             </ToolbarField>
             <ToolbarField label="Surface">
-              <select className="h-8 rounded-md border border-input bg-card px-2 text-body-sm" value={selectedRoute.designSurface ?? "rear"} onChange={(event) => patchRoute(selectedRoute.id, { designSurface: event.target.value === "front" ? "front" : "rear" })}>
+              <select className="h-8 rounded-md border border-input bg-card px-2 text-body-sm" value={selectedRoute.designSurface ?? "rear"} onChange={(event) => {
+                const designSurface = event.target.value === "front" ? "front" : "rear";
+                patchRoute(selectedRoute.id, { designSurface });
+                setRouteSurfaceView(designSurface);
+                setRouteCreationSurface(designSurface);
+                setChannelCreationSurface(designSurface);
+              }}>
                 <option value="rear">Rear</option>
                 <option value="front">Front</option>
               </select>
@@ -3446,17 +4143,33 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
           <>
             <div className="h-6 w-px shrink-0 bg-border" />
             <ToolbarField label="Project to">
-              <select className="h-8 rounded-md border border-input bg-card px-2 text-body-sm" value={projectionTargetLayer} onChange={(event) => setProjectionTargetLayer(event.target.value as DesignerProjectionLayer)}>
-                <option value="faceGraphic">Face Graphic</option><option value="zones">Diffusors</option><option value="reference">Reference</option>
+              <select className="h-8 rounded-md border border-input bg-card px-2 text-body-sm" value={projectionTargetLayer} onChange={(event) => setProjectionTargetLayer(event.target.value as DesignerProjectionLayer | "fabrication")}>
+                <option value="faceGraphic">Face Graphic</option><option value="zones">Diffusors</option><option value="reference">Reference</option><option value="fabrication">Fabrication Plans</option>
               </select>
             </ToolbarField>
+            {projectionTargetLayer === "fabrication" ? (
+              <>
+                <ToolbarField label="Part">
+                  <select className="h-8 max-w-48 rounded-md border border-input bg-card px-2 text-body-sm" value={projectionFabricationPartId} onChange={(event) => setProjectionFabricationPartId(event.target.value)}>
+                    <option value="new">+ New fabrication part</option>
+                    {designer.fabricationParts.map((part) => <option key={part.id} value={part.id}>{part.name}</option>)}
+                  </select>
+                </ToolbarField>
+                {projectionFabricationPartId === "new" ? <ToolbarField label="Name"><input className="h-8 w-44 rounded-md border border-input bg-card px-2 text-body-sm" value={projectionFabricationPartName} onChange={(event) => setProjectionFabricationPartName(event.target.value)} /></ToolbarField> : null}
+                <ToolbarField label="Operation">
+                  <select className="h-8 rounded-md border border-input bg-card px-2 text-body-sm" value={projectionFabricationOperation} onChange={(event) => setProjectionFabricationOperation(event.target.value as DesignerFabricationOperation)}>
+                    <option value="cut">Cut</option><option value="pocket">Pocket</option><option value="drill">Drill</option><option value="engrave">Engrave</option><option value="reference">Reference only</option>
+                  </select>
+                </ToolbarField>
+              </>
+            ) : null}
             <Button type="button" variant="outline" density="compact" onClick={projectSelectedGeometry}><Layers2 className="h-4 w-4" /> Project Geometry</Button>
           </>
         ) : null}
         </> : (
           <>
-            <Badge>{geometrySelections.length} selected</Badge>
-            <div className="flex h-8 items-center overflow-hidden rounded-md border border-border-2 bg-card">
+            <Badge>{selectedCanvasCount} selected</Badge>
+            {marqueeChannelIds.length === 0 ? <div className="flex h-8 items-center overflow-hidden rounded-md border border-border-2 bg-card">
               {selectedVectorGroup ? (
                 <button type="button" className="flex h-8 items-center justify-center gap-1.5 border-r border-border px-2 hover:bg-surface-hover" title="Ungroup · keep every vector unchanged and remove only the authoring group" aria-label="Ungroup selected vectors" onClick={ungroupSelectedGeometry}><Ungroup className="h-4 w-4" /><span>Ungroup</span></button>
               ) : (
@@ -3466,12 +4179,12 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
               <button type="button" className="flex h-8 items-center justify-center gap-1.5 border-r border-border px-2 hover:bg-surface-hover" title="Subtract · remove later selections from the first profile" aria-label="Subtract selected profiles" onClick={() => applyBooleanOperation("subtract")}><BooleanSquaresIcon operation="subtract" className="h-4 w-4" /><span>Subtract</span></button>
               <button type="button" className="flex h-8 items-center justify-center gap-1.5 border-r border-border px-2 hover:bg-surface-hover" title="Intersect · keep only overlapping material" aria-label="Intersect selected profiles" onClick={() => applyBooleanOperation("intersect")}><BooleanSquaresIcon operation="intersect" className="h-4 w-4" /><span>Intersect</span></button>
               <button type="button" className="flex h-8 items-center justify-center gap-1.5 px-2 hover:bg-surface-hover" title="Exclude · keep areas belonging to exactly one profile" aria-label="Exclude selected profiles" onClick={() => applyBooleanOperation("exclude")}><BooleanSquaresIcon operation="exclude" className="h-4 w-4" /><span>Exclude</span></button>
-            </div>
+            </div> : <Badge>Selection includes Channels</Badge>}
           </>
         )}
           </div>
         </div>
-        {!hasMultipleGeometrySelection && (canCopySelection || canDeleteSelection) ? (
+        {!hasMultipleCanvasSelection && (canCopySelection || canDeleteSelection) ? (
           <div className="ml-2 flex shrink-0 items-center gap-1 border-l border-border pl-2">
             {canCopySelection ? <Button type="button" variant="outline" density="compact" title="Copy selected object (Ctrl/Cmd+C)" aria-label="Copy selected object" className="w-8 px-0" onClick={copySelection}><Copy className="h-4 w-4" /></Button> : null}
             {canCopySelection ? <Button type="button" variant="outline" density="compact" title={canPasteSelection ? "Paste copied object (Ctrl/Cmd+V)" : "Paste becomes available after copying a compatible object"} aria-label="Paste copied object" disabled={!canPasteSelection} className="w-8 px-0" onClick={pasteSelection}><ClipboardPaste className="h-4 w-4" /></Button> : null}
@@ -3534,16 +4247,16 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
               <ToolButton active={tool === "face_graphic_bezier"} label="Bezier Face Graphic" icon={Spline} disabled={designer.layers.faceGraphic.locked || !designer.layers.faceGraphic.visible} onClick={() => setTool("face_graphic_bezier")} />
             </>
           ) : null}
-          {!hasMultipleGeometrySelection && (pathTrimAvailable || directFilletAvailable) ? <div className="my-0.5 h-px w-6 shrink-0 bg-border" /> : null}
-          {!hasMultipleGeometrySelection && pathTrimAvailable ? (
+          {!hasMultipleCanvasSelection && (pathTrimAvailable || directFilletAvailable) ? <div className="my-0.5 h-px w-6 shrink-0 bg-border" /> : null}
+          {!hasMultipleCanvasSelection && pathTrimAvailable ? (
             <ToolButton active={tool === "path_trim"} label="Trim selected path" icon={Scissors} disabled={selectedObjectLocked} onClick={() => setTool(tool === "path_trim" ? "select" : "path_trim")} />
           ) : null}
-          {!hasMultipleGeometrySelection && directFilletAvailable ? (
+          {!hasMultipleCanvasSelection && directFilletAvailable ? (
             <ToolButton active={tool === "fillet"} label="Fillet selected path" icon={Radius} disabled={selectedObjectLocked} onClick={toggleDirectFilletTool} />
           ) : null}
           {activeLayer === "strings" ? (
             <>
-              <ToolButton active={tool === "led_string"} label="LED string" icon={Route} tone="amber" disabled={designer.layers.strings.locked || !designer.layers.strings.visible} onClick={() => setTool("led_string")} />
+              <ToolButton active={tool === "led_string"} label="LED string" icon={Waypoints} tone="amber" disabled={designer.layers.strings.locked || !designer.layers.strings.visible} onClick={() => setTool("led_string")} />
               <ToolButton active={tool === "data_cable"} label="Data cable" icon={Cable} tone="green" disabled={designer.layers.strings.locked || !designer.layers.strings.visible} onClick={() => setTool("data_cable")} />
               <ToolButton
                 active={tool === "cut"}
@@ -3595,17 +4308,19 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
           ) : null}
           <div className={editorMode === "animate" ? "min-h-0 flex-1" : "h-full"}>
           {editorMode === "design" ? <DesignerStudioCanvas
-            designer={designer}
+            designer={ledStripPreviewDesigner}
             snapToGrid={snapToGrid}
             faceGraphicVinylPreview={faceGraphicVinylPreview}
             routeSurfaceView={routeSurfaceView}
             routeCreationSurface={routeCreationSurface}
+            channelCreationSurface={channelCreationSurface}
             activeLayer={activeLayer}
             tool={tool}
             onToolChange={setTool}
             moveAxis={moveAxis}
             nodeCreationType={nodeCreationType}
             channelRouterDiameterMm={designer.channelRouterDiameterMm}
+            channelGenerationPreview={channelGenerationPreview}
             viewport={activeViewport}
             artworkUrls={artworkUrls}
             selectedArtworkId={selectedArtwork?.id}
@@ -3617,18 +4332,21 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
             selectedZonePointIndex={selectedZonePointIndex}
             selectedFaceGraphicId={selectedFaceGraphic?.id}
             selectedFaceGraphicPointIndex={selectedFaceGraphicPointIndex}
+            selectedFabricationPathId={selectedFabricationPath?.id}
             selectedProjectionId={selectedProjection?.id}
             selectedDerivedGeometryId={selectedDerivedGeometry?.id}
             selectedTextId={selectedText?.id}
             selectedChannelId={selectedChannel?.id}
             selectedChannelPointIndex={selectedChannelPointIndex}
             selectedRouteId={selectedRoute?.id}
+            selectedRouteIds={activeSelectedRouteIds}
             selectedRoutePointIndex={selectedRoutePointIndex}
             selectedController={Boolean(selectedController)}
             selectedGeometryKeys={selectedGeometryKeys}
             onViewportChange={setViewport}
-            onChange={updateDesigner}
+            onChange={updateDesignerFromCanvas}
             onSelect={selectDesignerItem}
+            onMarqueeSelect={selectDesignerMarqueeItems}
             onInsertBuildAreaPoint={insertBuildAreaPoint}
             onInsertZonePoint={insertZonePoint}
             onInsertFaceGraphicPoint={insertFaceGraphicPoint}
@@ -3665,11 +4383,18 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
             <div className="flex shrink-0 items-start justify-between gap-3 border-b bg-surface-2 px-4 py-3">
               <div>
                 <div className="text-sm font-medium">{selectedAnimationLightSource ? `Calibration · ${clipLightSourceModeLabel(selectedAnimationLightSource.mode)}` : selectedAnimationGlobalMode ? `All ${clipLightSourceModeLabel(selectedAnimationGlobalMode)} clip` : selectedAnimationTargetsFullSign ? "Legacy Full sign clip" : selectedOpticalTargets.length > 1 ? `Calibration · ${selectedOpticalTargets.length} targets` : selectedOpticalTarget ? `Calibration · ${selectedZone?.name ?? selectedChannel?.name}` : "Lighting calibration"}</div>
-                <div className="mt-0.5 text-xs text-muted-foreground">{selectedAnimationLightSource ? `${selectedAnimationLightSource.name} · selected clip source` : selectedAnimationGlobalMode ? `Targets every ${clipLightSourceModeLabel(selectedAnimationGlobalMode)} source and no other lighting mode.` : selectedAnimationTargetsFullSign ? "Ambiguous legacy target; replace it with a source-specific clip." : selectedOpticalTarget ? (selectedOpticalTargets.length > 1 ? "Shared calibration · mixed values remain unchanged" : "Tune existing sources · construction stays in Design") : "Select a zone or channel"}</div>
+                <div className="mt-0.5 text-xs text-muted-foreground">{selectedAnimationLightSource ? `${selectedAnimationLightSource.name} · selected clip source` : selectedAnimationGlobalMode ? `Calibrate the ${selectedOpticalTargets.length} selected ${selectedOpticalTargets.length === 1 ? "target" : "targets"}, or select objects on the canvas to narrow the override.` : selectedAnimationTargetsFullSign ? "Ambiguous legacy target; replace it with a source-specific clip." : selectedOpticalTarget ? (selectedOpticalTargets.length > 1 ? "Shared calibration · mixed values remain unchanged" : "Tune existing sources · construction stays in Design") : "Select a zone or channel"}</div>
               </div>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto p-4">
-              {selectedAnimationGlobalMode || selectedAnimationTargetsFullSign ? <div className="rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">Global clip scope controls animation only. Select a zone to calibrate an individual light source.</div> : selectedAnimationLightSource ? <LightingMountsEditor
+              {selectedAnimationTargetsFullSign ? <div className="rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">This legacy global target does not identify a lighting mode. Replace it with All Front, All Halo-Lit or All Wall Wash before applying calibration.</div> : selectedAnimationGlobalMode && animationOpticalTargetEntries.length ? <MultiLightingMountsEditor
+                  entries={animationOpticalTargetEntries}
+                  designer={designer}
+                  calibrationOnly
+                  modes={[selectedAnimationGlobalMode]}
+                  onSetMode={setSelectedOpticalMode}
+                  onPatchMode={patchSelectedOpticalMode}
+                /> : selectedAnimationLightSource ? <LightingMountsEditor
                   treatments={animationOpticalTreatments}
                   designer={designer}
                   compact
@@ -3701,6 +4426,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
             activeLayer={activeLayer}
             selection={selection}
             selectedGeometryKeys={selectedGeometryKeys}
+            selectedRouteIds={activeSelectedRouteIds}
             routeSummaries={routeSummaries}
             routeOutputs={routeOutputs}
             faceGraphicVinylPreview={faceGraphicVinylPreview}
@@ -3712,10 +4438,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
             onSetArtworkFolderVisibility={setArtworkFolderVisibility}
             onPatchWorkLine={patchWorkLine}
             onToggleFaceGraphicVinylPreview={() => setFaceGraphicVinylPreview((active) => !active)}
-            onRouteSurfaceViewChange={(view) => {
-              setRouteSurfaceView(view);
-              if (view !== "both") setRouteCreationSurface(view);
-            }}
+            onRouteSurfaceViewChange={changeConstructionSide}
             assets={projectAssets}
             onUploadArtwork={uploadArtwork}
             onPatchArtwork={patchArtwork}
@@ -3727,6 +4450,9 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
             onUpdateDiffusorVisibilityPreset={updateDiffusorVisibilityPreset}
             onDeleteDiffusorVisibilityPreset={deleteDiffusorVisibilityPreset}
             onPatchFaceGraphic={patchFaceGraphic}
+            onAddFabricationPart={addFabricationPart}
+            onPatchFabricationPart={patchFabricationPart}
+            onPatchFabricationPath={patchFabricationPath}
             onPatchProjection={patchProjection}
             onPatchDerivedGeometry={patchDerivedGeometry}
             onPatchText={patchText}
@@ -3766,9 +4492,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
             previewing={animationGenerating}
             playing={animationPlaying}
             hasPreview={Boolean(animationResult?.ok && animationResult.partitura)}
-            onClipTargetSelect={(targetId) => {
-              selectDesignerItem(targetId ? designerSelectionForClipTarget(designer, targetId) : null);
-            }}
+            onClipTargetSelect={selectAnimationClipTarget}
             onSelectedClipTargetChange={setSelectedAnimationClipTargetId}
             onTogglePlayback={() => {
               if (!animationResult?.ok) void previewAnimation();
@@ -3787,6 +4511,8 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
         <LightingMountsEditor
           treatments={selectedOpticalTreatments}
           designer={designer}
+          compiledLayout={compileIsCurrent ? document.compiledLayout : undefined}
+          compileIsCurrent={compileIsCurrent}
           onAdd={addOpticalTreatment}
           onChange={patchOpticalTreatment}
           onRemove={removeOpticalTreatment}
@@ -3800,12 +4526,13 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
         className="max-w-4xl"
       >
         <div className="space-y-5">
-          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
             {([
               ["includeReference", "Reference / substrate", "Build areas and resolved derived profiles"],
               ["includeZones", "Zones", "Closed zone profiles, text and resolved derived profiles"],
               ["includeChannels", "Channels", "Router-bit centerline toolpaths"],
-              ["includeFaceGraphic", "Face Graphic", "Masks grouped by pass mode and filter color"]
+              ["includeFaceGraphic", "Face Graphic", "Masks grouped by pass mode and filter color"],
+              ["includeFabricationPlans", "Fabrication Plans", "One output file per visible physical part"]
             ] as const).map(([key, label, detail]) => (
               <label key={key} className="flex cursor-pointer gap-3 rounded-md border border-border-2 bg-card p-3">
                 <input
@@ -3854,7 +4581,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
           )}
           <div className="space-y-1 text-meta text-muted-foreground">
             <p role="status">{fabricationNotice}</p>
-            <p>Each selected layer is saved separately in your browser&apos;s configured downloads folder, using names such as <span className="font-mono">{partitura.partituraKey.replace(/[^A-Za-z0-9_-]+/g, "_")}-fabrication-zones.svg</span> and <span className="font-mono">{partitura.partituraKey.replace(/[^A-Za-z0-9_-]+/g, "_")}-fabrication-channels-toolpath.dxf</span>.</p>
+            <p>Each selected layer is saved separately in your browser&apos;s configured downloads folder. Fabrication Plans uses the exact physical-part name, such as <span className="font-mono">Acrílico superior.svg</span>; the other categories keep generated names such as <span className="font-mono">{partitura.partituraKey.replace(/[^A-Za-z0-9_-]+/g, "_")}-fabrication-zones.svg</span>.</p>
           </div>
           <div className="flex flex-wrap justify-end gap-2 border-t border-border pt-4">
             <Button type="button" variant="outline" onClick={() => setFabricationExportOpen(false)}>Cancel</Button>
@@ -3934,24 +4661,44 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
       <Modal
         open={compileIssuesOpen}
         title="Designer Compile Issues"
-        description="Electrical errors block Animate. Warnings are informational and do not block playback."
+        description="Electrical errors block Animate. Warnings are informational. For overlapping Lighting Setups, assign Lighting host directly in each warning card."
         onClose={() => setCompileIssuesOpen(false)}
       >
         <div className="space-y-4">
-          {compileErrors.length ? (
+          {compileErrorDetails.length ? (
             <Alert title="Errors" variant="error">
-              <ul className="list-disc space-y-1 pl-5">
-                {compileErrors.map((issue) => (
-                  <li key={issue}>{issue}</li>
+              <ul className="space-y-3">
+                {compileErrorDetails.map((issue) => (
+                  <li key={issue.id} className="rounded-md border border-destructive/25 bg-background/35 p-3">
+                    {issue.targets[0] ? (
+                      <button type="button" className="w-full text-left underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" title={`Locate ${issue.targets[0].label}`} onClick={() => focusCompileIssueTarget(issue.targets[0])}>{issue.message}</button>
+                    ) : <p>{issue.message}</p>}
+                    {issue.targets.length ? <div className="mt-2 flex flex-wrap gap-1.5">{issue.targets.map((target, index) => (
+                      <Button key={`${target.type}:${target.id}:${index}`} type="button" variant="outline" density="compact" className={`h-7 px-2 text-xs ${compileIssueTargetTone(target)}`} title={target.type === "route" ? `Select ${target.label} and assign its Lighting host` : `Locate ${target.label}`} onClick={() => focusCompileIssueTarget(target)}>
+                        {compileIssueTargetIcon(target)} {target.label}
+                      </Button>
+                    ))}</div> : null}
+                    {compileIssueLightingHostEditor(issue)}
+                  </li>
                 ))}
               </ul>
             </Alert>
           ) : null}
-          {compileWarnings.length ? (
+          {compileWarningDetails.length ? (
             <Alert title="Warnings" variant="warning">
-              <ul className="list-disc space-y-1 pl-5">
-                {compileWarnings.map((issue) => (
-                  <li key={issue}>{issue}</li>
+              <ul className="space-y-3">
+                {compileWarningDetails.map((issue) => (
+                  <li key={issue.id} className="rounded-md border border-amber-500/25 bg-background/35 p-3">
+                    {issue.targets[0] ? (
+                      <button type="button" className="w-full text-left underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" title={`Locate ${issue.targets[0].label}`} onClick={() => focusCompileIssueTarget(issue.targets[0])}>{issue.message}</button>
+                    ) : <p>{issue.message}</p>}
+                    {issue.targets.length ? <div className="mt-2 flex flex-wrap gap-1.5">{issue.targets.map((target, index) => (
+                      <Button key={`${target.type}:${target.id}:${index}`} type="button" variant="outline" density="compact" className={`h-7 px-2 text-xs ${compileIssueTargetTone(target)}`} title={target.type === "route" ? `Select ${target.label} and assign its Lighting host` : `Locate ${target.label}`} onClick={() => focusCompileIssueTarget(target)}>
+                        {compileIssueTargetIcon(target)} {target.label}
+                      </Button>
+                    ))}</div> : null}
+                    {compileIssueLightingHostEditor(issue)}
+                  </li>
                 ))}
               </ul>
             </Alert>
@@ -4779,18 +5526,19 @@ function clipLightSourceModeLabel(mode: DesignerOpticalMode) {
   return "Wall Wash";
 }
 
-function MultiLightingMountsEditor({ entries, designer, calibrationOnly = false, onSetMode, onPatchMode }: {
+function MultiLightingMountsEditor({ entries, designer, calibrationOnly = false, modes: requestedModes, onSetMode, onPatchMode }: {
   entries: Array<OpticalTargetRef & { name: string; treatments: DesignerOpticalTreatment[] }>;
   designer: DesignerForm;
   calibrationOnly?: boolean;
+  modes?: DesignerOpticalMode[];
   onSetMode: (mode: DesignerOpticalMode, enabled: boolean) => void;
   onPatchMode: (mode: DesignerOpticalMode, patch: Partial<DesignerOpticalTreatment>) => void;
 }) {
-  const modes: Array<{ mode: DesignerOpticalMode; label: string }> = [
+  const modes = ([
     { mode: "front", label: "Front" },
     { mode: "halo", label: "Halo-Lit" },
     { mode: "wall_wash", label: "Wall Washer" }
-  ];
+  ] satisfies Array<{ mode: DesignerOpticalMode; label: string }>).filter(({ mode }) => !requestedModes || requestedModes.includes(mode));
   const routeNames = new Map(designer.routes.map((route) => [route.id, route.name]));
   return (
     <div className="space-y-4">
@@ -4826,7 +5574,7 @@ function MultiLightingMountsEditor({ entries, designer, calibrationOnly = false,
           <section key={mode} className="space-y-4 rounded-lg border border-border bg-card p-4">
             <div className="flex items-center justify-between gap-3">
               <div className="font-medium">{label}</div>
-              <Badge>{sources.length === entries.length ? `${entries.length} zones` : `${sources.length}/${entries.length} zones`}</Badge>
+              <Badge>{sources.length === entries.length ? `${entries.length} targets` : `${sources.length}/${entries.length} targets`}</Badge>
             </div>
             {!calibrationOnly ? <div className="space-y-1 text-xs text-muted-foreground">
               <div className="font-medium">Assigned strings</div>
@@ -4920,9 +5668,11 @@ function MixedReceiverField({ values, designer, onChange }: { values: DesignerOp
   );
 }
 
-function LightingMountsEditor({ treatments, designer, compact = false, calibrationOnly = false, onAdd, onChange, onRemove }: {
+function LightingMountsEditor({ treatments, designer, compiledLayout, compileIsCurrent = true, compact = false, calibrationOnly = false, onAdd, onChange, onRemove }: {
   treatments: DesignerOpticalTreatment[];
   designer: DesignerForm;
+  compiledLayout?: PartituraDocument["compiledLayout"];
+  compileIsCurrent?: boolean;
   compact?: boolean;
   calibrationOnly?: boolean;
   onAdd: (mode: DesignerOpticalMode) => void;
@@ -4965,6 +5715,8 @@ function LightingMountsEditor({ treatments, designer, compact = false, calibrati
       {enabledTreatments.map((treatment) => {
         const receiverValue = treatment.receiverType === "canvas" ? "canvas" : `${treatment.receiverType}:${treatment.receiverId ?? ""}`;
         const title = treatment.mode === "front" ? "Front" : treatment.mode === "halo" ? "Halo-Lit" : "Wall Washer";
+        const assignedStrings = compiledStringIdsForSource(compiledLayout, treatment.id)
+          .map((id) => ledStrings.find((route) => route.id === id)?.name ?? id);
         return (
           <section key={treatment.id} className="space-y-4 rounded-lg border border-border bg-card p-4">
             <div className="flex items-center justify-between gap-3">
@@ -4976,24 +5728,12 @@ function LightingMountsEditor({ treatments, designer, compact = false, calibrati
               <input className="h-9 rounded-md border border-input bg-card px-3 text-sm text-foreground" value={treatment.name} onChange={(event) => onChange(treatment.id, { name: event.target.value })} />
             </label> : null}
             {!calibrationOnly ? <div className="grid gap-2 text-xs font-medium text-muted-foreground">
-              <span>LED strings</span>
-              {ledStrings.length ? <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                {ledStrings.map((route) => (
-                  <label key={route.id} className="flex min-w-0 cursor-pointer items-center gap-2 rounded border border-border-2 bg-surface-2 px-2 py-1.5 font-normal text-foreground hover:bg-surface-hover">
-                    <input
-                      type="checkbox"
-                      className="h-4 w-4 shrink-0 accent-blue-600"
-                      checked={treatment.stringIds.includes(route.id)}
-                      onChange={(event) => onChange(treatment.id, {
-                        stringIds: event.target.checked
-                          ? Array.from(new Set([...treatment.stringIds, route.id]))
-                          : treatment.stringIds.filter((id) => id !== route.id)
-                      })}
-                    />
-                    <span className="min-w-0 truncate" title={route.name}>{route.name}</span>
-                  </label>
-                ))}
-              </div> : <span className="font-normal">No LED strings available.</span>}
+              <span>Assigned strings · compiled automatically</span>
+              <div className="rounded border border-border-2 bg-surface-2 px-3 py-2 font-normal text-foreground">
+                {!compileIsCurrent ? "Compile to update the orthogonal mapping."
+                  : assignedStrings.length ? assignedStrings.join(", ")
+                    : "No compatible strings cross this target on the required surface."}
+              </div>
             </div> : null}
             {treatment.mode === "front" ? (
               <>

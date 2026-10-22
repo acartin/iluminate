@@ -139,6 +139,7 @@ $(compose_services compose.yml)
 | \`.agent/EXECUTION_MAP.md\` | Validation routes and commands. |
 | \`services/web/iluminate-prompt-builder/README.md\` | Internal prompt-builder usage and ownership. |
 | \`docs/partitura-lifecycle.md\` | Partitura source/compile/generate/device lifecycle. |
+| \`docs/public-showroom-viewer-architecture.md\` | Project shares, app-hosted Viewer and showroom architecture. |
 | \`docs/production-deployment.md\` | Production operations runbook. |
 | \`docs/upgrade.doc\` | Completed Designer upgrade specification and regression history. |
 
@@ -219,6 +220,7 @@ manifest_row ".agent/IMPLEMENTATION_PLAN.md" "Roadmap"
 manifest_row ".agent/EXECUTION_MAP.md" "Validation map"
 manifest_row "services/web/iluminate-prompt-builder/README.md" "Internal prompt builder"
 manifest_row "docs/partitura-lifecycle.md" "Partitura lifecycle"
+manifest_row "docs/public-showroom-viewer-architecture.md" "Showroom and Viewer architecture"
 manifest_row "docs/production-deployment.md" "Production runbook"
 manifest_row "docs/upgrade.doc" "Designer upgrade history/regression"
 

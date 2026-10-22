@@ -4,31 +4,34 @@ import { readFile } from "node:fs/promises";
 import paper from "paper";
 import type { VisualShape } from "@iluminate/lighting-core";
 import type { ClipForm, DesignerChannelForm } from "../../../lib/lighting/partitura-model";
-import { DESIGNER_SCHEMA_VERSION, canonicalizeDesignerGeometry, createDefaultOpticalTreatment, createDefaultPartituraDocument, createNewPartituraDocument, nextEmptyClipLayer, normalizeDefaultSignLayout, resolveDesignerDerivedGeometry, resolveDesignerProjectionGeometry, wouldCreateDesignerDerivedGeometryCycle, wouldCreateDesignerProjectionCycle } from "../../../lib/lighting/partitura-model";
+import { DESIGNER_SCHEMA_VERSION, addDefaultLightSourcesForNewTargets, canonicalizeDesignerGeometry, createDefaultOpticalTreatment, createDefaultPartituraDocument, createNewPartituraDocument, nextEmptyClipLayer, normalizeDefaultSignLayout, resolveDesignerDerivedGeometry, resolveDesignerProjectionGeometry, wouldCreateDesignerDerivedGeometryCycle, wouldCreateDesignerProjectionCycle } from "../../../lib/lighting/partitura-model";
 import { designerFilletCornerIsEligible, filletDesignerGeometry, filletDesignerGeometryExact, offsetDesignerGeometry } from "../../../lib/lighting/designer-derived-geometry";
 import { DEFAULT_DESIGNER_FONT_ID, designerFontResource } from "../../../lib/lighting/designer-font-catalog";
 import { designerTextToGeometry } from "../../../lib/lighting/designer-text-geometry";
 import { inspectArtworkIntrinsicSize } from "../../../lib/lighting/artwork-intrinsic-size";
 import { placeSvgPathCandidates } from "../../../lib/lighting/artwork-svg-zones";
-import { compileDesignerLayout, designerCompileSignature } from "./designer-compiler";
+import { resolveGeneratedPartituraTarget } from "../../../lib/lighting/generated-partitura-target";
+import { buildDocumentFromDesigner, compileDesignerLayout, compiledStringIdsForSource, designerCompileSignature } from "./designer-compiler";
 import { canvasInteractionSnapCm, CHANNEL_ROUTER_BIT_PRESETS, channelWidthForRouterDiameter, geometryToolAllowedOnLayer, geometryToolPolicy, POINTER_DRAG_THRESHOLD_PX, TERMINAL_SOLDER_CAPTURE_RADIUS_PX } from "./canvas/designer-tool-policy";
+import { designerMarqueeSelection, moveDesignerMarqueeDiffusors } from "./canvas/designer-marquee-selection";
 import { applyDesignerGeometryCommand, applyDesignerNativeFillet } from "./geometry/designer-geometry-commands";
 import { applyDesignerBooleanOperation, validateDesignerGeometryTopology } from "./geometry/designer-geometry-boolean";
 import { trimDesignerChannelPathAtPoint, trimDesignerPathAtPoint } from "./geometry/designer-path-trim";
-import { channelPathsFromGeometries } from "./geometry/designer-channel-from-path";
+import { channelPathsFromGeometries, generatedChannelName } from "./geometry/designer-channel-from-path";
 import { resolveDesignerProjectionGeometry as resolveProjectedGeometry } from "./geometry/designer-projected-geometry";
 import { applyFaceGraphicToOpticalMode, applyFaceGraphicTransmission, faceGraphicMaskUv, faceGraphicTransmissionAtPoint, frontMaterialOffStyle, orderOpticalTreatmentsForRendering, resolvePhysicalFaceGraphics } from "../player/optical-model";
-import { buildOutlineSegments, faceMaskTextureSize, opticalOccluderShapes, opticalTargetMaskBounds, opticalTargetMaskMode, opticalTargetShape, selectedOutlineShapes, targetMaskTextureSize } from "../player/gpu/webgl2-player-renderer";
+import { buildOutlineSegments, faceMaskTextureSize, opticalOccluderShapes, opticalTargetMaskBounds, opticalTargetMaskMode, opticalTargetShape, outlineSelectionVisible, outlineShapesForMode, selectedOutlineShapes, targetMaskTextureSize } from "../player/gpu/webgl2-player-renderer";
 import { resolveChannelOutlineContours, sweptChannelOutlineContours } from "./rendering/channel-swept-outline";
 import { generateDesignerFabricationExport, sha256Hex } from "./fabrication/designer-fabrication-export";
 import { applyFaceGraphicObjectVisibility, faceGraphicObjectKeys, sameFaceGraphicVisibility, visibleFaceGraphicObjectKeys } from "./designer-face-graphic-visibility";
 import { applyDiffusorObjectVisibility, diffusorObjectKeys, sameDiffusorVisibility, visibleDiffusorObjectKeys } from "./designer-diffusor-visibility";
-import { designerAdditiveSelectionRequested, designerConstrainedMoveDelta, designerLayerForSelection, designerSelectionForClipTarget, designerWholeObjectHit, routeMatchesSurfaceView } from "./types";
-import { clipIdForSelectedTargets, clipLightSourcesForTarget, clipScopeTargets, clipTargetsForSelection, designerClipTargetIdsForSelection, explicitClipTargetSelectionSettled } from "./designer-animation-selection";
+import { channelMatchesSurfaceView, designerAdditiveSelectionRequested, designerConstrainedMoveDelta, designerInitialSelectHit, designerLayerForSelection, designerSelectionForClipTarget, designerWholeObjectHit, routeMatchesSurfaceView } from "./types";
+import { clipIdForSelectedTargets, clipLightSourcesForTarget, clipScopeTargets, clipTargetsForSelection, designerClipTargetIdsForSelection, designerOpticalTargetsForClipTarget, explicitClipTargetSelectionSettled } from "./designer-animation-selection";
 import {
   channelBorderPolylines,
   channelCenterPolyline,
   channelIsClosed,
+  createLedStringFromChannel,
   controllerPortPoint,
   canSolderRoutes,
   deleteDesignerRoute,
@@ -54,8 +57,12 @@ import {
   pointInsideDesignerShape,
   primitiveShapeBounds,
   moveControllerWithSolderedCables,
+  moveRoutePointWithRetraction,
   movedWorkLine,
   resolveRouteOutputs,
+  resolvedLedStripCutSegmentLengthMm,
+  sampleRouteCutMarks,
+  selectedStringConnectionPlan,
   setChannelNodeType,
   setPolygonNodeType,
   smoothBezierPoints,
@@ -94,7 +101,8 @@ describe("Layers panel organization", () => {
     const faceGraphicStart = source.indexOf('label="Face Graphic"', hardwareStart);
     const hardwareSection = source.slice(hardwareStart, faceGraphicStart);
     assert.ok(hardwareStart >= 0 && faceGraphicStart > hardwareStart);
-    assert.match(hardwareSection, /label="Strings"[\s\S]{0,80}icon=\{Lightbulb\}[\s\S]{0,80}order=\{1\}/);
+    assert.match(hardwareSection, /label="Strings"[\s\S]{0,80}icon=\{Waypoints\}[\s\S]{0,80}order=\{1\}/);
+    assert.match(hardwareSection, /route\.kind === "led_string"[\s\S]*?icon=\{Waypoints\}/);
     assert.match(hardwareSection, /label="Data cables"[\s\S]{0,80}icon=\{Cable\}[\s\S]{0,80}order=\{2\}/);
     assert.match(hardwareSection, /label="Controller"[\s\S]{0,80}icon=\{Cpu\}[\s\S]{0,80}order=\{3\}/);
   });
@@ -104,6 +112,20 @@ describe("Layers panel organization", () => {
     assert.equal(designerLayerForSelection({ type: "controller", id: "controller_1" }), "hardware");
     assert.equal(designerLayerForSelection({ type: "zone", id: "zone_1" }), "zones");
     assert.equal(designerLayerForSelection({ type: "face_graphic", id: "face_graphic_1" }), "faceGraphic");
+  });
+
+  it("selects every Hardware object without requiring its exact folder first", () => {
+    const designer = createDefaultPartituraDocument("hardware_category_hit_test").designer!;
+    const viewport = { x: 0, y: 0, width: 170, height: 50 };
+    const canvas = { width: 1700, height: 500 };
+
+    assert.deepEqual(pickDesignerHit(designer, "hardware", { x: 50, y: 4 }, viewport, canvas), { type: "route", id: "route_fondo" });
+    assert.deepEqual(pickDesignerHit(designer, "strings", { x: 8, y: 8 }, viewport, canvas), { type: "controller", id: "controller" });
+
+    designer.layers.strings.visible = false;
+    assert.equal(pickDesignerHit(designer, "hardware", { x: 50, y: 4 }, viewport, canvas), null);
+    designer.layers.hardware.visible = false;
+    assert.equal(pickDesignerHit(designer, "strings", { x: 8, y: 8 }, viewport, canvas), null);
   });
 
   it("updates the Hardware master visibility as one atomic layer mutation", async () => {
@@ -137,6 +159,76 @@ describe("Layers panel organization", () => {
     assert.match(panelSource, /layerLockStateClass\(locked === true\)/);
     assert.match(panelSource, /layerVisibilityStateClass\(layer\.visible\)/);
     assert.match(panelSource, /layerLockStateClass\(layer\.locked\)/);
+  });
+});
+
+describe("Designer Select marquee", () => {
+  it("selects every visible profile touched in one compatible layer", () => {
+    const designer = createDefaultPartituraDocument("marquee").designer;
+    designer.buildAreas = [{ id: "reference_1", name: "Reference", shape: "rect", x: 0, y: 0, width: 8, height: 8, visible: true, locked: false, opacity: 1 }];
+    designer.zones = [
+      { id: "zone_1", name: "Zone 1", shape: "rect", x: 4, y: 4, width: 5, height: 5, visible: true, locked: false, opacity: 1 },
+      { id: "zone_2", name: "Zone 2", shape: "ellipse", x: 10, y: 4, width: 4, height: 4, visible: true, locked: false, opacity: 1 },
+      { id: "zone_hidden", name: "Hidden", shape: "rect", x: 4, y: 4, width: 2, height: 2, visible: false, locked: false, opacity: 1 }
+    ];
+    designer.channels = [
+      { id: "channel_1", name: "Channel 1", points: [{ x: 7, y: 6 }, { x: 12, y: 6 }], pathMode: "straight", widthMm: 10, closed: false, cap: "round", visible: true, locked: false, opacity: 1 },
+      { id: "channel_hidden", name: "Hidden Channel", points: [{ x: 7, y: 6 }, { x: 12, y: 6 }], pathMode: "straight", widthMm: 10, closed: false, cap: "round", visible: false, locked: false, opacity: 1 }
+    ];
+
+    const result = designerMarqueeSelection(designer, "zones", { x: 8, y: 5 }, { x: 10, y: 7 });
+
+    assert.equal(result.layer, "zones");
+    assert.deepEqual(result.selections, [{ type: "zone", id: "zone_1" }, { type: "zone", id: "zone_2" }, { type: "channel", id: "channel_1" }]);
+  });
+
+  it("chooses the largest compatible visible set when no category is active", () => {
+    const designer = createDefaultPartituraDocument("marquee_without_layer").designer;
+    designer.buildAreas = [{ id: "reference_1", name: "Reference", shape: "rect", x: 0, y: 0, width: 4, height: 4, visible: true, locked: false, opacity: 1 }];
+    designer.zones = [
+      { id: "zone_1", name: "Zone 1", shape: "rect", x: 0, y: 0, width: 2, height: 2, visible: true, locked: false, opacity: 1 },
+      { id: "zone_2", name: "Zone 2", shape: "rect", x: 3, y: 0, width: 2, height: 2, visible: true, locked: false, opacity: 1 }
+    ];
+
+    const result = designerMarqueeSelection(designer, null, { x: -1, y: -1 }, { x: 6, y: 5 });
+
+    assert.equal(result.layer, "zones");
+    assert.deepEqual(result.selections.map((selection) => selection.id), ["zone_1", "zone_2"]);
+  });
+
+  it("moves selected Zones and Channels as one rigid transient set", () => {
+    const designer = createDefaultPartituraDocument("move_marquee_diffusors").designer;
+    designer.zones = [
+      { id: "zone_1", name: "Zone 1", shape: "rect", x: 1.03, y: 2.07, width: 2, height: 2, visible: true, locked: false, opacity: 1 },
+      { id: "zone_2", name: "Zone 2", shape: "rect", x: 9, y: 10, width: 2, height: 2, visible: true, locked: false, opacity: 1 }
+    ];
+    designer.channels = [
+      { id: "channel_1", name: "Channel 1", points: [{ x: 4.08, y: 5.02 }, { x: 6.08, y: 5.02 }], pathMode: "straight", widthMm: 10, closed: false, cap: "round", visible: true, locked: false, opacity: 1 }
+    ];
+
+    const moved = moveDesignerMarqueeDiffusors(designer, ["zone:zone_1", "channel:channel_1"], "channel:channel_1", { x: 1.09, y: 2.11 }, 0.1);
+
+    const zoneDelta = { x: moved.zones[0].x - designer.zones[0].x, y: moved.zones[0].y - designer.zones[0].y };
+    const channelDelta = { x: moved.channels[0].points[0].x - designer.channels[0].points[0].x, y: moved.channels[0].points[0].y - designer.channels[0].points[0].y };
+    assert.ok(Math.abs(zoneDelta.x - 1.12) < 1e-9 && Math.abs(zoneDelta.y - 2.08) < 1e-9);
+    assert.ok(Math.abs(channelDelta.x - zoneDelta.x) < 1e-9 && Math.abs(channelDelta.y - zoneDelta.y) < 1e-9);
+    assert.deepEqual(moved.zones[1], designer.zones[1]);
+  });
+
+  it("uses empty-canvas dragging for marquee while keeping Pan separate", async () => {
+    const [canvasSource, workspaceSource] = await Promise.all([
+      readFile("components/lighting/designer/designer-paper-canvas.tsx", "utf8"),
+      readFile("components/lighting/partitura-workspace.tsx", "utf8")
+    ]);
+
+    assert.match(canvasSource, /tool === "select" && !hit[\s\S]{0,260}setMarquee/);
+    assert.match(canvasSource, /tool === "pan"[\s\S]{0,80}startPanDrag/);
+    assert.match(canvasSource, /event\.button === 2[\s\S]{0,120}startPanDrag\(event\)/);
+    assert.match(canvasSource, /onContextMenu=\{\(event\) => event\.preventDefault\(\)\}/);
+    assert.match(canvasSource, /data-designer-marquee="true"/);
+    assert.match(canvasSource, /tool === "move"[\s\S]{0,260}diffusor-selection-move/);
+    assert.match(canvasSource, /moveDesignerMarqueeDiffusors\(drag\.original, drag\.selectionKeys, drag\.anchorKey/);
+    assert.match(workspaceSource, /onMarqueeSelect=\{selectDesignerMarqueeItems\}/);
   });
 });
 
@@ -337,7 +429,54 @@ describe("Electrical route deletion", () => {
 });
 
 describe("Designer wiring surface display", () => {
-  it("persists front/rear classification without changing electrical compilation", () => {
+  it("persists a Channel fabrication side as part of automatic optical compilation", () => {
+    const document = createDefaultPartituraDocument();
+    const channel: DesignerChannelForm = {
+      id: "channel_surface",
+      name: "Rear CNC channel",
+      points: [{ x: 2, y: 3 }, { x: 12, y: 3 }],
+      pathMode: "straight",
+      widthMm: 6,
+      closed: false,
+      cap: "round",
+      fabricationSurface: "rear",
+      visible: true,
+      locked: false,
+      opacity: 1
+    };
+    const withRear = canonicalizeDesignerGeometry({ ...document.designer, channels: [channel] });
+    const reloaded = normalizeDefaultSignLayout(JSON.parse(JSON.stringify({ ...document, designer: withRear }))).designer;
+    const compileBefore = designerCompileSignature(reloaded);
+    assert.equal(reloaded.channels[0].fabricationSurface, "rear");
+    assert.notEqual(designerCompileSignature({ ...reloaded, channels: reloaded.channels.map((entry) => ({ ...entry, fabricationSurface: "front" })) }), compileBefore);
+    const legacy = JSON.parse(JSON.stringify({ ...document, designer: withRear }));
+    delete legacy.designer.channels[0].fabricationSurface;
+    assert.equal(normalizeDefaultSignLayout(legacy).designer.channels[0].fabricationSurface, "front");
+    assert.equal(channelMatchesSurfaceView("rear", "rear"), true);
+    assert.equal(channelMatchesSurfaceView("rear", "front"), false);
+    assert.equal(channelMatchesSurfaceView(undefined, "front"), true);
+  });
+
+  it("creates Front defaults for Zones and surface-aware defaults for new Channels", () => {
+    const current = createNewPartituraDocument("automatic_light_defaults").designer;
+    const next = addDefaultLightSourcesForNewTargets(current, {
+      ...current,
+      zones: [...current.zones, { id: "zone_new", name: "New Zone", shape: "rect", x: 0, y: 0, width: 10, height: 10, visible: true, locked: false, opacity: 1 }],
+      channels: [
+        ...current.channels,
+        { id: "channel_front", name: "Front Channel", points: [{ x: 0, y: 0 }, { x: 5, y: 0 }], pathMode: "straight", widthMm: 6, closed: false, cap: "round", fabricationSurface: "front", visible: true, locked: false, opacity: 1 },
+        { id: "channel_rear", name: "Rear Channel", points: [{ x: 0, y: 2 }, { x: 5, y: 2 }], pathMode: "straight", widthMm: 6, closed: false, cap: "round", fabricationSurface: "rear", visible: true, locked: false, opacity: 1 }
+      ]
+    });
+
+    assert.deepEqual(next.lightSources.map((source) => [source.targetId, source.mode]), [
+      ["zone_new", "front"],
+      ["channel_front", "front"],
+      ["channel_rear", "halo"]
+    ]);
+  });
+
+  it("persists front/rear classification as part of electrical compilation", () => {
     const document = createDefaultPartituraDocument();
     if (!document.designer) assert.fail("default designer missing");
     const before = designerCompileSignature(document.designer);
@@ -349,7 +488,7 @@ describe("Designer wiring surface display", () => {
         visible: false
       }))
     });
-    assert.equal(designerCompileSignature(changed), before);
+    assert.notEqual(designerCompileSignature(changed), before);
     assert.equal(changed.routes[1]?.designSurface, "front");
     assert.equal(routeMatchesSurfaceView("front", "front"), true);
     assert.equal(routeMatchesSurfaceView("front", "rear"), false);
@@ -357,7 +496,7 @@ describe("Designer wiring surface display", () => {
     assert.equal(routeMatchesSurfaceView("front", "both"), true);
   });
 
-  it("keeps the shared surface filter inside Design and applies it to strings and cables", async () => {
+  it("keeps one global construction filter in Design and applies it to Channels, strings and cables", async () => {
     const [workspaceSource, layersSource, canvasSource] = await Promise.all([
       readFile("components/lighting/partitura-workspace.tsx", "utf8"),
       readFile("components/lighting/designer/designer-ui.tsx", "utf8"),
@@ -365,14 +504,31 @@ describe("Designer wiring surface display", () => {
     ]);
     assert.match(workspaceSource, /routeSurfaceView/);
     assert.match(workspaceSource, /<option value="rear">Rear<\/option>[\s\S]*?<option value="front">Front<\/option>/);
-    assert.match(layersSource, /Wiring surface visibility/);
+    assert.match(layersSource, /Layers[\s\S]*<AssemblySurfaceViewToggle value=\{routeSurfaceView\} onChange=\{onRouteSurfaceViewChange\}/);
+    assert.match(workspaceSource, /onRouteSurfaceViewChange=\{changeConstructionSide\}/);
+    assert.match(workspaceSource, /label="Create on"/);
+    assert.match(workspaceSource, /fabricationSurface: channelCreationSurface/);
+    assert.doesNotMatch(workspaceSource, /label="Fabrication side"/);
+    assert.match(canvasSource, /fabricationSurface: channelCreationSurface/);
+    assert.match(layersSource, /Construction side visibility/);
+    assert.match(layersSource, /channelMatchesSurfaceView\(channel\.fabricationSurface, routeSurfaceView\)/);
     assert.match(layersSource, /route\.kind === "data_cable" && routeMatchesSurfaceView/);
     assert.match(layersSource, /route\.kind === "led_string" && routeMatchesSurfaceView/);
     assert.match(canvasSource, /displayedDesigner[\s\S]*?drawPaperDesigner/);
     assert.match(canvasSource, /findNearbySolderTerminal\(displayedRoutes/);
   });
 
-  it("keeps terminals on opposite physical surfaces independent", () => {
+  it("adds a theme-aware peripheral cue whenever one construction side is visible", async () => {
+    const canvasSource = await readFile("components/lighting/designer/designer-paper-canvas.tsx", "utf8");
+    assert.match(canvasSource, /presentation === "design" && routeSurfaceView !== "both"/);
+    assert.match(canvasSource, /data-wiring-surface-atmosphere=\{wiringSurfaceAtmosphere\}/);
+    assert.match(canvasSource, /colorMode === "night"[\s\S]*ring-sky-300[\s\S]*ring-sky-500/);
+    assert.match(canvasSource, /ring-violet-300[\s\S]*ring-violet-500/);
+    assert.match(canvasSource, /TOP · FRONT[\s\S]*DOWN · REAR/);
+    assert.match(canvasSource, /pointer-events-none absolute inset-0/);
+  });
+
+  it("isolates coincident terminal coordinates across front and rear", () => {
     const rearOutput = {
       id: "rear_output",
       name: "Rear output",
@@ -388,25 +544,81 @@ describe("Designer wiring surface display", () => {
       points: [{ x: 10, y: 0, joint: true }, { x: 20, y: 0 }]
     };
 
+    assert.equal(canSolderRoutes(rearOutput, 1, frontInput, 0, 2), false);
     assert.equal(findNearbySolderTerminal([rearOutput, frontInput], rearOutput.id, 1, { x: 10, y: 0 }, 1), null);
     assert.equal(findMatchingSolderTerminal([rearOutput, frontInput], rearOutput.id, 1, 2), null);
-    assert.deepEqual(findJointGroup([rearOutput, frontInput], rearOutput.id, 1, 2), [{ routeId: rearOutput.id, pointIndex: 1 }]);
+    assert.deepEqual(findJointGroup([rearOutput, frontInput], rearOutput.id, 1, 2), [
+      { routeId: rearOutput.id, pointIndex: 1 }
+    ]);
 
-    const rearInput = { ...frontInput, id: "rear_input", designSurface: "rear" as const };
-    assert.deepEqual(findMatchingSolderTerminal([rearOutput, rearInput], rearOutput.id, 1, 2), { routeId: rearInput.id, pointIndex: 0 });
+    const designer = createDefaultPartituraDocument("surface_isolation").designer;
+    const isolated = {
+      ...designer,
+      routes: designer.routes.map((route) => route.id === "route_fondo" ? { ...route, designSurface: "front" as const } : route)
+    };
+    assert.equal(resolveRouteOutputs(isolated.controller, isolated.routes, isolated.snapCm).has("route_fondo"), false);
+    assert.equal(compileDesignerLayout(isolated).pixelMap.length, 0);
   });
 });
 
 describe("terminal solder capture", () => {
+  it("finishes a click-traced string or data cable with Enter while keeping its tool active", async () => {
+    const canvasSource = await readFile("components/lighting/designer/designer-paper-canvas.tsx", "utf8");
+    const enterRouteBranch = canvasSource.slice(
+      canvasSource.indexOf('if (event.key === "Enter" && routeDraft)'),
+      canvasSource.indexOf('if (event.key === "Enter" && shapeDraft?.target === "channel"')
+    );
+
+    assert.ok(enterRouteBranch.length > 0);
+    assert.match(enterRouteBranch, /event\.preventDefault\(\);[\s\S]*setRouteDraft\(null\);[\s\S]*onSelect\(null\);[\s\S]*return;/);
+    assert.doesNotMatch(enterRouteBranch, /onToolChange/);
+  });
+
   it("keeps magnetic assistance inside the terminal marker", () => {
     assert.equal(TERMINAL_SOLDER_CAPTURE_RADIUS_PX, 5);
   });
 
+  it("retracts an LED string terminal along its own path and consumes passed nodes", () => {
+    const route = {
+      id: "string_retract",
+      name: "String retract",
+      kind: "led_string" as const,
+      points: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 20, y: 10 }]
+    };
+    const outputRetracted = moveRoutePointWithRetraction([route], route.id, 3, { x: 5, y: 0 }, 0.01)[0];
+    assert.deepEqual(outputRetracted.points, [{ x: 0, y: 0 }, { x: 5, y: 0 }]);
+
+    const inputRetracted = moveRoutePointWithRetraction([route], route.id, 0, { x: 15, y: 10 }, 0.01)[0];
+    assert.deepEqual(inputRetracted.points, [{ x: 15, y: 10 }, { x: 20, y: 10 }]);
+  });
+
+  it("does not consume LED string nodes when a terminal leaves its existing path", () => {
+    const route = {
+      id: "string_free_terminal",
+      name: "String free terminal",
+      kind: "led_string" as const,
+      points: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 20, y: 0 }]
+    };
+    const moved = moveRoutePointWithRetraction([route], route.id, 2, { x: 15, y: 3 }, 0.01)[0];
+    assert.equal(moved.points.length, 3);
+    assert.deepEqual(moved.points[2], { x: 15, y: 3 });
+  });
+
+  it("renders route terminals larger and with theme-aware contrast without enlarging internal nodes", async () => {
+    const rendererSource = await readFile("components/lighting/designer/designer-paper-renderer.ts", "utf8");
+    assert.match(rendererSource, /const isTerminal = isInputTerminal \|\| isOutputTerminal/);
+    assert.match(rendererSource, /const haloRadius = isInputTerminal \? 8\.5 : 7/);
+    assert.match(rendererSource, /options\.colorMode === "night" \? "#f8fafc" : "#0f172a"/);
+    assert.match(rendererSource, /radius: isTerminal \? isInputTerminal \? 5\.2 : 4\.6 : point\.joint \? 3\.8/);
+  });
+
   it("keeps a click on a terminal as selection instead of treating it as a drag", async () => {
     const canvasSource = await readFile("components/lighting/designer/designer-paper-canvas.tsx", "utf8");
+    const workspaceSource = await readFile("components/lighting/partitura-workspace.tsx", "utf8");
     assert.equal(POINTER_DRAG_THRESHOLD_PX, 3);
     assert.match(canvasSource, /const routePointWasDragged =/);
     assert.match(canvasSource, /if \(routePointWasDragged && endedRoutePointDrag\) onRoutePointDragEnd/);
+    assert.match(workspaceSource, /pointIndex: !additive && primaryRouteId === nextSelection\.id \? nextSelection\.pointIndex : undefined/);
   });
 
   it("requires opposite green/red polarities without restricting route kinds", () => {
@@ -681,6 +893,17 @@ describe("Designer snap-to-grid control", () => {
     assert.match(source, /setupDetailsRef\.current\.open = false/);
   });
 
+  it("keeps Setup controls inside a wider scroll-safe two-column panel", async () => {
+    const source = await readFile("components/lighting/partitura-workspace.tsx", "utf8");
+    const start = source.indexOf('<details ref={setupDetailsRef}');
+    const setup = source.slice(start, source.indexOf('</details>', start));
+
+    assert.match(setup, /max-h-\[calc\(100vh-5rem\)\] w-\[560px\] max-w-\[calc\(100vw-2rem\)\][^"\n]*overflow-x-hidden overflow-y-auto/);
+    assert.match(setup, /grid-cols-\[minmax\(0,1\.2fr\)_minmax\(0,0\.8fr\)\][\s\S]*label="Router bit preset"[\s\S]*label="Router bit unit"/);
+    assert.match(setup, /label="Router bit diameter"[\s\S]*label="Hole diameter"/);
+    assert.match(setup, /grid grid-cols-2 items-center gap-3[\s\S]*label="LED package"[\s\S]*label="PCB width"/);
+  });
+
   it("keeps global alignment marks configurable in Setup and movable across layers", async () => {
     const workspaceSource = await readFile("components/lighting/partitura-workspace.tsx", "utf8");
     const canvasSource = await readFile("components/lighting/designer/designer-paper-canvas.tsx", "utf8");
@@ -766,13 +989,25 @@ describe("Animate WebGL outlines", () => {
     assert.match(playerSource, /shape\.contours\.map\(\(contour\) => flattenContour/);
   });
 
-  it("gates the outline pass with the Animate checkbox state", async () => {
-    const source = await readFile("components/lighting/player/gpu/webgl2-player-renderer.ts", "utf8");
-    const outlineGate = source.slice(source.indexOf("if (this.settings.showOutlines) {"), source.indexOf("private directPixelRadius"));
-    assert.match(outlineGate, /this\.drawOutlineBatch\(this\.zoneOutlines/);
-    assert.match(outlineGate, /this\.drawOutlineBatch\(this\.channelOutlines/);
-    assert.match(outlineGate, /if \(this\.selectedOutline\) \{/);
-    assert.match(outlineGate, /this\.drawOutlineBatch\(this\.selectedOutline/);
+  it("filters Animate outlines without changing scene membership", () => {
+    const shapes = [
+      { id: "zone_active", kind: "zone" as const },
+      { id: "zone_idle", kind: "zone" as const },
+      { id: "channel_active", kind: "channel" as const },
+      { id: "face", kind: "face-graphic" as const }
+    ] as VisualShape[];
+    const treatments = [
+      { targetType: "zone" as const, targetId: "zone_active" },
+      { targetType: "channel" as const, targetId: "channel_active" }
+    ];
+
+    assert.deepEqual(outlineShapesForMode(shapes, treatments, "all").map((shape) => shape.id), ["zone_active", "zone_idle", "channel_active"]);
+    assert.deepEqual(outlineShapesForMode(shapes, treatments, "active").map((shape) => shape.id), ["zone_active", "channel_active"]);
+    assert.deepEqual(outlineShapesForMode(shapes, treatments, "zones").map((shape) => shape.id), ["zone_active", "zone_idle"]);
+    assert.deepEqual(outlineShapesForMode(shapes, treatments, "channels").map((shape) => shape.id), ["channel_active"]);
+    assert.deepEqual(outlineShapesForMode(shapes, treatments, "none"), []);
+    assert.equal(outlineSelectionVisible("zones", { type: "channel", id: "channel_active" }, treatments), false);
+    assert.equal(outlineSelectionVisible("active", { type: "channel", id: "channel_active" }, treatments), true);
   });
 
   it("can bypass the Face Graphic mask only for the interactive preview", async () => {
@@ -1613,6 +1848,18 @@ describe("fabrication SVG and DXF export", () => {
       visible: true,
       locked: false,
       opacity: 1
+    }, {
+      id: "channel_rear_route",
+      name: "Rear channel route",
+      points: [{ x: 20, y: 3 }, { x: 28, y: 7 }],
+      pathMode: "straight",
+      widthMm: 6,
+      closed: false,
+      cap: "round",
+      fabricationSurface: "rear",
+      visible: true,
+      locked: false,
+      opacity: 1
     }];
     document.designer.faceGraphics = [{ id: "face_cut", name: "Face cut", shape: "ellipse", x: 40, y: 5, width: 12, height: 8, passMode: "clear", filterColor: "#FFFFFF", visible: true, locked: false, opacity: 1 }];
     const designer = canonicalizeDesignerGeometry(document.designer);
@@ -1635,11 +1882,57 @@ describe("fabrication SVG and DXF export", () => {
     assert.match(zones.svg, /id="zone_cut"/);
     assert.doesNotMatch(zones.svg, /channel_route|face_cut/);
     assert.match(channels.svg, /data-toolpath="router-centerline"/);
+    assert.match(channels.svg, /id="CHANNEL_FRONT_TOOLPATH"[^>]*data-fabrication-surface="front"/);
+    assert.match(channels.svg, /id="CHANNEL_REAR_TOOLPATH"[^>]*data-fabrication-surface="rear"/);
     assert.match(channels.svg, /id="channel_route"[^>]*d="M 20 30 L 80 70 L 140 40"/);
+    assert.match(channels.svg, /id="channel_rear_route"/);
     assert.doesNotMatch(channels.svg, /id="channel_route"[^>]*d="[^"]* Z"/);
-    assert.match(channels.dxf, /\nLWPOLYLINE\n100\nAcDbEntity\n8\nCHANNEL_TOOLPATH\n100\nAcDbPolyline\n90\n3\n70\n0\n/);
+    assert.match(channels.svg, /data-fabrication-surface="front"/);
+    assert.match(channels.dxf, /\nLWPOLYLINE\n100\nAcDbEntity\n8\nCHANNEL_FRONT_TOOLPATH\n100\nAcDbPolyline\n90\n3\n70\n0\n/);
+    assert.match(channels.dxf, /\n8\nCHANNEL_REAR_TOOLPATH\n/);
     assert.match(faceGraphic.svg, /id="face_cut"/);
     assert.doesNotMatch(faceGraphic.svg, /zone_cut|channel_route/);
+  });
+
+  it("exports every visible Fabrication Part as a separately named operation file", async () => {
+    const document = createNewPartituraDocument("fabrication_parts_export");
+    document.designer.fabricationParts = [{
+      id: "part_top", name: "Acrílico superior", material: "Acrylic", thicknessMm: 6,
+      machiningSide: "front", visible: true, locked: false, opacity: 1
+    }, {
+      id: "part_hidden", name: "Hidden part", material: "Acrylic", thicknessMm: 3,
+      machiningSide: "rear", visible: false, locked: false, opacity: 1
+    }];
+    document.designer.fabricationPaths = [{
+      id: "fab_cut", partId: "part_top", name: "Letter cut", shape: "rect",
+      x: 2, y: 3, width: 8, height: 5, operation: "cut",
+      visible: true, locked: false, opacity: 1
+    }, {
+      id: "fab_pocket", partId: "part_top", name: "Rear pocket", shape: "ellipse",
+      x: 12, y: 3, width: 4, height: 4, operation: "pocket", depthMm: 2,
+      visible: true, locked: false, opacity: 1
+    }, {
+      id: "fab_hidden_part", partId: "part_hidden", name: "Hidden cut", shape: "rect",
+      x: 20, y: 3, width: 4, height: 4, operation: "cut",
+      visible: true, locked: false, opacity: 1
+    }];
+    const result = await generateDesignerFabricationExport({
+      designer: canonicalizeDesignerGeometry(document.designer),
+      identity: { projectId: document.projectId, partituraId: "1", partituraKey: "parts", partituraName: "Physical parts" },
+      sourceDocument: document,
+      options: { includeReference: false, includeZones: false, includeChannels: false, includeFaceGraphic: false, includeFabricationPlans: true, includeAlignmentMarks: false },
+      generatedAt: "2026-10-20T12:00:00.000Z"
+    });
+
+    assert.equal(result.files.length, 1);
+    assert.equal(result.files[0].layer, "fabrication");
+    assert.equal(result.files[0].downloadBaseName, "Acrílico superior");
+    assert.equal(result.files[0].pathCount, 2);
+    assert.match(result.files[0].svg, /id="fab_cut"/);
+    assert.match(result.files[0].svg, /id="fab_pocket"/);
+    assert.match(result.files[0].svg, /data-fabrication-operation="pocket" data-depth-mm="2" data-material="Acrylic" data-thickness-mm="6" data-machining-side="front"/);
+    assert.match(result.files[0].dxf, /\n8\nFAB_POCKET_DEPTH_2MM\n/);
+    assert.doesNotMatch(result.files[0].svg, /fab_hidden_part|Hidden part/);
   });
 
   it("repeats optional calibrated alignment marks on every output file as no-cut geometry", async () => {
@@ -1878,7 +2171,38 @@ describe("shared node authoring context", () => {
   });
 });
 
+describe("Designer global command bar", () => {
+  it("keeps compile state and issue review visible at compact viewport widths", async () => {
+    const workspaceSource = await readFile("components/lighting/partitura-workspace.tsx", "utf8");
+    const commandBar = workspaceSource.slice(
+      workspaceSource.indexOf('<header className="relative z-30'),
+      workspaceSource.indexOf('{editorMode === "design" ? <div className="flex h-10')
+    );
+
+    assert.ok(commandBar.length > 0);
+    assert.match(workspaceSource, /const compileControlLabel = compiling[\s\S]*?"Compiling…"[\s\S]*?"Compile required"[\s\S]*?"Compiled · Animate ready"[\s\S]*?"Compiled · Animate blocked"/);
+    assert.match(commandBar, /compiling \? <LoaderCircle className="h-4 w-4 animate-spin" \/> : <Hammer className="h-4 w-4" \/>/);
+    assert.match(commandBar, /aria-busy=\{compiling\}/);
+    assert.match(workspaceSource, /const MIN_COMPILE_INDICATOR_MS = 700/);
+    assert.match(workspaceSource, /requestAnimationFrame\(\(\) => requestAnimationFrame\(\(\) => resolve\(\)\)\)/);
+    assert.match(workspaceSource, /setCompiling\(true\)[\s\S]*?waitForCompileIndicatorPaint\(\)[\s\S]*?await save\(nextDocument, null\)[\s\S]*?indicatorRemainingMs[\s\S]*?setCompiling\(false\)/);
+    assert.match(workspaceSource, /role="status"[\s\S]*?aria-live="assertive"[\s\S]*?Compiling physical layout…/);
+    assert.match(commandBar, /Review issues \(\{compileIssueCount\}\)/);
+    assert.match(commandBar, /onClick=\{\(\) => setCompileIssuesOpen\(true\)\}/);
+    assert.doesNotMatch(commandBar, /hidden xl:inline">\{compileControlLabel\}/);
+    assert.match(commandBar, /disabled=\{editorMode !== "animate" && !canAnimate\}/);
+  });
+});
+
 describe("Designer contextual properties", () => {
+  it("keeps Layers lighting indicators independent from Compile freshness", async () => {
+    const layersSource = await readFile("components/lighting/designer/designer-ui.tsx", "utf8");
+
+    assert.match(layersSource, /source\.targetType === "zone"[\s\S]*source\.enabled/);
+    assert.match(layersSource, /source\.targetType === "channel"[\s\S]*source\.enabled/);
+    assert.doesNotMatch(layersSource, /source\.stringIds\.length > 0|configuredLightSourceIds/);
+  });
+
   it("omits element coordinates and exposes one consistently destructive icon-only Delete action", async () => {
     const [workspaceSource, designerUiSource, buttonSource] = await Promise.all([
       readFile("components/lighting/partitura-workspace.tsx", "utf8"),
@@ -1909,7 +2233,7 @@ describe("Designer contextual properties", () => {
     const deleteSource = workspaceSource.slice(deleteStart, deleteEnd);
     assert.doesNotMatch(deleteSource, /selection\.type === "(?:zone|channel|face_graphic)" && .*locked/);
 
-    const actionsStart = workspaceSource.indexOf('{!hasMultipleGeometrySelection && (canCopySelection || canDeleteSelection) ? (');
+    const actionsStart = workspaceSource.indexOf('{!hasMultipleCanvasSelection && (canCopySelection || canDeleteSelection) ? (');
     const actionsEnd = workspaceSource.indexOf("</div>\n        ) : null}", actionsStart);
     const actions = workspaceSource.slice(actionsStart, actionsEnd);
     assert.ok(actionsStart >= 0 && actionsEnd > actionsStart);
@@ -1942,13 +2266,25 @@ describe("Designer contextual properties", () => {
     assert.match(faceGraphicContext, /label="Pass"[\s\S]*label="Filter color"/);
     assert.match(zoneContext, /label="Node"/);
     assert.match(contextualBar, /<Layers2 className="h-4 w-4" \/> Project Geometry/);
-    assert.match(contextualBar, /!hasMultipleGeometrySelection \? <>[\s\S]*<Badge>\{geometrySelections\.length\} selected<\/Badge>/);
+    assert.match(contextualBar, /!hasMultipleCanvasSelection \? <>[\s\S]*<Badge>\{selectedCanvasCount\} selected<\/Badge>/);
     assert.match(contextualBar, /aria-label="Union selected profiles"[\s\S]*aria-label="Subtract selected profiles"[\s\S]*aria-label="Intersect selected profiles"[\s\S]*aria-label="Exclude selected profiles"/);
     assert.match(contextualBar, /aria-label="Ungroup selected vectors"[\s\S]*<Ungroup className="h-4 w-4" \/>[\s\S]*aria-label="Group selected vectors"[\s\S]*<Group className="h-4 w-4" \/>/);
     assert.match(contextualBar, /<span>Union<\/span>[\s\S]*<span>Subtract<\/span>[\s\S]*<span>Intersect<\/span>[\s\S]*<span>Exclude<\/span>/);
     assert.doesNotMatch(contextualBar, /title="(?:More|Actions|Path operations)"|aria-label="(?:More|Actions|Path operations)"|<Ellipsis |Path operations/);
     assert.match(contextualBar, /label="Offset"[\s\S]*<Tally2 className="h-4 w-4" \/> Offset Path[\s\S]*label="Project to"[\s\S]*Project Geometry/);
     assert.match(contextualBar, /Create Zones[\s\S]*Generate Holes[\s\S]*Convert to paths/);
+  });
+
+  it("keeps the selected Channel context limited to productive actions", async () => {
+    const workspaceSource = await readFile("components/lighting/partitura-workspace.tsx", "utf8");
+    const channelContextStart = workspaceSource.indexOf('editorMode === "design" && selectedChannel ? (');
+    const channelContextEnd = workspaceSource.indexOf(') : editorMode === "design" && selectedController ? (', channelContextStart);
+    const channelContext = workspaceSource.slice(channelContextStart, channelContextEnd);
+
+    assert.ok(channelContextStart >= 0 && channelContextEnd > channelContextStart);
+    assert.doesNotMatch(channelContext, /label="(?:Fabrication side|Path|Ends|String direction)"/);
+    assert.match(channelContext, /Generate LED string/);
+    assert.match(channelContext, /selectedChannelPointIndex[\s\S]*label="Node"/);
   });
 
 });
@@ -1960,7 +2296,7 @@ describe("Designer zone layout visibility", () => {
 
     assert.match(canvasSource, /<img src=\{url\}[^>]*object-contain/);
     assert.match(rendererSource, /filter\(\(zone\) => zone\.visible !== false\)/);
-    assert.match(rendererSource, /strokeColor: options\.selected \? "#38bdf8" : "#2563eb"/);
+    assert.match(rendererSource, /strokeColor: options\.selected \? "#38bdf8" : idleStroke/);
   });
 });
 
@@ -2138,15 +2474,31 @@ describe("shared geometry tool policy", () => {
 
     const workspaceSource = await readFile("components/lighting/partitura-workspace.tsx", "utf8");
     assert.doesNotMatch(workspaceSource, /No lighting setup/);
-    assert.match(workspaceSource, /Router bit Ø/);
+    assert.equal(workspaceSource.match(/label="Channel router bit"/g)?.length, 1);
+    assert.doesNotMatch(workspaceSource, /label="Router bit Ø"/);
     assert.doesNotMatch(workspaceSource, /label="Unit"/);
     assert.match(workspaceSource, /setChannelNodeRadius/);
     assert.match(workspaceSource, /label="Fillet"/);
     assert.doesNotMatch(workspaceSource, /label="Fillet radius"/);
     assert.match(workspaceSource, /const directFilletAvailable = Boolean\(selectedBuildArea \|\| selectedZone \|\| selectedFaceGraphic\);/);
     assert.doesNotMatch(workspaceSource, /updateChannelPoint\(selectedChannel/);
-    assert.match(workspaceSource, /channelRouterDiameterMm: widthMm/);
-    assert.match(workspaceSource, /setChannelRouterDiameter\(selectedChannel\.id/);
+    assert.match(workspaceSource, /label="Channel router bit"[\s\S]*patchDesigner\(\{ channelRouterDiameterMm: channelWidthForRouterDiameter/);
+    assert.doesNotMatch(workspaceSource, /setChannelRouterDiameter/);
+  });
+
+  it("finishes and deselects a Channel with Enter while keeping the Channel tool active", async () => {
+    const canvasSource = await readFile("components/lighting/designer/designer-paper-canvas.tsx", "utf8");
+    const enterBranch = canvasSource.slice(
+      canvasSource.indexOf('if (event.key === "Enter" && shapeDraft?.target === "channel")'),
+      canvasSource.indexOf('else if (event.key === "Enter" && shapeDraft?.target === "work_line"')
+    );
+    const finishChannel = canvasSource.slice(
+      canvasSource.indexOf("function finishChannelDraft("),
+      canvasSource.indexOf("function finishWorkLineDraft(")
+    );
+
+    assert.match(enterBranch, /event\.preventDefault\(\);[\s\S]*finishChannelDraft\(false, true\)[\s\S]*setShapeDraft\(null\);[\s\S]*onSelect\(null\);[\s\S]*return;/);
+    assert.match(finishChannel, /continueDrawing = false[\s\S]*if \(continueDrawing\) \{[\s\S]*onSelect\(null\);[\s\S]*return;[\s\S]*onToolChange\("select"\)/);
   });
 
   it("keeps Channel node and handle drags local until one committed pointer release", async () => {
@@ -2177,7 +2529,7 @@ describe("Channel creation from selected paths", () => {
     assert.match(workspaceSource, /> Generate Channel/);
     assert.doesNotMatch(workspaceSource, /> Create from \{/);
     assert.match(workspaceSource, /const sourceZoneName = geometrySelections\.length === 1/);
-    assert.match(workspaceSource, /name: sourceZoneName \?\? `Channel/);
+    assert.match(workspaceSource, /name: generatedChannelName\(sourceZoneName, `Channel/);
   });
 
   it("orders a connected chain and preserves editable Bezier handles when a segment is reversed", () => {
@@ -2213,6 +2565,70 @@ describe("Channel creation from selected paths", () => {
     assert.deepEqual(left.paths[0].points.map((point) => point.handleIn ?? point.handleOut), centered.paths[0].points.map((point) => point.handleIn ?? point.handleOut));
     assert.ok(Math.hypot(left.paths[0].points[0].x - source.points[0].x, left.paths[0].points[0].y - source.points[0].y) > 0.49);
   });
+
+  it("creates semantic inside and outside offsets with an explicit distance", () => {
+    const source = { id: "outline", kind: "rect" as const, x: 0, y: 0, width: 10, height: 8 };
+    const inside = channelPathsFromGeometries([source], "inside", 6, 10);
+    const outside = channelPathsFromGeometries([source], "outside", 6, 10);
+    assert.equal(inside.issue, null);
+    assert.equal(outside.issue, null);
+    assert.ok(Math.min(...inside.paths[0].points.map((point) => point.x)) > 0.9);
+    assert.ok(Math.max(...inside.paths[0].points.map((point) => point.x)) < 9.1);
+    assert.ok(Math.min(...outside.paths[0].points.map((point) => point.x)) < -0.9);
+    assert.ok(Math.max(...outside.paths[0].points.map((point) => point.x)) > 10.9);
+  });
+
+  it("names generated inset and outside Channels with the actual requested offset", () => {
+    assert.equal(generatedChannelName("Letter offset 4 mm", "Channel 1", "inside", 12.5), "Letter inset 12.5 mm");
+    assert.equal(generatedChannelName("Letter inset 4 mm", "Channel 1", "outside", 8), "Letter outside offset 8 mm");
+    assert.equal(generatedChannelName("Letter", "Channel 1", "center", 99), "Letter");
+  });
+
+  it("generates an independent open electrical string from a closed Channel seam", () => {
+    const designer = createNewPartituraDocument("channel_string").designer;
+    const channel: DesignerChannelForm = {
+      id: "rear_channel", name: "Rear outline", points: [{ x: 0, y: 0 }, { x: 4, y: 0 }, { x: 4, y: 3 }, { x: 0, y: 3 }],
+      pathMode: "straight", widthMm: 10, closed: true, cap: "round", fabricationSurface: "rear", visible: true, locked: false, opacity: 1
+    };
+    const route = createLedStringFromChannel(channel, designer, false, 2);
+    assert.ok(route);
+    assert.equal(route.kind, "led_string");
+    assert.equal(route.designSurface, "rear");
+    assert.deepEqual(route.lightingHost, { type: "channel", id: "rear_channel" });
+    assert.deepEqual(route.points[0], route.points[route.points.length - 1]);
+    assert.deepEqual(route.points[0], { x: 4, y: 3 });
+  });
+});
+
+describe("automatic string connection", () => {
+  it("enables a direction only when exactly one selected string reaches the controller", () => {
+    const designer = createNewPartituraDocument("string_connection").designer;
+    const port = controllerPortPoint(designer.controller, 0, designer.snapCm);
+    designer.routes = [
+      { id: "feed", name: "Feed", kind: "data_cable", designSurface: "rear", points: [{ ...port, joint: true }, { x: 20, y: 10, joint: true }] },
+      { id: "rooted", name: "Rooted", kind: "led_string", designSurface: "rear", points: [{ x: 20, y: 10, joint: true }, { x: 30, y: 10 }] },
+      { id: "next", name: "Next", kind: "led_string", designSurface: "rear", points: [{ x: 40, y: 10 }, { x: 50, y: 10 }] }
+    ];
+    const plan = selectedStringConnectionPlan(designer, ["next", "rooted"]);
+    assert.equal(plan.reason, null);
+    assert.equal(plan.upstream?.id, "rooted");
+    assert.equal(plan.downstream?.id, "next");
+    assert.equal(plan.output, 1);
+    assert.match(selectedStringConnectionPlan(designer, ["next"]).reason ?? "", /exactly two/);
+    assert.match(selectedStringConnectionPlan({ ...designer, routes: designer.routes.map((route) => route.id === "next" ? { ...route, designSurface: "front" } : route) }, ["rooted", "next"]).reason ?? "", /same construction surface/);
+  });
+
+  it("exposes additive string selection and the guarded connection command", async () => {
+    const [workspaceSource, layersSource, canvasSource] = await Promise.all([
+      readFile("components/lighting/partitura-workspace.tsx", "utf8"),
+      readFile("components/lighting/designer/designer-ui.tsx", "utf8"),
+      readFile("components/lighting/designer/designer-paper-canvas.tsx", "utf8")
+    ]);
+    assert.match(workspaceSource, /selectedStringConnectionPlan\(designer, selectedLedStringIds\)/);
+    assert.match(workspaceSource, /Connect strings/);
+    assert.match(layersSource, /onSelect\(\{ type: "route", id: route\.id \}, designerAdditiveSelectionRequested\(event\)\)/);
+    assert.match(canvasSource, /hit\.type === "route" \? \{ type: "route", id: hit\.id \}/);
+  });
 });
 
 describe("safe whole-object movement", () => {
@@ -2228,6 +2644,17 @@ describe("safe whole-object movement", () => {
     assert.deepEqual(designerWholeObjectHit({ type: "route_point", id: "route_1", pointIndex: 0 }), { type: "route", id: "route_1" });
   });
 
+  it("lets an unselected electrical terminal start a deliberate Select drag", () => {
+    assert.deepEqual(
+      designerInitialSelectHit({ type: "route_point", id: "route_1", pointIndex: 0 }, false),
+      { type: "route_point", id: "route_1", pointIndex: 0 }
+    );
+    assert.deepEqual(
+      designerInitialSelectHit({ type: "zone_point", id: "zone_1", pointIndex: 2 }, false),
+      { type: "zone", id: "zone_1" }
+    );
+  });
+
   it("exposes one Move tool with an explicit X/Y control", async () => {
     const workspaceSource = await readFile("components/lighting/partitura-workspace.tsx", "utf8");
     const canvasSource = await readFile("components/lighting/designer/designer-paper-canvas.tsx", "utf8");
@@ -2237,7 +2664,7 @@ describe("safe whole-object movement", () => {
     assert.match(workspaceSource, /<option value="y">Y only<\/option>/);
     assert.match(canvasSource, /tool !== "move" \|\| event\.ctrlKey \|\| event\.metaKey/);
     assert.match(canvasSource, /tool === "move" \? designerWholeObjectHit\(rawHit\) : rawHit/);
-    assert.match(canvasSource, /tool === "select" && !pickedOwnerIsSelected \? pickedOwner : pickedHit/);
+    assert.match(canvasSource, /tool === "select" \? designerInitialSelectHit\(pickedHit, pickedOwnerIsSelected\) : pickedHit/);
     assert.match(canvasSource, /if \(tool !== "move" \|\| designer\.layers\.zones\.locked\) return;\s*setDrag\(\{ type: "zone-move"/);
   });
 });
@@ -2251,8 +2678,11 @@ describe("Channel Project Geometry", () => {
 
     const centerline = resolveDesignerProjectionGeometry(canonical, "channel_perimeter").geometry!;
     const perimeter = resolveProjectedGeometry(canonical, "channel_perimeter").geometry!;
+    const fabricationCenterline = resolveProjectedGeometry(canonical, "channel_perimeter", "fabrication").geometry!;
     assert.equal(centerline.closed, false);
     assert.equal(perimeter.closed, true);
+    assert.equal(fabricationCenterline.closed, false);
+    assert.deepEqual(fabricationCenterline.points, canonical.channels[0].points);
     assert.ok(perimeter.height >= 0.99);
     assert.equal(canonical.channels[0].points.length, 2);
     assert.deepEqual(pickDesignerHit(canonical, "faceGraphic", { x: 7, y: 3.4 }, { x: 0, y: 0, width: 20, height: 10 }, { width: 1000, height: 500 }), { type: "projection", id: "channel_perimeter" });
@@ -2457,15 +2887,17 @@ describe("Offset Path and legacy derived offsets", () => {
 });
 
 describe("Project Geometry and legacy linked projections", () => {
-  it("materializes new projections without changing focus or creating a link", async () => {
+  it("materializes new projections while preserving source focus and without creating a link", async () => {
     const workspaceSource = await readFile("components/lighting/partitura-workspace.tsx", "utf8");
     const start = workspaceSource.indexOf("function projectSelectedGeometry()");
     const end = workspaceSource.indexOf("function applyBooleanOperation(", start);
     const projectSource = workspaceSource.slice(start, end);
-    assert.match(projectSource, /resolveDesignerProjectionGeometry\(\{ \.\.\.designer, projections: \[\.\.\.designer\.projections, projection\] \}, projection\.id\)/);
-    assert.match(projectSource, /Independent projection created/);
+    assert.match(projectSource, /resolveDesignerProjectionGeometry\([\s\S]*?projections: \[\.\.\.designer\.projections, projection\][\s\S]*?projection\.id,[\s\S]*?projectionTargetLayer[\s\S]*?\)/);
+    assert.match(projectSource, /source layer and selection preserved/);
     assert.doesNotMatch(projectSource, /updateDesigner\(\{ \.\.\.designer, projections:/);
-    assert.doesNotMatch(projectSource, /setActiveLayer|setSelection|breakProjectionLink/);
+    assert.match(projectSource, /reference: \{ \.\.\.designer\.layers\.reference, visible: true \}/);
+    assert.doesNotMatch(projectSource, /designer\.layers\[layerKey\]\.locked/);
+    assert.doesNotMatch(projectSource, /setActiveLayer|setSelection|setGeometrySelections|breakProjectionLink/);
     const legacyProjectionStart = workspaceSource.indexOf(") : editorMode === \"design\" && selectedProjection ? (");
     const legacyProjectionEnd = workspaceSource.indexOf(") : editorMode === \"design\" && selectedGeometryId ? (", legacyProjectionStart);
     assert.doesNotMatch(workspaceSource.slice(legacyProjectionStart, legacyProjectionEnd), /Break Link|breakProjectionLink/);
@@ -2752,7 +3184,8 @@ describe("closed channel geometry", () => {
     assert.ok(contours[0].every((point) => distanceToChannelCenter(acuteChannel, point) > 0.25));
 
     const rendererSource = await readFile("components/lighting/designer/designer-paper-renderer.ts", "utf8");
-    assert.match(rendererSource, /strokeColor: options\.selected \? "rgba\(245,158,11,0\.30\)" : "rgba\(148,163,184,0\.16\)"/);
+    assert.match(rendererSource, /options\.colorMode === "night"[\s\S]*band: "rgba\(245,158,11,0\.26\)"[\s\S]*border: "#f59e0b"[\s\S]*band: "rgba\(217,119,6,0\.22\)"[\s\S]*border: "#b45309"/);
+    assert.match(rendererSource, /strokeColor: options\.selected \? "rgba\(245,158,11,0\.30\)" : idleColors\.band/);
     assert.match(rendererSource, /strokeWidth: channelStrokeWidth,\s+strokeJoin: "round"/);
     assert.match(rendererSource, /resolveChannelOutlineContours\(channel\)/);
     assert.doesNotMatch(rendererSource, /openChannelOutline\(channel\)/);
@@ -2894,6 +3327,24 @@ describe("timeline clip target selection", () => {
     );
   });
 
+  it("resolves a global lighting clip to every existing owner of that mode", () => {
+    const designer = createDefaultPartituraDocument("global_clip_selection").designer!;
+    designer.zones = [
+      { id: "zone_a", name: "A", shape: "rect", x: 0, y: 0, width: 10, height: 10, visible: true, locked: false, opacity: 1 },
+      { id: "zone_b", name: "B", shape: "rect", x: 12, y: 0, width: 10, height: 10, visible: true, locked: false, opacity: 1 }
+    ];
+    designer.lightSources = [
+      { ...createDefaultOpticalTreatment("zone", "zone_a", "front"), id: "source_a_front", stringIds: ["string_a"] },
+      { ...createDefaultOpticalTreatment("zone", "zone_b", "front"), id: "source_b_front", stringIds: ["string_b"] },
+      { ...createDefaultOpticalTreatment("zone", "zone_b", "halo"), id: "source_b_halo", stringIds: ["string_b"] }
+    ];
+
+    assert.deepEqual(designerOpticalTargetsForClipTarget(designer, "full_front"), [
+      { type: "zone", id: "zone_a" },
+      { type: "zone", id: "zone_b" }
+    ]);
+  });
+
   it("offers separate clip creation targets for Front and Halo on the same zone", () => {
     const targets = [
       { id: "full_sign", name: "Full sign" },
@@ -2941,19 +3392,35 @@ describe("timeline clip target selection", () => {
     ]);
   });
 
-  it("compiles separate global groups for Front and Halo sources", () => {
+  it("maps source pixels and global groups from geometry plus the required surface", () => {
     const designer = createDefaultPartituraDocument("typed_global_targets").designer!;
     const target = designer.zones[0];
     const string = designer.routes.find((route) => route.kind === "led_string");
     assert.ok(target && string);
     designer.lightSources = [
-      { ...createDefaultOpticalTreatment("zone", target.id, "front"), id: "source_front", stringIds: [string.id] },
-      { ...createDefaultOpticalTreatment("zone", target.id, "halo"), id: "source_halo", stringIds: [string.id] }
+      { ...createDefaultOpticalTreatment("zone", target.id, "front"), id: "source_front" },
+      { ...createDefaultOpticalTreatment("zone", target.id, "halo"), id: "source_halo" }
     ];
 
-    const groups = compileDesignerLayout(designer).groups;
-    assert.deepEqual(groups.find((group) => group.id === "full_front")?.members, [{ type: "zone", id: "source_front" }]);
-    assert.deepEqual(groups.find((group) => group.id === "full_halo")?.members, [{ type: "zone", id: "source_halo" }]);
+    const compiled = buildDocumentFromDesigner({ ...createDefaultPartituraDocument("typed_global_targets"), designer });
+    assert.equal(compiled.compiledLayout?.groups.find((group) => group.id === "full_front"), undefined);
+    assert.deepEqual(compiled.compiledLayout?.groups.find((group) => group.id === "full_halo")?.members, [{ type: "zone", id: "source_halo" }]);
+    assert.deepEqual(compiledStringIdsForSource(compiled.compiledLayout, "source_front"), []);
+    assert.deepEqual(compiledStringIdsForSource(compiled.compiledLayout, "source_halo"), [string.id]);
+    assert.deepEqual(compiled.designer?.lightSources.map((source) => source.stringIds), [[], [string.id]]);
+  });
+
+  it("omits an empty global light-source target instead of generating an invalid fallback zone", () => {
+    const layout = {
+      zones: [{ id: "source_halo" }],
+      groups: [{ id: "full_halo" }, { id: "full_sign" }]
+    };
+
+    assert.equal(resolveGeneratedPartituraTarget("full_front", layout), null);
+    assert.deepEqual(resolveGeneratedPartituraTarget("full_halo", layout), { type: "group", id: "full_halo" });
+    assert.deepEqual(resolveGeneratedPartituraTarget("full_sign", layout), { type: "group", id: "full_sign" });
+    assert.deepEqual(resolveGeneratedPartituraTarget("source_halo", layout), { type: "zone", id: "source_halo" });
+    assert.deepEqual(resolveGeneratedPartituraTarget("installation", layout), { type: "installation" });
   });
 
   it("requires a selected source with an assigned strip to create a clip", async () => {
@@ -2994,14 +3461,15 @@ describe("timeline clip target selection", () => {
     assert.match(frontEditor, /treatment\.material === "silicone"[\s\S]*?label="Transmission"[\s\S]*?label="Beam"/);
   });
 
-  it("lays out lighting setup string assignments as a responsive matrix", async () => {
+  it("shows compiled string assignments as read-only information", async () => {
     const source = await readFile("components/lighting/partitura-workspace.tsx", "utf8");
     const editor = source.slice(source.indexOf('function LightingMountsEditor'), source.indexOf('function DiffuserSlider'));
 
     assert.match(editor, /const ledStrings = designer\.routes\.filter\(\(route\) => route\.kind === "led_string"\)/);
-    assert.match(editor, /grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3/);
-    assert.match(editor, /checked=\{treatment\.stringIds\.includes\(route\.id\)\}/);
-    assert.match(editor, /<span className="min-w-0 truncate" title=\{route\.name\}>\{route\.name\}<\/span>/);
+    assert.match(editor, /compiledStringIdsForSource\(compiledLayout, treatment\.id\)/);
+    assert.match(editor, /Assigned strings · compiled automatically/);
+    assert.match(editor, /Compile to update the orthogonal mapping/);
+    assert.doesNotMatch(editor, /checked=\{treatment\.stringIds\.includes\(route\.id\)\}/);
   });
 
   it("preserves the selected clip when its source belongs to the selected zone", () => {
@@ -3014,6 +3482,22 @@ describe("timeline clip target selection", () => {
     assert.equal(clipIdForSelectedTargets(clips, "clip_halo", targets), "clip_halo");
     assert.equal(clipIdForSelectedTargets(clips, undefined, targets), "clip_front");
     assert.equal(clipIdForSelectedTargets(clips, "clip_halo", ["zone_without_clips"]), undefined);
+  });
+
+  it("keeps a global clip selected while its compatible objects are selected for calibration", () => {
+    const clips = [
+      { id: "clip_full_front", target: "full_front" },
+      { id: "clip_letter_front", target: "source_letter_front" }
+    ] as ClipForm[];
+
+    assert.equal(
+      clipIdForSelectedTargets(clips, "clip_full_front", ["source_letter_front", "zone_letter"], ["source_letter_front", "source_logo_front"]),
+      "clip_full_front"
+    );
+    assert.equal(
+      explicitClipTargetSelectionSettled(clips, "clip_full_front", ["source_letter_front", "zone_letter"], ["source_letter_front", "source_logo_front"]),
+      true
+    );
   });
 
   it("does not let stale canvas selection clear an explicitly clicked clip", () => {
@@ -3293,6 +3777,215 @@ describe("detaching solder joints", () => {
 });
 
 describe("physical light mounts", () => {
+  it("normalizes a selected strip snapshot and samples cut marks continuously through bends", async () => {
+    const document = createDefaultPartituraDocument("strip_profile_snapshot");
+    document.designer!.stripConfiguration = {
+      sourceProfileId: "global:ws2811-12v-20",
+      sourceProfileRevision: 1,
+      name: "WS2811 · 12 V · 20 px/m · 60 LED/m",
+      construction: "discrete",
+      nativeControlProtocol: "ws281x",
+      colorModel: "rgb",
+      voltageV: 12,
+      cutMode: "marked_segments",
+      cutSegmentLengthMm: 50,
+      addressablePixelsPerCutSegment: 1,
+      physicalLedsPerCutSegment: 3,
+      physicalLedsPerAddressablePixel: 3,
+      addressablePixelsPerMeter: 20,
+      physicalLedsPerMeter: 60,
+      pcbWidthMm: 10,
+      ledPackageSizeMm: 5,
+      ratedPowerWPerMeter: 10
+    };
+    document.designer!.addressablePixelsPerMeter = 20;
+    document.designer!.ledDensityPerMeter = 20;
+    document.designer!.ledsPerMeter = 60;
+    const normalized = normalizeDefaultSignLayout(document).designer;
+
+    assert.equal(normalized.stripConfiguration?.sourceProfileId, "global:ws2811-12v-20");
+    assert.equal(normalized.stripConfiguration?.cutMode, "marked_segments");
+    assert.equal(normalized.stripConfiguration?.cutSegmentLengthMm, undefined);
+    assert.equal(normalized.stripConfiguration?.physicalLedsPerCutSegment, 3);
+    assert.equal(normalized.stripConfiguration?.physicalLedsPerAddressablePixel, 3);
+    assert.equal(resolvedLedStripCutSegmentLengthMm({ ...normalized.stripConfiguration!, cutSegmentLengthMm: 999 }, normalized.ledsPerMeter), 50);
+    assert.equal(resolvedLedStripCutSegmentLengthMm({ ...normalized.stripConfiguration!, cutSegmentLengthMm: 999, physicalLedsPerCutSegment: 6 }, normalized.ledsPerMeter), 100);
+    assert.notEqual(designerCompileSignature(normalized), designerCompileSignature({ ...normalized, stripConfiguration: { ...normalized.stripConfiguration!, cutMode: "free_cut" } }));
+
+    const marks = sampleRouteCutMarks({ id: "bent", name: "Bent", kind: "led_string", points: [{ x: 0, y: 0 }, { x: 8, y: 0 }, { x: 8, y: 8 }] }, 50);
+    assert.deepEqual(marks.map((mark) => [Number(mark.x.toFixed(3)), Number(mark.y.toFixed(3)), mark.routeOffsetCm]), [[5, 0, 5], [8, 2, 10], [8, 7, 15]]);
+
+    const [workspaceSource, rendererSource] = await Promise.all([
+      readFile("components/lighting/partitura-workspace.tsx", "utf8"),
+      readFile("components/lighting/designer/designer-paper-renderer.ts", "utf8")
+    ]);
+    assert.match(workspaceSource, /label="Strip preset"[\s\S]*?previewSelectedLedStripProfile/);
+    assert.doesNotMatch(workspaceSource, /applySelectedLedStripProfile/);
+    assert.match(workspaceSource, />Cancel<\/Button>[\s\S]*?>Apply changes<\/Button>/);
+    assert.match(workspaceSource, /designer=\{ledStripPreviewDesigner\}/);
+    assert.match(workspaceSource, /onChange=\{updateDesignerFromCanvas\}/);
+    assert.match(workspaceSource, /construction === "continuous"[\s\S]*cutMode === "free_cut"/);
+    assert.match(workspaceSource, /label="LEDs \/ cut"/);
+    assert.match(workspaceSource, /label="LEDs \/ pixel"/);
+    assert.match(workspaceSource, /physicalLedsPerAddressablePixel: Math\.max\(0\.1, physicalLedsPerAddressablePixel\)/);
+    assert.doesNotMatch(workspaceSource, /physicalLedsPerCutSegment:[^\n]+physicalLedsPerMeter/);
+    assert.doesNotMatch(workspaceSource, /physicalLedsPerAddressablePixel:[^\n]+(?:physicalLedsPerMeter|addressablePixelsPerMeter)/);
+    assert.match(workspaceSource, /Review specification:[\s\S]*pixels\/m ×[\s\S]*LEDs\/pixel implies/);
+    assert.match(workspaceSource, /construction === "continuous" && ledStripPreviewDesigner\.stripConfiguration\.cutMode !== "free_cut"/);
+    assert.match(rendererSource, /resolvedLedStripCutSegmentLengthMm\(designer\.stripConfiguration, designer\.ledsPerMeter\)/);
+    assert.match(rendererSource, /options\.cutMode === "marked_segments"[\s\S]*sampleRouteCutMarks\(route, options\.cutSegmentLengthMm\)/);
+    assert.match(rendererSource, /options\.construction === "continuous"/);
+    assert.match(rendererSource, /options\.colorMode === "night" \? "#93c5fd" : "#2563eb"/);
+    assert.match(rendererSource, /const idleFill = options\.colorMode === "night" \? "rgba\(96,165,250,0\.22\)"/);
+    assert.match(rendererSource, /const idleLedColors = options\.colorMode === "day"[\s\S]*board: "#f59e0b"[\s\S]*stroke: "#7c2d12"[\s\S]*light: "#b45309"/);
+    assert.match(rendererSource, /strokeColor: options\.selected \? "#fef3c7" : idleLedColors\.board/);
+    assert.match(rendererSource, /fillColor: options\.selected \? "#f0abfc" : idleLedColors\.light/);
+
+    document.designer!.stripConfiguration = { ...document.designer!.stripConfiguration!, construction: "discrete", cutMode: "free_cut" };
+    assert.equal(normalizeDefaultSignLayout(document).designer.stripConfiguration?.cutMode, "marked_segments");
+  });
+
+  it("persists physical LED and PCB dimensions while only LED size changes optical compilation", async () => {
+    const document = createDefaultPartituraDocument("physical_led_dimensions");
+    document.designer!.ledPackageSizeMm = 3.5;
+    document.designer!.ledPcbWidthMm = 8;
+    const normalized = normalizeDefaultSignLayout(document).designer;
+
+    assert.equal(normalized.ledPackageSizeMm, 3.5);
+    assert.equal(normalized.ledPcbWidthMm, 8);
+    const signature = designerCompileSignature(normalized);
+    assert.notEqual(designerCompileSignature({ ...normalized, ledPackageSizeMm: 2 }), signature);
+    assert.equal(designerCompileSignature({ ...normalized, ledPcbWidthMm: 12 }), signature);
+
+    const [workspaceSource, rendererSource] = await Promise.all([
+      readFile("components/lighting/partitura-workspace.tsx", "utf8"),
+      readFile("components/lighting/designer/designer-paper-renderer.ts", "utf8")
+    ]);
+    assert.match(workspaceSource, /label="LED package"[\s\S]*label="PCB width"/);
+    assert.match(rendererSource, /lengthToScreen\(options\.ledPackageSizeMm \/ 10\)/);
+  });
+
+  it("requires 90 percent of the physical LED footprint instead of expanding it by pitch", () => {
+    const designer = createDefaultPartituraDocument("pixel_center_membership").designer!;
+    designer.channels = [
+      { id: "channel_near", name: "Near", points: [{ x: 44, y: 4 }, { x: 100, y: 4 }], pathMode: "straight", widthMm: 6, fabricationSurface: "rear", visible: true, locked: false },
+      { id: "channel_clear", name: "Clear", points: [{ x: 44, y: 4.24 }, { x: 100, y: 4.24 }], pathMode: "straight", widthMm: 6, fabricationSurface: "rear", visible: true, locked: false }
+    ];
+    designer.zones = [{ id: "zone_clear", name: "Clear zone", shape: "rect", x: 44, y: 5, width: 56, height: 0.2, visible: true, locked: false, opacity: 1 }];
+    designer.lightSources = [
+      { ...createDefaultOpticalTreatment("channel", "channel_near", "halo"), name: "Near · Halo" },
+      { ...createDefaultOpticalTreatment("channel", "channel_clear", "halo"), name: "Clear · Halo" }
+    ];
+
+    const layout = compileDesignerLayout(designer);
+    const pixelsById = new Map(layout.pixelMap.map((pixel) => [pixel.id, pixel]));
+    const nearPixels = layout.zones.find((zone) => zone.id === "channel_near")?.pixelIds ?? [];
+    const clearPixels = layout.zones.find((zone) => zone.id === "channel_clear")?.pixelIds ?? [];
+
+    assert.ok(nearPixels.some((id) => pixelsById.get(id)?.stringId === "route_fondo"));
+    assert.equal(clearPixels.some((id) => pixelsById.get(id)?.stringId === "route_fondo"), false);
+    assert.equal(layout.zones.find((zone) => zone.id === "zone_clear")?.pixelIds.length, 0);
+    assert.equal(layout.validation.warnings.some((warning) => warning.includes("mapped to multiple Lighting Setups")), false);
+  });
+
+  it("maps LEDs across the closing segment of a closed Channel", () => {
+    const designer = createDefaultPartituraDocument("closed_channel_membership").designer!;
+    designer.channels = [{
+      id: "channel_closed",
+      name: "Closed Channel",
+      points: [{ x: 44, y: 4 }, { x: 44, y: -10 }, { x: 100, y: -10 }, { x: 100, y: 4 }],
+      pathMode: "straight",
+      widthMm: 6,
+      closed: true,
+      cap: "butt",
+      fabricationSurface: "rear",
+      visible: true,
+      locked: false,
+      opacity: 1
+    }];
+
+    const layout = compileDesignerLayout(designer);
+    const pixelsById = new Map(layout.pixelMap.map((pixel) => [pixel.id, pixel]));
+    const channelPixels = (layout.zones.find((zone) => zone.id === "channel_closed")?.pixelIds ?? [])
+      .map((id) => pixelsById.get(id))
+      .filter((pixel) => pixel?.stringId === "route_fondo");
+
+    assert.ok(channelPixels.some((pixel) => pixel && pixel.x > 55 && pixel.x < 90 && Math.abs(pixel.y - 4) < 1e-6));
+  });
+
+  it("still warns when a physical pixel center really lies within two channel bands", () => {
+    const designer = createDefaultPartituraDocument("overlapping_channel_membership").designer!;
+    designer.channels = [
+      { id: "channel_a", name: "Channel A", points: [{ x: 44, y: 4 }, { x: 100, y: 4 }], pathMode: "straight", widthMm: 6, fabricationSurface: "rear", visible: true, locked: false },
+      { id: "channel_b", name: "Channel B", points: [{ x: 44, y: 4.02 }, { x: 100, y: 4.02 }], pathMode: "straight", widthMm: 6, fabricationSurface: "rear", visible: true, locked: false }
+    ];
+    designer.lightSources = [
+      { ...createDefaultOpticalTreatment("channel", "channel_a", "halo"), name: "Channel A · Halo" },
+      { ...createDefaultOpticalTreatment("channel", "channel_b", "halo"), name: "Channel B · Halo" }
+    ];
+
+    const layout = compileDesignerLayout(designer);
+
+    assert.ok(layout.validation.warnings.some((warning) => warning.includes("mapped to multiple Lighting Setups (Channel A · Halo, Channel B · Halo)")));
+  });
+
+  it("reports only physically overlapping automatic assignments with operator targets", async () => {
+    const designer = createDefaultPartituraDocument("actionable_compile_issues").designer!;
+    designer.lightSources = [
+      { ...createDefaultOpticalTreatment("zone", "fondo", "halo"), name: "Fondo · Halo" },
+      { ...createDefaultOpticalTreatment("zone", "fondo", "wall_wash"), name: "Fondo · Wall Wash" }
+    ];
+
+    const layout = compileDesignerLayout(designer);
+    const issue = layout.validation.issues.find((entry) => entry.id.includes("shared-pixels:route_fondo"));
+    assert.ok(issue);
+    assert.match(issue.message, /^Fondo LED string has \d+ physical pixels mapped/);
+    assert.doesNotMatch(issue.message, /^route_fondo/);
+    assert.deepEqual(issue.targets, [
+      { type: "route", id: "route_fondo", label: "Fondo LED string" },
+      { type: "zone", id: "fondo", label: "Fondo · Halo", action: "lighting_setup" },
+      { type: "zone", id: "fondo", label: "Fondo · Wall Wash", action: "lighting_setup" }
+    ]);
+
+    const workspaceSource = await readFile("components/lighting/partitura-workspace.tsx", "utf8");
+    assert.match(workspaceSource, /focusCompileIssueTarget/);
+    assert.match(workspaceSource, /assign Lighting host directly in each warning card/);
+    assert.match(workspaceSource, /function compileIssueTargetIcon[\s\S]*?Waypoints[\s\S]*?CircleDot[\s\S]*?Waves/);
+    assert.match(workspaceSource, /function compileIssueTargetTone[\s\S]*?emerald-500[\s\S]*?amber-500[\s\S]*?sky-500/);
+    assert.match(workspaceSource, /function compileIssueLightingHostEditor[\s\S]*?Lighting host for \{route\.name\}[\s\S]*?Choose the physical owner of this string, then Compile again/);
+    const selectedRouteContextStart = workspaceSource.indexOf('editorMode === "design" && selectedRoute');
+    const selectedRouteContext = workspaceSource.slice(selectedRouteContextStart, workspaceSource.indexOf('selectedArtworkCanCreateZones', selectedRouteContextStart));
+    assert.ok(selectedRouteContext.indexOf('ToolbarField label="Lighting host"') < selectedRouteContext.indexOf('ToolbarField label="Type"'));
+  });
+
+  it("uses an LED string Lighting host to disambiguate overlapping Front targets", async () => {
+    const designer = createDefaultPartituraDocument("stacked_front_sources").designer!;
+    designer.routes = designer.routes.map((route) => route.id === "route_fondo"
+      ? { ...route, designSurface: "front", lightingHost: { type: "zone" as const, id: "fondo" } }
+      : route.id === "data_feed_1" ? { ...route, designSurface: "front" } : route);
+    designer.channels = [{
+      id: "upper_channel", name: "Upper channel", points: designer.routes.find((route) => route.id === "route_fondo")!.points,
+      pathMode: "straight", widthMm: 10, closed: false, cap: "round", fabricationSurface: "front", visible: true, locked: false, opacity: 1
+    }];
+    const chamber = { ...createDefaultOpticalTreatment("zone", "fondo", "front"), id: "source_chamber", name: "Acrylic chamber · Front" };
+    const upperStrip = { ...createDefaultOpticalTreatment("channel", "upper_channel", "front"), id: "source_upper_strip", name: "Upper channel · Front" };
+    designer.lightSources = [chamber, upperStrip];
+
+    const layout = compileDesignerLayout(designer);
+    assert.ok(compiledStringIdsForSource(layout, chamber.id).includes("route_fondo"));
+    assert.deepEqual(compiledStringIdsForSource(layout, upperStrip.id), []);
+    assert.equal(layout.validation.warnings.some((warning) => warning.includes("mapped to multiple Lighting Setups")), false);
+    const hostedByChannel = { ...designer, routes: designer.routes.map((route) => route.id === "route_fondo" ? { ...route, lightingHost: { type: "channel" as const, id: "upper_channel" } } : route) };
+    const channelLayout = compileDesignerLayout(hostedByChannel);
+    assert.deepEqual(compiledStringIdsForSource(channelLayout, chamber.id), []);
+    assert.ok(compiledStringIdsForSource(channelLayout, upperStrip.id).includes("route_fondo"));
+    assert.notEqual(designerCompileSignature(hostedByChannel), designerCompileSignature(designer));
+
+    const workspaceSource = await readFile("components/lighting/partitura-workspace.tsx", "utf8");
+    assert.match(workspaceSource, /ToolbarField label="Lighting host"[\s\S]*Auto · geometry[\s\S]*<optgroup label="Zones">[\s\S]*<optgroup label="Channels">/);
+    assert.doesNotMatch(workspaceSource, /Emitter side/);
+  });
+
   it("renders rear illumination before front-face illumination regardless of saved order", () => {
     const front = createDefaultOpticalTreatment("zone", "zone_test", "front");
     const halo = createDefaultOpticalTreatment("zone", "zone_test", "halo");
@@ -3307,6 +4000,7 @@ describe("physical light mounts", () => {
   it("persists normalized Halo-Lit settings without changing the physical compile signature", () => {
     const document = createDefaultPartituraDocument("optics_test");
     const baseline = normalizeDefaultSignLayout(document);
+    baseline.designer.routes[0].lightingHost = { type: "zone", id: "fondo" };
     baseline.designer.lightSources = [{
       ...createDefaultOpticalTreatment("zone", "letra_1", "halo"),
       stringIds: ["route_letras"]
@@ -3321,6 +4015,7 @@ describe("physical light mounts", () => {
 
     const normalized = normalizeDefaultSignLayout(baseline).designer;
     assert.equal(normalized.lightSources[0].mode, "halo");
+    assert.deepEqual(normalized.routes[0].lightingHost, { type: "zone", id: "fondo" });
     assert.equal(normalized.lightSources[0].spreadCm, 7.5);
     assert.equal(designerCompileSignature(normalized), before);
   });
@@ -3409,5 +4104,149 @@ describe("physical light mounts", () => {
     const normalized = normalizeDefaultSignLayout(document);
     assert.equal(normalized.scenes[0].clips[0].enabled, false);
     assert.equal(normalized.scenes[0].clips[1].enabled, true);
+  });
+});
+
+describe("Fabrication Plans", () => {
+  it("persists physical parts and independent operation paths without invalidating electrical Compile", () => {
+    const document = createNewPartituraDocument("fabrication-plans");
+    const normalizedBaseline = normalizeDefaultSignLayout(JSON.parse(JSON.stringify(document)));
+    const before = designerCompileSignature(normalizedBaseline.designer);
+    const designer = canonicalizeDesignerGeometry({
+      ...normalizedBaseline.designer,
+      fabricationParts: [{
+        id: "fabrication_part_1",
+        name: "Rear acrylic",
+        material: "Acrylic",
+        thicknessMm: 6,
+        machiningSide: "rear",
+        visible: true,
+        locked: false,
+        opacity: 1
+      }],
+      fabricationPaths: [{
+        id: "fabrication_path_1",
+        partId: "fabrication_part_1",
+        name: "Cable passage",
+        shape: "polygon",
+        x: 2,
+        y: 3,
+        width: 8,
+        height: 4,
+        points: [{ x: 2, y: 3 }, { x: 10, y: 3 }, { x: 10, y: 7 }, { x: 2, y: 7 }],
+        pathMode: "straight",
+        closed: true,
+        operation: "pocket",
+        depthMm: 2,
+        visible: true,
+        locked: false,
+        opacity: 1
+      }]
+    });
+    const reloaded = normalizeDefaultSignLayout(JSON.parse(JSON.stringify({ ...normalizedBaseline, designer }))).designer;
+
+    assert.equal(reloaded.fabricationParts[0]?.name, "Rear acrylic");
+    assert.equal(reloaded.fabricationPaths[0]?.operation, "pocket");
+    assert.equal(reloaded.fabricationPaths[0]?.depthMm, 2);
+    assert.ok(reloaded.fabricationPaths[0]?.geometryId);
+    assert.equal(designerCompileSignature(reloaded), before);
+  });
+
+  it("exposes Fabrication Plans as a projection destination and a strict Layers category", async () => {
+    const workspace = await readFile(new URL("../partitura-workspace.tsx", import.meta.url), "utf8");
+    const layers = await readFile(new URL("designer-ui.tsx", import.meta.url), "utf8");
+    assert.match(workspace, /<option value="fabrication">Fabrication Plans<\/option>/);
+    assert.match(workspace, /\+ New fabrication part/);
+    assert.match(workspace, /Independent \$\{projectionFabricationOperation\} path created/);
+    assert.match(layers, /label="Fabrication Plans"/);
+    assert.match(layers, /Project geometry into this physical part/);
+    assert.match(layers, /expandedFabricationParts\[part\.id\] \?\? true/);
+    assert.match(layers, /\[part\.id\]: !expanded/);
+    assert.match(workspace, /"includeFabricationPlans", "Fabrication Plans"/);
+    assert.match(workspace, /file\.downloadBaseName/);
+  });
+
+  it("shows fabrication feedback over Diffusors without making the overlay interactive", async () => {
+    const renderer = await readFile(new URL("designer-paper-renderer.ts", import.meta.url), "utf8");
+    assert.match(renderer, /activeLayer === "fabrication" \|\| activeLayer === "zones"/);
+    assert.match(renderer, /orthogonalOverlay \? "#d946ef"/);
+    assert.match(renderer, /FAB · \$\{part\.name\} · \$\{path\.operation\.toUpperCase\(\)\}/);
+
+    const baseline = normalizeDefaultSignLayout(createNewPartituraDocument("fabrication-overlay"));
+    const designer = canonicalizeDesignerGeometry({
+      ...baseline.designer,
+      zones: [],
+      channels: [],
+      fabricationParts: [{
+        id: "fabrication_part_overlay",
+        name: "Top acrylic",
+        material: "Acrylic",
+        thicknessMm: 6,
+        machiningSide: "front",
+        visible: true,
+        locked: false,
+        opacity: 1
+      }],
+      fabricationPaths: [{
+        id: "fabrication_path_overlay",
+        partId: "fabrication_part_overlay",
+        name: "Letter outline",
+        shape: "polygon",
+        x: 2,
+        y: 2,
+        width: 8,
+        height: 6,
+        points: [{ x: 2, y: 2 }, { x: 10, y: 2 }, { x: 10, y: 8 }, { x: 2, y: 8 }],
+        pathMode: "straight",
+        closed: true,
+        operation: "cut",
+        depthMm: 0,
+        visible: true,
+        locked: false,
+        opacity: 1
+      }]
+    });
+    const viewport = { x: 0, y: 0, width: 20, height: 10 };
+    const canvas = { width: 1000, height: 500 };
+
+    assert.equal(pickDesignerHit(designer, "zones", { x: 5, y: 5 }, viewport, canvas), null);
+    assert.deepEqual(pickDesignerHit(designer, "fabrication", { x: 5, y: 5 }, viewport, canvas), {
+      type: "fabrication_path",
+      id: "fabrication_path_overlay"
+    });
+  });
+
+  it("keeps an open Channel centerline open when rendering and selecting its fabrication path", async () => {
+    const renderer = await readFile(new URL("designer-paper-renderer.ts", import.meta.url), "utf8");
+    assert.match(renderer, /closed: shape\.closed !== false/);
+    assert.match(renderer, /path\.closed = contour\.closed !== false/);
+
+    const baseline = normalizeDefaultSignLayout(createNewPartituraDocument("open-fabrication-path"));
+    const designer = canonicalizeDesignerGeometry({
+      ...baseline.designer,
+      fabricationParts: [{ id: "part", name: "Part", material: "Acrylic", thicknessMm: 3, machiningSide: "front", visible: true, locked: false, opacity: 1 }],
+      fabricationPaths: [{
+        id: "open_centerline",
+        partId: "part",
+        name: "Channel centerline",
+        shape: "polygon",
+        x: 0,
+        y: 0,
+        width: 10,
+        height: 10,
+        points: [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }],
+        pathMode: "straight",
+        closed: false,
+        operation: "pocket",
+        visible: true,
+        locked: false,
+        opacity: 1
+      }]
+    });
+    const viewport = { x: 0, y: 0, width: 20, height: 20 };
+    const canvas = { width: 1000, height: 1000 };
+
+    assert.deepEqual(pickDesignerHit(designer, "fabrication", { x: 5, y: 0 }, viewport, canvas), { type: "fabrication_path", id: "open_centerline" });
+    assert.equal(pickDesignerHit(designer, "fabrication", { x: 5, y: 5 }, viewport, canvas), null);
   });
 });

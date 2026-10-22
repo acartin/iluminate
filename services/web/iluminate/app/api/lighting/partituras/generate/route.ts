@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { normalizeDefaultSignLayout, type PartituraDocument } from "@/lib/lighting/partitura-model";
+import { resolveGeneratedPartituraTarget } from "@/lib/lighting/generated-partitura-target";
 import { computeAuthoringSourceChecksum } from "@/lib/server/partitura-checksum";
 
 export const runtime = "nodejs";
@@ -14,7 +15,6 @@ export async function POST(request: Request) {
   const layout = document.compiledLayout;
   if (!layout) return NextResponse.json({ ok: false, message: "Compile the Designer physical layout before generating." }, { status: 422 });
   if (layout.validation.errors.length) return NextResponse.json({ ok: false, message: "Designer electrical validation failed.", validation: layout.validation }, { status: 422 });
-  const validTargetIds = new Set([...layout.zones.map((zone) => zone.id), ...layout.groups.map((group) => group.id), "full_sign", "installation"]);
   const disabledSourceIds = new Set((document.designer?.lightSources ?? []).filter((source) => !source.enabled).map((source) => source.id));
   const partitura = generatePartitura({
     projectId: normalizeCoreId(document.projectId, "project"),
@@ -26,23 +26,27 @@ export async function POST(request: Request) {
     groups: layout.groups,
     scenes: document.scenes.map((scene) => ({
       ...scene,
-      tracks: scene.clips.filter((clip) => clip.enabled !== false && !disabledSourceIds.has(clip.target)).map((clip) => ({
-        id: `track_${clip.id}`,
-        name: clip.name,
-        target: clip.target === "installation"
-          ? { type: "installation" as const }
-          : { type: layout.groups.some((group) => group.id === clip.target) || clip.target === "full_sign" ? "group" as const : "zone" as const, id: validTargetIds.has(clip.target) ? clip.target : "full_sign" },
-        clips: [{
-          id: clip.id,
-          effect: clip.effect,
-          coordinateSpace: clip.coordinateSpace ?? "local",
-          startMs: clip.startMs,
-          durationMs: clip.durationMs,
-          layer: clip.layer,
-          blend: clip.blend as "replace" | "add" | "max" | "multiply" | "alpha" | "mask",
-          params: clip.params
-        }]
-      }))
+      tracks: scene.clips
+        .filter((clip) => clip.enabled !== false && !disabledSourceIds.has(clip.target))
+        .flatMap((clip) => {
+          const target = resolveGeneratedPartituraTarget(clip.target, layout);
+          if (!target) return [];
+          return [{
+            id: `track_${clip.id}`,
+            name: clip.name,
+            target,
+            clips: [{
+              id: clip.id,
+              effect: clip.effect,
+              coordinateSpace: clip.coordinateSpace ?? "local",
+              startMs: clip.startMs,
+              durationMs: clip.durationMs,
+              layer: clip.layer,
+              blend: clip.blend as "replace" | "add" | "max" | "multiply" | "alpha" | "mask",
+              params: clip.params
+            }]
+          }];
+        })
     })),
     metadata: { source: "designer-physical" }
   });

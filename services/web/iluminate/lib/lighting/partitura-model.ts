@@ -20,7 +20,7 @@ export type DesignerContour = {
   closed: true;
 };
 
-export const DESIGNER_SCHEMA_VERSION = 14 as const;
+export const DESIGNER_SCHEMA_VERSION = 19 as const;
 export const DEFAULT_CHANNEL_ROUTER_DIAMETER_MM = 10;
 
 /**
@@ -138,6 +138,43 @@ export type DesignerFaceGraphicForm = {
   opacity: number;
 };
 
+export type DesignerFabricationOperation = "cut" | "pocket" | "drill" | "engrave" | "reference";
+
+/** One physical piece or machining plane prepared before SVG/DXF/CAM export. */
+export type DesignerFabricationPartForm = {
+  id: string;
+  name: string;
+  material: string;
+  thicknessMm: number;
+  machiningSide: "front" | "rear";
+  visible: boolean;
+  locked: boolean;
+  opacity: number;
+};
+
+/** Independent projected vector geometry assigned to a physical fabrication part. */
+export type DesignerFabricationPathForm = {
+  id: string;
+  geometryId?: string;
+  partId: string;
+  name: string;
+  shape: "rect" | "ellipse" | "polygon";
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  points?: DesignerPoint[];
+  contours?: DesignerContour[];
+  fillRule?: "nonzero" | "evenodd";
+  pathMode?: "straight" | "bezier";
+  closed?: boolean;
+  operation: DesignerFabricationOperation;
+  depthMm?: number;
+  visible: boolean;
+  locked: boolean;
+  opacity: number;
+};
+
 export type DesignerGroupForm = {
   id: string;
   name: string;
@@ -154,6 +191,7 @@ export type DesignerVectorGroupForm = {
 };
 
 export type DesignerChannelCap = "butt" | "round";
+export type DesignerSurface = "rear" | "front";
 
 /**
  * A neon-flex style channel. It reuses the Bezier trajectory (center line) but
@@ -171,6 +209,8 @@ export type DesignerChannelForm = {
   widthMm: number;
   closed: boolean;
   cap: DesignerChannelCap;
+  /** Physical face where the router channel is machined; independent from its Light Sources. */
+  fabricationSurface?: DesignerSurface;
   visible: boolean;
   locked: boolean;
   opacity: number;
@@ -196,8 +236,8 @@ export type DesignerOpticalMaterial = "none" | "silicone" | "milky_white" | "day
 export type DesignerOpticalReceiverType = "canvas" | "build_area" | "zone";
 
 /**
- * Physical light mounts are presentation/fabrication metadata. They consume the
- * compiled pixel map but never change electrical topology or effect targeting.
+ * Physical light mounts preserve optical intent and calibration. Compile maps
+ * them onto the physical pixel graph; they never change electrical topology.
  */
 export type DesignerLightSource = {
   id: string;
@@ -229,7 +269,44 @@ export type DesignerLightSource = {
 export type DesignerOpticalTreatment = DesignerLightSource;
 
 export type DesignerRouteKind = "led_string" | "data_cable";
-export type DesignerRouteSurface = "rear" | "front";
+export type DesignerRouteSurface = DesignerSurface;
+export type DesignerLightingHost = { type: "zone" | "channel"; id: string };
+
+export type DesignerLedStripConstruction = "discrete" | "continuous";
+export type DesignerLedStripColorModel = "rgb" | "rgbw";
+export type DesignerLedStripCutMode = "marked_segments" | "free_cut";
+
+/** Resolved product snapshot. Compile never needs to query the strip catalog. */
+export type DesignerLedStripConfiguration = {
+  sourceProfileId?: string;
+  sourceProfileRevision?: number;
+  name: string;
+  construction: DesignerLedStripConstruction;
+  nativeControlProtocol: string;
+  colorModel: DesignerLedStripColorModel;
+  voltageV: number;
+  cutMode: DesignerLedStripCutMode;
+  cutSegmentLengthMm?: number;
+  addressablePixelsPerCutSegment: number;
+  physicalLedsPerCutSegment?: number;
+  physicalLedsPerAddressablePixel?: number;
+  addressablePixelsPerMeter: number;
+  physicalLedsPerMeter?: number;
+  pcbWidthMm: number;
+  pcbThicknessMm?: number;
+  ledPackageSizeMm?: number;
+  ratedPowerWPerMeter?: number;
+  minimumBendRadiusMm?: number;
+  backupDataLine?: boolean;
+};
+
+export type LedStripCatalogProfile = DesignerLedStripConfiguration & {
+  id: string;
+  profileKey: string;
+  revision: number;
+  clientId?: string;
+  sourceUrl?: string;
+};
 
 export type DesignerRouteForm = {
   id: string;
@@ -237,6 +314,8 @@ export type DesignerRouteForm = {
   kind: DesignerRouteKind;
   /** Designer-only mounting face used to isolate dense wiring while authoring. */
   designSurface?: DesignerRouteSurface;
+  /** Optional physical owner used to disambiguate overlapping optical targets. */
+  lightingHost?: DesignerLightingHost;
   points: DesignerPoint[];
   visible?: boolean;
 };
@@ -263,6 +342,7 @@ export type DesignerLayersForm = {
   reference: DesignerLayerSettings;
   zones: DesignerLayerSettings;
   faceGraphic: DesignerLayerSettings;
+  fabrication: DesignerLayerSettings;
   lightSources: DesignerLayerSettings;
   hardware: DesignerLayerSettings;
   strings: DesignerLayerSettings;
@@ -343,9 +423,15 @@ export type DesignerForm = {
   diffusorVisibilityPresets: DesignerDiffusorVisibilityPreset[];
   canvasWidthCm: number;
   canvasHeightCm: number;
+  /** Selected strip product copied from the catalog; source ids are provenance only. */
+  stripConfiguration?: DesignerLedStripConfiguration;
   addressablePixelsPerMeter: number;
   ledsPerMeter: number;
   ledDensityPerMeter: number;
+  /** Physical square LED package used by Designer rendering and channel membership. */
+  ledPackageSizeMm: number;
+  /** Physical strip PCB width, retained for placement/fabrication validation. */
+  ledPcbWidthMm: number;
   snapCm: number;
   rulerUnit: "cm" | "in";
   /** Nominal CNC cutter diameter retained as fabrication guidance. */
@@ -374,6 +460,8 @@ export type DesignerForm = {
   controller: DesignerControllerForm;
   zones: DesignerZoneForm[];
   faceGraphics: DesignerFaceGraphicForm[];
+  fabricationParts: DesignerFabricationPartForm[];
+  fabricationPaths: DesignerFabricationPathForm[];
   /** Same-layer vectors that select and move as one authoring unit. */
   vectorGroups: DesignerVectorGroupForm[];
   groups: DesignerGroupForm[];
@@ -422,8 +510,26 @@ export type PartituraDocument = {
     pixelMap: Array<{ id: string; output: 1 | 2 | 3; serialIndex: number; stringId: string; routeOffsetCm: number; x: number; y: number; tangentDeg: number }>;
     zones: Array<{ id: string; name: string; pixelIds: string[] }>;
     groups: Array<{ id: string; name: string; members: Array<{ type: "zone" | "group"; id: string }> }>;
-    validation: { errors: string[]; warnings: string[] };
+    validation: {
+      errors: string[];
+      warnings: string[];
+      issues?: DesignerCompileIssue[];
+    };
   };
+};
+
+export type DesignerCompileIssueTarget = {
+  type: "route" | "zone" | "channel" | "controller";
+  id: string;
+  label: string;
+  action?: "select" | "lighting_setup";
+};
+
+export type DesignerCompileIssue = {
+  id: string;
+  severity: "error" | "warning";
+  message: string;
+  targets: DesignerCompileIssueTarget[];
 };
 
 export type PersistedPartitura = {
@@ -560,6 +666,8 @@ export function createNewPartituraDocument(projectId: string): PartituraDocument
       buildAreas: [],
       zones: [],
       faceGraphics: [],
+      fabricationParts: [],
+      fabricationPaths: [],
       vectorGroups: [],
       groups: [],
       channels: [],
@@ -635,9 +743,27 @@ export function createDefaultDesigner(): DesignerForm {
   const designer: DesignerForm = {
     canvasWidthCm: 170,
     canvasHeightCm: 40,
+    stripConfiguration: {
+      name: "WS2812B · 5 V · 60 px/m",
+      construction: "discrete",
+      nativeControlProtocol: "ws281x",
+      colorModel: "rgb",
+      voltageV: 5,
+      cutMode: "marked_segments",
+      addressablePixelsPerCutSegment: 1,
+      physicalLedsPerCutSegment: 1,
+      physicalLedsPerAddressablePixel: 1,
+      addressablePixelsPerMeter: 60,
+      physicalLedsPerMeter: 60,
+      pcbWidthMm: 10,
+      ledPackageSizeMm: 5,
+      ratedPowerWPerMeter: 18
+    },
     addressablePixelsPerMeter: 60,
     ledsPerMeter: 60,
     ledDensityPerMeter: 60,
+    ledPackageSizeMm: 5,
+    ledPcbWidthMm: 10,
     snapCm: 2,
     rulerUnit: "cm",
     fabricationCutterDiameterMm: 3.175,
@@ -723,6 +849,8 @@ export function createDefaultDesigner(): DesignerForm {
       { id: "letra_4", name: "Letra 4", shape: "rect", x: 120, y: 24, width: 22, height: 10, visible: true, locked: false, opacity: 1 }
     ],
     faceGraphics: [],
+    fabricationParts: [],
+    fabricationPaths: [],
     routes: [
       { id: "route_fondo", name: "Fondo LED string", kind: "led_string", designSurface: "rear", points: [{ x: 44, y: 4, joint: true }, { x: 100, y: 4 }, { x: 100, y: 8 }, { x: 44, y: 8 }, { x: 44, y: 12 }, { x: 100, y: 12 }] },
       { id: "route_estrella", name: "Estrella LED string", kind: "led_string", designSurface: "rear", points: [{ x: 110, y: 12 }, { x: 124, y: 12 }] },
@@ -772,23 +900,74 @@ function normalizeDesigner(designer?: DesignerForm, compiledLayout?: PartituraDo
   if (!designer) return fallback;
   // Empty collections are authored state, not a request to restore the demo
   // document. Only documents that predate a field receive its fallback.
-  const routes = Array.isArray(designer.routes) ? designer.routes.map((route, index): DesignerRouteForm => ({
-    id: typeof route.id === "string" && route.id ? route.id : `route_${index + 1}`,
-    name: typeof route.name === "string" && route.name ? route.name : `Route ${index + 1}`,
-    kind: route.kind === "data_cable" ? "data_cable" : "led_string",
-    designSurface: route.designSurface === "front" ? "front" : "rear",
-    visible: route.visible !== false,
-    points: Array.isArray(route.points) ? route.points.filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y)).map((point) => ({ x: point.x, y: point.y, ...(point.joint ? { joint: true } : {}) })) : []
-  })).filter((route) => route.points.length >= 2) : fallback.routes;
+  const routes = Array.isArray(designer.routes) ? designer.routes.map((route, index): DesignerRouteForm => {
+    const kind = route.kind === "data_cable" ? "data_cable" : "led_string";
+    const lightingHost = kind === "led_string" && route.lightingHost
+      && (route.lightingHost.type === "zone" || route.lightingHost.type === "channel")
+      && typeof route.lightingHost.id === "string" && route.lightingHost.id
+      ? { type: route.lightingHost.type, id: route.lightingHost.id }
+      : undefined;
+    return {
+      id: typeof route.id === "string" && route.id ? route.id : `route_${index + 1}`,
+      name: typeof route.name === "string" && route.name ? route.name : `Route ${index + 1}`,
+      kind,
+      designSurface: route.designSurface === "front" ? "front" : "rear",
+      ...(lightingHost ? { lightingHost } : {}),
+      visible: route.visible !== false,
+      points: Array.isArray(route.points) ? route.points.filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y)).map((point) => ({ x: point.x, y: point.y, ...(point.joint ? { joint: true } : {}) })) : []
+    };
+  }).filter((route) => route.points.length >= 2) : fallback.routes;
   const rawLightSources = Array.isArray(designer.lightSources) && (designer.lightSources.length > 0 || !Array.isArray(designer.opticalTreatments))
     ? designer.lightSources
     : Array.isArray(designer.opticalTreatments) ? designer.opticalTreatments : [];
+  const legacyPixelsPerMeter = positiveNumber(designer.addressablePixelsPerMeter ?? designer.ledDensityPerMeter, fallback.addressablePixelsPerMeter);
+  const legacyLedsPerMeter = positiveNumber(designer.ledsPerMeter ?? designer.addressablePixelsPerMeter ?? designer.ledDensityPerMeter, fallback.ledsPerMeter);
+  const rawStrip = designer.stripConfiguration;
+  const stripConfiguration: DesignerLedStripConfiguration = rawStrip ? {
+    ...(typeof rawStrip.sourceProfileId === "string" ? { sourceProfileId: rawStrip.sourceProfileId } : {}),
+    ...(Number.isInteger(rawStrip.sourceProfileRevision) && Number(rawStrip.sourceProfileRevision) > 0 ? { sourceProfileRevision: Number(rawStrip.sourceProfileRevision) } : {}),
+    name: typeof rawStrip.name === "string" && rawStrip.name.trim() ? rawStrip.name : "Custom LED strip",
+    construction: rawStrip.construction === "continuous" ? "continuous" : "discrete",
+    nativeControlProtocol: typeof rawStrip.nativeControlProtocol === "string" && rawStrip.nativeControlProtocol.trim() ? rawStrip.nativeControlProtocol : "ws281x",
+    colorModel: rawStrip.colorModel === "rgbw" ? "rgbw" : "rgb",
+    voltageV: positiveNumber(rawStrip.voltageV, 5),
+    cutMode: rawStrip.construction === "continuous" && rawStrip.cutMode === "free_cut" ? "free_cut" : "marked_segments",
+    ...(rawStrip.construction === "continuous" && rawStrip.cutMode !== "free_cut" ? { cutSegmentLengthMm: positiveNumber(rawStrip.cutSegmentLengthMm, 1000 / legacyPixelsPerMeter) } : {}),
+    addressablePixelsPerCutSegment: Math.max(1, Math.round(positiveNumber(rawStrip.addressablePixelsPerCutSegment, 1))),
+    ...(rawStrip.physicalLedsPerCutSegment === undefined ? {} : { physicalLedsPerCutSegment: positiveNumber(rawStrip.physicalLedsPerCutSegment, 1) }),
+    physicalLedsPerAddressablePixel: positiveNumber(rawStrip.physicalLedsPerAddressablePixel, legacyLedsPerMeter / legacyPixelsPerMeter),
+    addressablePixelsPerMeter: legacyPixelsPerMeter,
+    physicalLedsPerMeter: legacyLedsPerMeter,
+    pcbWidthMm: Math.max(0.1, Math.min(100, positiveNumber(designer.ledPcbWidthMm, rawStrip.pcbWidthMm ?? fallback.ledPcbWidthMm))),
+    ...(rawStrip.pcbThicknessMm === undefined ? {} : { pcbThicknessMm: positiveNumber(rawStrip.pcbThicknessMm, 1) }),
+    ...(rawStrip.construction === "continuous" && rawStrip.ledPackageSizeMm === undefined ? {} : { ledPackageSizeMm: Math.max(0.1, Math.min(50, positiveNumber(designer.ledPackageSizeMm, rawStrip.ledPackageSizeMm ?? fallback.ledPackageSizeMm))) }),
+    ...(rawStrip.ratedPowerWPerMeter === undefined ? {} : { ratedPowerWPerMeter: positiveNumber(rawStrip.ratedPowerWPerMeter, 1) }),
+    ...(rawStrip.minimumBendRadiusMm === undefined ? {} : { minimumBendRadiusMm: positiveNumber(rawStrip.minimumBendRadiusMm, 1) }),
+    ...(rawStrip.backupDataLine === true ? { backupDataLine: true } : {})
+  } : {
+    name: "Legacy custom LED strip",
+    construction: "discrete",
+    nativeControlProtocol: "ws281x",
+    colorModel: "rgb",
+    voltageV: 5,
+    cutMode: "marked_segments",
+    addressablePixelsPerCutSegment: 1,
+    physicalLedsPerCutSegment: legacyLedsPerMeter / legacyPixelsPerMeter,
+    physicalLedsPerAddressablePixel: legacyLedsPerMeter / legacyPixelsPerMeter,
+    addressablePixelsPerMeter: legacyPixelsPerMeter,
+    physicalLedsPerMeter: legacyLedsPerMeter,
+    pcbWidthMm: Math.max(0.1, Math.min(100, positiveNumber(designer.ledPcbWidthMm, fallback.ledPcbWidthMm))),
+    ledPackageSizeMm: Math.max(0.1, Math.min(50, positiveNumber(designer.ledPackageSizeMm, fallback.ledPackageSizeMm)))
+  };
   const normalized: DesignerForm = {
     canvasWidthCm: positiveNumber(designer.canvasWidthCm, fallback.canvasWidthCm),
     canvasHeightCm: positiveNumber(designer.canvasHeightCm, fallback.canvasHeightCm),
-    addressablePixelsPerMeter: positiveNumber(designer.addressablePixelsPerMeter ?? designer.ledDensityPerMeter, fallback.addressablePixelsPerMeter),
-    ledsPerMeter: positiveNumber(designer.ledsPerMeter ?? designer.addressablePixelsPerMeter ?? designer.ledDensityPerMeter, fallback.ledsPerMeter),
-    ledDensityPerMeter: positiveNumber(designer.addressablePixelsPerMeter ?? designer.ledDensityPerMeter, fallback.ledDensityPerMeter),
+    stripConfiguration,
+    addressablePixelsPerMeter: stripConfiguration.addressablePixelsPerMeter,
+    ledsPerMeter: stripConfiguration.physicalLedsPerMeter ?? legacyLedsPerMeter,
+    ledDensityPerMeter: stripConfiguration.addressablePixelsPerMeter,
+    ledPackageSizeMm: stripConfiguration.ledPackageSizeMm ?? Math.max(0.1, Math.min(50, positiveNumber(designer.ledPackageSizeMm, fallback.ledPackageSizeMm))),
+    ledPcbWidthMm: stripConfiguration.pcbWidthMm,
     snapCm: nonNegativeNumber(designer.snapCm, fallback.snapCm),
     rulerUnit: designer.rulerUnit === "in" ? "in" : "cm",
     fabricationCutterDiameterMm: positiveNumber(designer.fabricationCutterDiameterMm, fallback.fabricationCutterDiameterMm),
@@ -820,6 +999,8 @@ function normalizeDesigner(designer?: DesignerForm, compiledLayout?: PartituraDo
     controller: normalizeController(designer.controller, fallback.controller),
     zones: Array.isArray(designer.zones) ? designer.zones.map(normalizeDesignerZone) : fallback.zones,
     faceGraphics: Array.isArray(designer.faceGraphics) ? designer.faceGraphics.map(normalizeFaceGraphic).filter((entry): entry is DesignerFaceGraphicForm => entry !== null) : [],
+    fabricationParts: normalizeFabricationParts(designer.fabricationParts),
+    fabricationPaths: normalizeFabricationPaths(designer.fabricationPaths),
     vectorGroups: normalizeDesignerVectorGroups(designer),
     groups: Array.isArray(designer.groups) ? designer.groups.filter((group) => typeof group.id === "string" && typeof group.name === "string").map((group) => ({ id: group.id, name: group.name, members: Array.isArray(group.members) ? group.members.filter((member) => member?.type === "zone" || member?.type === "group") : [] })) : [],
     channels: normalizeDesignerChannels(designer.channels),
@@ -829,9 +1010,9 @@ function normalizeDesigner(designer?: DesignerForm, compiledLayout?: PartituraDo
   return hydrateDesignerFromCanonicalGeometry(normalized, designer.geometries);
 }
 
-type GeometryOwner = DesignerBuildAreaForm | DesignerZoneForm | DesignerChannelForm | DesignerFaceGraphicForm;
+type GeometryOwner = DesignerBuildAreaForm | DesignerZoneForm | DesignerChannelForm | DesignerFaceGraphicForm | DesignerFabricationPathForm;
 
-function defaultGeometryId(owner: GeometryOwner, type: "build_area" | "zone" | "channel" | "face_graphic") {
+function defaultGeometryId(owner: GeometryOwner, type: "build_area" | "zone" | "channel" | "face_graphic" | "fabrication_path") {
   return `geometry_${type}_${owner.id}`;
 }
 
@@ -886,6 +1067,24 @@ function geometryFromChannel(channel: DesignerChannelForm): DesignerGeometry {
   };
 }
 
+function geometryFromFabricationPath(path: DesignerFabricationPathForm): DesignerGeometry {
+  return {
+    id: path.geometryId ?? defaultGeometryId(path, "fabrication_path"),
+    kind: path.shape === "polygon" ? "path" : path.shape,
+    x: path.x,
+    y: path.y,
+    width: path.width,
+    height: path.height,
+    ...(path.points ? { points: cloneGeometryPoints(path.points) } : {}),
+    ...(path.contours ? { contours: cloneGeometryContours(path.contours) } : {}),
+    ...(path.shape === "polygon" ? {
+      pathMode: path.pathMode ?? "straight",
+      closed: path.closed !== false,
+      fillRule: path.fillRule ?? "nonzero"
+    } : {})
+  };
+}
+
 /**
  * Commits the current editable compatibility views into canonical geometry.
  * All Designer mutations pass through this boundary, preventing parallel
@@ -896,11 +1095,13 @@ export function canonicalizeDesignerGeometry(designer: DesignerForm): DesignerFo
   const zones = designer.zones.map((entry) => ({ ...entry, geometryId: entry.geometryId ?? defaultGeometryId(entry, "zone") }));
   const faceGraphics = designer.faceGraphics.map((entry) => ({ ...entry, geometryId: entry.geometryId ?? defaultGeometryId(entry, "face_graphic") }));
   const channels = designer.channels.map((entry) => ({ ...entry, geometryId: entry.geometryId ?? defaultGeometryId(entry, "channel") }));
+  const fabricationPaths = designer.fabricationPaths.map((entry) => ({ ...entry, geometryId: entry.geometryId ?? defaultGeometryId(entry, "fabrication_path") }));
   const authored = [
     ...buildAreas.map(geometryFromBuildArea),
     ...zones.map(geometryFromZone),
     ...faceGraphics.map(geometryFromFaceGraphic),
-    ...channels.map(geometryFromChannel)
+    ...channels.map(geometryFromChannel),
+    ...fabricationPaths.map(geometryFromFabricationPath)
   ];
   return {
     ...designer,
@@ -909,7 +1110,8 @@ export function canonicalizeDesignerGeometry(designer: DesignerForm): DesignerFo
     buildAreas,
     zones,
     faceGraphics,
-    channels
+    channels,
+    fabricationPaths
   };
 }
 
@@ -982,7 +1184,8 @@ export function designerGeometryAsShape(geometry: DesignerGeometry) {
     points: geometry.points ? cloneGeometryPoints(geometry.points) : undefined,
     contours: geometry.contours ? cloneGeometryContours(geometry.contours) : undefined,
     pathMode: geometry.pathMode ?? "straight" as const,
-    fillRule: geometry.fillRule ?? "nonzero" as const
+    fillRule: geometry.fillRule ?? "nonzero" as const,
+    closed: geometry.closed !== false
   };
 }
 
@@ -1008,7 +1211,14 @@ function hydrateDesignerFromCanonicalGeometry(designer: DesignerForm, rawGeometr
     const geometryId = entry.geometryId ?? defaultGeometryId(entry, "channel");
     return applyGeometryToChannel({ ...entry, geometryId }, byId.get(geometryId));
   });
-  return canonicalizeDesignerGeometry({ ...designer, geometries: normalizedGeometries, buildAreas, zones, faceGraphics, channels });
+  const fabricationPaths = designer.fabricationPaths.map((entry) => {
+    const geometryId = entry.geometryId ?? defaultGeometryId(entry, "fabrication_path");
+    const geometry = byId.get(geometryId);
+    if (!geometry) return { ...entry, geometryId };
+    const shape = designerGeometryAsShape(geometry);
+    return { ...entry, geometryId, ...shape };
+  });
+  return canonicalizeDesignerGeometry({ ...designer, geometries: normalizedGeometries, buildAreas, zones, faceGraphics, channels, fabricationPaths });
 }
 
 function normalizeDesignerGeometry(value: DesignerGeometry): DesignerGeometry | null {
@@ -1129,6 +1339,26 @@ export function createDefaultLightSource(targetType: "zone" | "channel", targetI
 
 export const createDefaultOpticalTreatment = createDefaultLightSource;
 
+/** Adds one sensible optical source only for targets introduced by this edit. */
+export function addDefaultLightSourcesForNewTargets(current: DesignerForm, next: DesignerForm): DesignerForm {
+  const previousZoneIds = new Set(current.zones.map((zone) => zone.id));
+  const previousChannelIds = new Set(current.channels.map((channel) => channel.id));
+  const lightSources = [...next.lightSources];
+  const hasSource = (targetType: DesignerLightSource["targetType"], targetId: string) => lightSources.some((source) => source.targetType === targetType && source.targetId === targetId);
+
+  next.zones.filter((zone) => !previousZoneIds.has(zone.id) && !hasSource("zone", zone.id)).forEach((zone) => {
+    lightSources.push({ ...createDefaultLightSource("zone", zone.id, "front"), name: `${zone.name} · Front` });
+  });
+  next.channels.filter((channel) => !previousChannelIds.has(channel.id) && !hasSource("channel", channel.id)).forEach((channel) => {
+    const mode: DesignerOpticalMode = channel.fabricationSurface === "rear" ? "halo" : "front";
+    lightSources.push({
+      ...createDefaultLightSource("channel", channel.id, mode),
+      name: `${channel.name} · ${mode === "halo" ? "Halo" : "Front"}`
+    });
+  });
+  return lightSources.length === next.lightSources.length ? next : { ...next, lightSources };
+}
+
 function normalizeLightSources(sources: DesignerLightSource[], routes: DesignerRouteForm[], compiledLayout?: PartituraDocument["compiledLayout"]): DesignerLightSource[] {
   const ledStringIds = routes.filter((route) => route.kind === "led_string").map((route) => route.id);
   const validStringIds = new Set(ledStringIds);
@@ -1152,7 +1382,7 @@ function normalizeLightSources(sources: DesignerLightSource[], routes: DesignerR
         ...fallback,
         id: typeof treatment.id === "string" && treatment.id ? treatment.id : fallback.id,
         name: typeof treatment.name === "string" && treatment.name ? treatment.name : fallback.name,
-        stringIds: Array.from(new Set(authoredStringIds.length ? authoredStringIds : inferredStringIds.length ? inferredStringIds : ledStringIds)),
+        stringIds: Array.from(new Set(authoredStringIds.length ? authoredStringIds : inferredStringIds)),
         visible: treatment.visible !== false,
         locked: treatment.locked === true,
         mode,
@@ -1218,6 +1448,43 @@ function normalizeFaceGraphic(element: DesignerFaceGraphicForm): DesignerFaceGra
   };
 }
 
+function normalizeFabricationParts(parts: DesignerFabricationPartForm[] | undefined): DesignerFabricationPartForm[] {
+  if (!Array.isArray(parts)) return [];
+  return parts.flatMap((part, index) => {
+    if (!part || typeof part.id !== "string" || !part.id) return [];
+    return [{
+      id: part.id,
+      name: typeof part.name === "string" && part.name.trim() ? part.name : `Fabrication part ${index + 1}`,
+      material: typeof part.material === "string" && part.material.trim() ? part.material : "Unspecified",
+      thicknessMm: Math.max(0.1, positiveNumber(part.thicknessMm, 3)),
+      machiningSide: part.machiningSide === "rear" ? "rear" as const : "front" as const,
+      visible: part.visible !== false,
+      locked: part.locked === true,
+      opacity: clampNumber(typeof part.opacity === "number" ? part.opacity : 1, 0.05, 1)
+    }];
+  });
+}
+
+function normalizeFabricationPaths(paths: DesignerFabricationPathForm[] | undefined): DesignerFabricationPathForm[] {
+  if (!Array.isArray(paths)) return [];
+  return paths.flatMap((path, index) => {
+    if (!path || typeof path.id !== "string" || !path.id || typeof path.partId !== "string" || !path.partId) return [];
+    const normalized = normalizeDesignerZone(path);
+    const operation: DesignerFabricationOperation = path.operation === "pocket" || path.operation === "drill" || path.operation === "engrave" || path.operation === "reference"
+      ? path.operation
+      : "cut";
+    return [{
+      ...normalized,
+      id: path.id,
+      name: typeof path.name === "string" && path.name.trim() ? path.name : `Fabrication path ${index + 1}`,
+      partId: path.partId,
+      operation,
+      closed: path.shape === "polygon" ? path.closed !== false : true,
+      ...(typeof path.depthMm === "number" && Number.isFinite(path.depthMm) ? { depthMm: Math.max(0, path.depthMm) } : {})
+    }];
+  });
+}
+
 function normalizeDesignerChannels(channels: DesignerChannelForm[] | undefined): DesignerChannelForm[] {
   if (!Array.isArray(channels)) return [];
   return channels
@@ -1236,6 +1503,7 @@ function normalizeDesignerChannels(channels: DesignerChannelForm[] | undefined):
         widthMm: clampNumber(typeof channel.widthMm === "number" && Number.isFinite(channel.widthMm) ? channel.widthMm : 10, 3, 20),
         closed: typeof channel.closed === "boolean" ? channel.closed : legacyCap === "closed",
         cap: legacyCap === "round" ? "round" : "butt",
+        fabricationSurface: channel.fabricationSurface === "rear" ? "rear" : "front",
         visible: typeof channel.visible === "boolean" ? channel.visible : true,
         locked: typeof channel.locked === "boolean" ? channel.locked : false,
         opacity: clampNumber(typeof channel.opacity === "number" ? channel.opacity : 1, 0.05, 1)
@@ -1388,6 +1656,7 @@ function defaultDesignerLayers(): DesignerLayersForm {
     reference: { visible: true, locked: false, opacity: 0.75 },
     zones: { visible: true, locked: false, opacity: 0.35 },
     faceGraphic: { visible: true, locked: false, opacity: 0.72 },
+    fabrication: { visible: true, locked: false, opacity: 1 },
     lightSources: { visible: true, locked: false, opacity: 1 },
     hardware: { visible: true, locked: false, opacity: 1 },
     strings: { visible: true, locked: false, opacity: 1 }
@@ -1401,6 +1670,7 @@ function normalizeDesignerLayers(layers: (Partial<DesignerLayersForm> & { svg?: 
     reference: normalizeDesignerLayer(reference, fallback.reference),
     zones: normalizeDesignerLayer(layers?.zones, fallback.zones),
     faceGraphic: normalizeDesignerLayer(layers?.faceGraphic, fallback.faceGraphic),
+    fabrication: normalizeDesignerLayer(layers?.fabrication, fallback.fabrication),
     lightSources: normalizeDesignerLayer(layers?.lightSources, fallback.lightSources),
     hardware: normalizeDesignerLayer(layers?.hardware, fallback.hardware),
     strings: normalizeDesignerLayer(layers?.strings, fallback.strings)

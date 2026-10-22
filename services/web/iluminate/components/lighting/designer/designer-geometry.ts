@@ -1,4 +1,4 @@
-import type { DesignerBuildAreaForm, DesignerChannelForm, DesignerContour, DesignerControllerForm, DesignerFaceGraphicForm, DesignerForm, DesignerGeometry, DesignerPoint, DesignerPointNodeType, DesignerRouteForm, DesignerRouteKind, DesignerRouteSurface, DesignerWorkLineForm, DesignerZoneForm } from "@/lib/lighting/partitura-model";
+import type { DesignerBuildAreaForm, DesignerChannelForm, DesignerContour, DesignerControllerForm, DesignerFaceGraphicForm, DesignerForm, DesignerGeometry, DesignerLedStripConfiguration, DesignerPoint, DesignerPointNodeType, DesignerRouteForm, DesignerRouteKind, DesignerRouteSurface, DesignerWorkLineForm, DesignerZoneForm } from "@/lib/lighting/partitura-model";
 import { designerGeometryAsShape, resolveDesignerDerivedGeometry, resolveDesignerProjectionGeometry } from "@/lib/lighting/partitura-model";
 import { filletDesignerGeometry } from "@/lib/lighting/designer-derived-geometry";
 import { estimateDesignerTextBounds } from "@/lib/lighting/designer-text-geometry";
@@ -490,6 +490,53 @@ export function createRouteFromDraft(kind: DesignerRouteKind, start: DesignerPoi
   };
 }
 
+export function createLedStringFromChannel(channel: DesignerChannelForm, designer: DesignerForm, reverse = false, seamPointIndex = 0): DesignerRouteForm | null {
+  let points = channelCenterPolyline(channel).map((point) => ({ x: point.x, y: point.y }));
+  if (points.length < 2) return null;
+  if (channelIsClosed(channel)) {
+    const seam = channel.points[Math.max(0, Math.min(channel.points.length - 1, seamPointIndex))] ?? channel.points[0];
+    let nearestIndex = 0;
+    points.forEach((point, index) => {
+      if (distanceBetweenPoints(point, seam) < distanceBetweenPoints(points[nearestIndex], seam)) nearestIndex = index;
+    });
+    points = [...points.slice(nearestIndex), ...points.slice(0, nearestIndex)];
+    points.push({ ...points[0] });
+  }
+  if (reverse) points.reverse();
+  const route = createRouteFromDraft("led_string", points[0], points[points.length - 1], designer, channel.fabricationSurface ?? "front");
+  return { ...route, name: `${channel.name} string`, lightingHost: { type: "channel", id: channel.id }, points };
+}
+
+export type SelectedStringConnectionPlan =
+  | { upstream: DesignerRouteForm; downstream: DesignerRouteForm; output: number; reason: null }
+  | { upstream: null; downstream: null; output: null; reason: string };
+
+export function selectedStringConnectionPlan(designer: DesignerForm, routeIds: string[]): SelectedStringConnectionPlan {
+  const strings = routeIds.flatMap((id) => {
+    const route = designer.routes.find((entry) => entry.id === id && entry.kind === "led_string");
+    return route ? [route] : [];
+  });
+  if (strings.length !== 2) return { upstream: null, downstream: null, output: null, reason: "Select exactly two LED strings." };
+  if (!sameRouteSurface(strings[0], strings[1])) return { upstream: null, downstream: null, output: null, reason: "Selected strings must be on the same construction surface." };
+  const outputs = resolveRouteOutputs(designer.controller, designer.routes, designer.snapCm);
+  const rooted = strings.filter((route) => outputs.has(route.id));
+  if (rooted.length !== 1) return {
+    upstream: null,
+    downstream: null,
+    output: null,
+    reason: rooted.length ? "Both strings already reach the controller; connecting them would create an ambiguous chain." : "One selected string must already reach the controller."
+  };
+  const upstream = rooted[0];
+  const downstream = strings.find((route) => route.id !== upstream.id)!;
+  const upstreamEnd = upstream.points[upstream.points.length - 1];
+  const downstreamStart = downstream.points[0];
+  if (!upstreamEnd || !downstreamStart) return { upstream: null, downstream: null, output: null, reason: "Both strings need valid input and output terminals." };
+  if (upstreamEnd.joint) return { upstream: null, downstream: null, output: null, reason: "The connected string output is already occupied." };
+  if (downstreamStart.joint) return { upstream: null, downstream: null, output: null, reason: "The unassigned string input is already occupied." };
+  if (sameTerminalPoint(upstreamEnd, downstreamStart)) return { upstream: null, downstream: null, output: null, reason: "These terminals already coincide; solder them directly instead of adding a cable." };
+  return { upstream, downstream, output: outputs.get(upstream.id)!, reason: null };
+}
+
 export function nextRouteNumber(routes: DesignerRouteForm[]) {
   const used = new Set(routes.map((route) => route.id));
   for (let index = routes.length + 1; index < routes.length + 1000; index += 1) {
@@ -545,18 +592,18 @@ export function pickDesignerHit(designer: DesignerForm, activeLayer: DesignerAct
       if (pointInsideRect(artwork, point, tolerance)) return { type: "artwork", id: artwork.id };
     }
   }
-  if (activeLayer === "hardware" && designer.layers.hardware.visible) {
-    if (designer.controller.visible !== false) {
+  if (activeLayer === "hardware" || activeLayer === "strings") {
+    if (designer.layers.strings.visible) {
+      for (const route of [...designer.routes].reverse()) {
+        if (route.visible === false) continue;
+        const pointHit = pickRoutePointHit(route, point, tolerance);
+        if (pointHit) return pointHit;
+        if (distanceToPolyline(route.points, point) <= tolerance) return { type: "route", id: route.id };
+      }
+    }
+    if (designer.layers.hardware.visible && designer.controller.visible !== false) {
       const controllerHit = pickControllerHit(designer.controller, point, tolerance);
       if (controllerHit) return controllerHit;
-    }
-  }
-  if (activeLayer === "strings" && designer.layers.strings.visible) {
-    for (const route of [...designer.routes].reverse()) {
-      if (route.visible === false) continue;
-      const pointHit = pickRoutePointHit(route, point, tolerance);
-      if (pointHit) return pointHit;
-      if (distanceToPolyline(route.points, point) <= tolerance) return { type: "route", id: route.id };
     }
   }
   if (activeLayer === "zones" && designer.layers.zones.visible) {
@@ -583,6 +630,13 @@ export function pickDesignerHit(designer: DesignerForm, activeLayer: DesignerAct
       const resizeHit = pickResizeHandleHit(element, point, tolerance, "face_graphic_resize");
       if (resizeHit) return resizeHit;
       if (pointInsideDesignerShape(element, point) || pointNearShapeStroke(element, point, tolerance * 2)) return { type: "face_graphic", id: element.id };
+    }
+  }
+  if (activeLayer === "fabrication" && designer.layers.fabrication.visible) {
+    const visiblePartIds = new Set(designer.fabricationParts.filter((part) => part.visible !== false).map((part) => part.id));
+    for (const path of [...designer.fabricationPaths].reverse()) {
+      if (path.visible === false || !visiblePartIds.has(path.partId)) continue;
+      if (pointInsideDesignerShape(path, point) || pointNearShapeStroke(path, point, tolerance * 2)) return { type: "fabrication_path", id: path.id };
     }
   }
   if ((activeLayer === "reference" || activeLayer === "artwork") && designer.layers.artwork.visible) {
@@ -723,8 +777,9 @@ export function pointInsideRect(shape: { x: number; y: number; width: number; he
     && point.y <= shape.y + shape.height + tolerance;
 }
 
-export function pointInsideDesignerShape(shape: Pick<DesignerBuildAreaForm, "shape" | "x" | "y" | "width" | "height" | "points" | "contours" | "pathMode" | "fillRule">, point: DesignerPoint) {
+export function pointInsideDesignerShape(shape: Pick<DesignerBuildAreaForm, "shape" | "x" | "y" | "width" | "height" | "points" | "contours" | "pathMode" | "fillRule"> & { closed?: boolean }, point: DesignerPoint) {
   if (shape.shape === "polygon" && shape.points) {
+    if (shape.closed === false) return false;
     if (shape.contours?.length) {
       const contained = shape.contours.reduce((count, contour) => count + (pointInPolygon(point, contourOutlinePoints(contour)) ? 1 : 0), 0);
       return shape.fillRule === "nonzero" ? contained > 0 : contained % 2 === 1;
@@ -745,13 +800,16 @@ export function pointInsideDesignerShape(shape: Pick<DesignerBuildAreaForm, "sha
   return point.x >= shape.x && point.x <= shape.x + shape.width && point.y >= shape.y && point.y <= shape.y + shape.height;
 }
 
-export function pointNearShapeStroke(shape: Pick<DesignerBuildAreaForm, "shape" | "x" | "y" | "width" | "height" | "points" | "contours" | "pathMode">, point: DesignerPoint, tolerance: number) {
+export function pointNearShapeStroke(shape: Pick<DesignerBuildAreaForm, "shape" | "x" | "y" | "width" | "height" | "points" | "contours" | "pathMode"> & { closed?: boolean }, point: DesignerPoint, tolerance: number) {
   if (shape.shape === "polygon" && shape.points) {
     if (shape.contours?.length) return shape.contours.some((contour) => polygonSegments(contourOutlinePoints(contour)).some((segment) => pointToSegmentDistance(point, segment.start, segment.end) <= tolerance));
     const outline = shapeOutlinePoints(shape);
     const bounds = pointsBounds(outline);
     if (!bounds || !pointInsideRect(bounds, point, tolerance)) return false;
-    return polygonSegments(outline).some((segment) => pointToSegmentDistance(point, segment.start, segment.end) <= tolerance);
+    const segments = shape.closed === false
+      ? outline.slice(1).map((end, index) => ({ start: outline[index], end }))
+      : polygonSegments(outline);
+    return segments.some((segment) => pointToSegmentDistance(point, segment.start, segment.end) <= tolerance);
   }
   if (shape.shape === "ellipse") {
     const radiusX = Math.max(0.001, shape.width / 2);
@@ -1233,6 +1291,54 @@ export function moveRoutePoint(routes: DesignerRouteForm[], routeId: string, poi
   });
 }
 
+export function moveRoutePointWithRetraction(routes: DesignerRouteForm[], routeId: string, pointIndex: number, point: DesignerPoint, toleranceCm = 0.02) {
+  return routes.map((route) => {
+    if (route.id !== routeId || !route.points.length) return route;
+    const effectiveIndex = pointIndex === 0 ? 0 : Math.min(pointIndex, route.points.length - 1);
+    const terminalSide = effectiveIndex === 0 ? "input" : effectiveIndex === route.points.length - 1 ? "output" : null;
+    if (route.kind !== "led_string" || !terminalSide || route.points[effectiveIndex]?.joint || route.points.length < 2) {
+      return { ...route, points: route.points.map((routePoint, index) => index === effectiveIndex ? { ...routePoint, ...point } : routePoint) };
+    }
+
+    let traversedCm = 0;
+    const candidates: Array<{ segmentIndex: number; projected: DesignerPoint; distanceCm: number; pathDistanceCm: number }> = [];
+    for (let index = 0; index < route.points.length - 1; index += 1) {
+      const start = route.points[index];
+      const end = route.points[index + 1];
+      const dx = end.x - start.x;
+      const dy = end.y - start.y;
+      const segmentLengthCm = Math.hypot(dx, dy);
+      if (segmentLengthCm < 0.000001) continue;
+      const ratio = Math.max(0, Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / (segmentLengthCm * segmentLengthCm)));
+      const projected = { x: start.x + dx * ratio, y: start.y + dy * ratio };
+      candidates.push({
+        segmentIndex: index,
+        projected,
+        distanceCm: distanceBetweenPoints(point, projected),
+        pathDistanceCm: traversedCm + segmentLengthCm * ratio
+      });
+      traversedCm += segmentLengthCm;
+    }
+    const originalLengthCm = traversedCm;
+    const candidate = candidates
+      .filter((entry) => entry.distanceCm <= Math.max(0.001, toleranceCm)
+        && entry.pathDistanceCm > 0.001
+        && entry.pathDistanceCm < originalLengthCm - 0.001)
+      .sort((left, right) => left.distanceCm - right.distanceCm
+        || (terminalSide === "output" ? right.pathDistanceCm - left.pathDistanceCm : left.pathDistanceCm - right.pathDistanceCm))[0];
+    if (!candidate) {
+      return { ...route, points: route.points.map((routePoint, index) => index === effectiveIndex ? { ...routePoint, ...point } : routePoint) };
+    }
+
+    const terminalPoint = { ...route.points[effectiveIndex], ...point, ...candidate.projected };
+    const nextPoints = terminalSide === "output"
+      ? [...route.points.slice(0, candidate.segmentIndex + 1), terminalPoint]
+      : [terminalPoint, ...route.points.slice(candidate.segmentIndex + 1)];
+    const deduplicated = nextPoints.filter((entry, index) => index === 0 || distanceBetweenPoints(entry, nextPoints[index - 1]) > 0.000001);
+    return deduplicated.length >= 2 ? { ...route, points: deduplicated } : route;
+  });
+}
+
 export function moveRouteTerminals(routes: DesignerRouteForm[], terminals: DesignerRouteTerminal[], point: DesignerPoint) {
   const terminalKeys = new Set(terminals.map((terminal) => `${terminal.routeId}:${terminal.pointIndex}`));
   return routes.map((route) => ({
@@ -1280,6 +1386,7 @@ export function moveRouteWithSolderedTerminals(designer: DesignerForm, routeId: 
 
 export function canSolderRoutes(sourceRoute: DesignerRouteForm, sourcePointIndex: number, targetRoute: DesignerRouteForm, targetPointIndex: number, snapCm: number) {
   if (!isRouteTerminal(sourceRoute, sourcePointIndex) || !isRouteTerminal(targetRoute, targetPointIndex)) return false;
+  if (!sameRouteSurface(sourceRoute, targetRoute)) return false;
   if (!sameTerminalPoint(sourceRoute.points[sourcePointIndex], targetRoute.points[targetPointIndex])) return false;
   const sourceRole = routeTerminalRole(sourcePointIndex);
   const targetRole = routeTerminalRole(targetPointIndex);
@@ -1294,6 +1401,7 @@ export function clearFloatingTerminalJoints(routes: DesignerRouteForm[], control
       if (route.kind === "data_cable" && pointIndex === 0 && findControllerPortAtPoint(controller, point, snapCm) !== null) return point;
       const connectedToRoute = routes.some((candidateRoute) => {
         if (candidateRoute.id === route.id) return false;
+        if (!sameRouteSurface(route, candidateRoute)) return false;
         return [0, candidateRoute.points.length - 1].some((candidateIndex) => {
           const candidatePoint = candidateRoute.points[candidateIndex];
           if (!candidatePoint?.joint) return false;
@@ -1425,6 +1533,7 @@ export function resolveRouteOutputs(controller: DesignerControllerForm, routes: 
     if (!end?.joint) continue;
     routes.forEach((candidate) => {
       if (candidate.id === route.id || resolved.has(candidate.id)) return;
+      if (!sameRouteSurface(route, candidate)) return;
       const start = candidate.points[0];
       if (start?.joint && sameTerminalPoint(end, start)) queue.push({ routeId: candidate.id, output: current.output });
     });
@@ -1483,7 +1592,7 @@ export function findJointGroup(routes: DesignerRouteForm[], routeId: string, poi
   const terminals: DesignerRouteTerminal[] = [];
 
   routes.forEach((route) => {
-    if (!sameRouteDesignSurface(sourceRoute, route)) return;
+    if (!sameRouteSurface(sourceRoute, route)) return;
     [0, route.points.length - 1].forEach((candidateIndex) => {
       const candidatePoint = route.points[candidateIndex];
       if (!candidatePoint?.joint) return;
@@ -1503,7 +1612,7 @@ export function findMatchingSolderTerminal(routes: DesignerRouteForm[], routeId:
   if (!sourceRoute) return null;
 
   for (const route of routes) {
-    if (route.id === routeId || !sameRouteDesignSurface(sourceRoute, route)) continue;
+    if (route.id === routeId) continue;
     for (const candidateIndex of [0, route.points.length - 1]) {
       if (canSolderRoutes(sourceRoute, pointIndex, route, candidateIndex, snapCm)) {
         return { routeId: route.id, pointIndex: candidateIndex };
@@ -1521,7 +1630,8 @@ export function findNearbySolderTerminal(routes: DesignerRouteForm[], routeId: s
   let nearest: { routeId: string; pointIndex: number; point: DesignerPoint; distance: number } | null = null;
 
   routes.forEach((route) => {
-    if (route.id === routeId || !sameRouteDesignSurface(sourceRoute, route)) return;
+    if (route.id === routeId) return;
+    if (!sameRouteSurface(sourceRoute, route)) return;
     [0, route.points.length - 1].forEach((candidateIndex) => {
       if (sourceRole === routeTerminalRole(candidateIndex)) return;
       const candidatePoint = route.points[candidateIndex];
@@ -1532,10 +1642,6 @@ export function findNearbySolderTerminal(routes: DesignerRouteForm[], routeId: s
   });
 
   return nearest;
-}
-
-function sameRouteDesignSurface(sourceRoute: DesignerRouteForm, targetRoute: DesignerRouteForm) {
-  return (sourceRoute.designSurface ?? "rear") === (targetRoute.designSurface ?? "rear");
 }
 
 export function findNearbyControllerPort(controller: DesignerControllerForm, route: DesignerRouteForm, pointIndex: number, point: DesignerPoint, captureRadiusCm: number, snapCm: number): { portIndex: number; point: DesignerPoint; distance: number } | null {
@@ -1560,6 +1666,13 @@ export function sameSnapPoint(a: DesignerPoint, b: DesignerPoint, snapCm: number
 /** Electrical coincidence is physical and must never expand with the drawing grid. */
 export function sameTerminalPoint(a: DesignerPoint, b: DesignerPoint) {
   return distanceBetweenPoints(a, b) <= 0.01;
+}
+
+/** Front and rear wiring occupy independent electrical planes. */
+export function sameRouteSurface(left: DesignerRouteForm, right: DesignerRouteForm) {
+  const leftSurface = left.designSurface === "front" ? "front" : "rear";
+  const rightSurface = right.designSurface === "front" ? "front" : "rear";
+  return leftSurface === rightSurface;
 }
 
 export function distanceBetweenPoints(a: DesignerPoint, b: DesignerPoint) {
@@ -1764,4 +1877,41 @@ export function sampleRouteLedDots(route: DesignerRouteForm, ledsPerMeter: numbe
     });
   }
   return dots;
+}
+
+/** Resolves drawing geometry without rewriting any authored strip parameter. */
+export function resolvedLedStripCutSegmentLengthMm(configuration: DesignerLedStripConfiguration, physicalLedsPerMeter: number) {
+  if (configuration.construction === "discrete" && configuration.physicalLedsPerCutSegment !== undefined) {
+    return 1000 * configuration.physicalLedsPerCutSegment / Math.max(0.1, physicalLedsPerMeter);
+  }
+  return configuration.cutSegmentLengthMm ?? 100;
+}
+
+/** Samples physical cut boundaries continuously across every bend in a route. */
+export function sampleRouteCutMarks(route: DesignerRouteForm, cutSegmentLengthMm: number) {
+  const intervalCm = Math.max(0.01, cutSegmentLengthMm / 10);
+  const segments = route.points.slice(1).map((end, index) => {
+    const start = route.points[index];
+    const lengthCm = Math.hypot(end.x - start.x, end.y - start.y);
+    return { start, end, lengthCm, angle: lengthCm > 0.001 ? Math.atan2(end.y - start.y, end.x - start.x) * 180 / Math.PI : 0 };
+  }).filter((segment) => segment.lengthCm > 0.001);
+  const totalLengthCm = segments.reduce((total, segment) => total + segment.lengthCm, 0);
+  const marks: Array<DesignerPoint & { angle: number; routeOffsetCm: number }> = [];
+  for (let distanceCm = intervalCm; distanceCm < totalLengthCm - 1e-6; distanceCm += intervalCm) {
+    let remainingDistance = distanceCm;
+    const segment = segments.find((entry) => {
+      if (remainingDistance <= entry.lengthCm) return true;
+      remainingDistance -= entry.lengthCm;
+      return false;
+    });
+    if (!segment) continue;
+    const ratio = remainingDistance / segment.lengthCm;
+    marks.push({
+      x: segment.start.x + (segment.end.x - segment.start.x) * ratio,
+      y: segment.start.y + (segment.end.y - segment.start.y) * ratio,
+      angle: segment.angle,
+      routeOffsetCm: distanceCm
+    });
+  }
+  return marks;
 }

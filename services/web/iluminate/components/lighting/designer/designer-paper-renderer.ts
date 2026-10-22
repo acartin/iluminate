@@ -5,7 +5,7 @@ import { designerFontResource } from "@/lib/lighting/designer-font-catalog";
 import { designerFilletCornerIsEligible } from "@/lib/lighting/designer-derived-geometry";
 import { estimateDesignerTextBounds } from "@/lib/lighting/designer-text-geometry";
 import type { DesignerActiveLayer, DesignerMeasurement, DesignerPrimitiveDraft, DesignerRouteDraft, DesignerShapeDraft, DesignerViewport, PaperApi, PaperPoint, PaperRectangle } from "./types";
-import { channelCenterPolyline, channelContainsPoint, channelIsClosed, channelWidthCm, controllerConnectedPorts, controllerPortPoint, formatDecimal, formatMeasure, pointInsideDesignerShape, routeColor, routeDirectionMarkers, routePointFill, routeSelectedColor, sampleRouteLedDots, smoothOpenBezierPoints } from "./designer-geometry";
+import { channelCenterPolyline, channelContainsPoint, channelIsClosed, channelWidthCm, controllerConnectedPorts, controllerPortPoint, formatDecimal, formatMeasure, pointInsideDesignerShape, resolvedLedStripCutSegmentLengthMm, routeColor, routeDirectionMarkers, routePointFill, routeSelectedColor, sampleRouteCutMarks, sampleRouteLedDots, smoothOpenBezierPoints } from "./designer-geometry";
 import type { CompiledDesignerLayout } from "./designer-compiler";
 import type { DesignerPathTrimPreview } from "./geometry/designer-path-trim";
 import { resolveChannelOutlineContours } from "./rendering/channel-swept-outline";
@@ -28,13 +28,16 @@ export function drawPaperDesigner({
   selectedZonePointIndex,
   selectedFaceGraphicId,
   selectedFaceGraphicPointIndex,
+  selectedFabricationPathId,
   selectedProjectionId,
   selectedDerivedGeometryId,
   selectedTextId,
   selectedChannelId,
   selectedChannelPointIndex,
   interactiveChannelId,
+  channelGenerationPreview = [],
   selectedRouteId,
+  selectedRouteIds = [],
   selectedRoutePointIndex,
   selectedController,
   filletMode = false,
@@ -59,13 +62,16 @@ export function drawPaperDesigner({
   selectedZonePointIndex?: number;
   selectedFaceGraphicId?: string;
   selectedFaceGraphicPointIndex?: number;
+  selectedFabricationPathId?: string;
   selectedProjectionId?: string;
   selectedDerivedGeometryId?: string;
   selectedTextId?: string;
   selectedChannelId?: string;
   selectedChannelPointIndex?: number;
   interactiveChannelId?: string;
+  channelGenerationPreview?: DesignerChannelForm[];
   selectedRouteId?: string;
+  selectedRouteIds?: string[];
   selectedRoutePointIndex?: number;
   selectedController: boolean;
   filletMode?: boolean;
@@ -173,24 +179,70 @@ export function drawPaperDesigner({
         drawPaperZone(zone, {
           selected: selectedZoneId === zone.id || selectedGeometryKeys.includes(`zone:${zone.id}`),
           selectedPointIndex: selectedZoneId === zone.id ? selectedZonePointIndex : undefined,
-          filletCandidateIndices: selectedZoneId === zone.id ? filletCandidates(zone.geometryId) : undefined,
-          filletMode,
-          opacity: layerOpacity,
-          toScreen,
-          rectToScreen
+        filletCandidateIndices: selectedZoneId === zone.id ? filletCandidates(zone.geometryId) : undefined,
+        filletMode,
+        opacity: layerOpacity,
+        colorMode,
+        toScreen,
+        rectToScreen
         });
       });
     });
     [...designer.channels].filter((channel) => channel.visible !== false).reverse().forEach((channel) => {
       drawPaperChannel(channel, {
-        selected: selectedChannelId === channel.id,
+        selected: selectedChannelId === channel.id || selectedGeometryKeys.includes(`channel:${channel.id}`),
         selectedPointIndex: selectedChannelId === channel.id ? selectedChannelPointIndex : undefined,
         interactive: interactiveChannelId === channel.id,
         filletCandidateIndices: selectedChannelId === channel.id ? filletCandidates(channel.geometryId) : undefined,
         filletMode,
         opacity: layerOpacity,
+        colorMode,
         toScreen,
         lengthToScreen
+      });
+    });
+    channelGenerationPreview.forEach((channel) => {
+      drawPaperChannel(channel, {
+        selected: false,
+        interactive: true,
+        opacity: 0.7,
+        colorMode,
+        toScreen,
+        lengthToScreen
+      });
+    });
+  }
+
+  // Fabrication geometry remains visible as a non-interactive orthogonal
+  // overlay while Diffusors is active. This gives immediate projection
+  // feedback without stealing selection from the source Zone or Channel.
+  if (designer.layers.fabrication.visible && (activeLayer === "fabrication" || activeLayer === "zones")) {
+    const orthogonalOverlay = activeLayer === "zones";
+    const visibleParts = new Map(designer.fabricationParts.filter((part) => part.visible !== false).map((part) => [part.id, part]));
+    [...designer.fabricationPaths].filter((path) => path.visible !== false && visibleParts.has(path.partId)).reverse().forEach((path) => {
+      const selected = !orthogonalOverlay && selectedFabricationPathId === path.id;
+      const operationColor = path.operation === "cut" ? "#ef4444"
+        : path.operation === "pocket" ? "#f59e0b"
+          : path.operation === "drill" ? "#22c55e"
+            : path.operation === "engrave" ? "#06b6d4"
+              : "#94a3b8";
+      const strokeColor = orthogonalOverlay ? "#d946ef" : selected ? "#fbbf24" : operationColor;
+      const shape = drawPaperClosedShape(path, {
+        fillColor: orthogonalOverlay ? "rgba(217,70,239,0.025)" : selected ? "rgba(245,158,11,0.14)" : "rgba(148,163,184,0.04)",
+        strokeColor,
+        strokeWidth: orthogonalOverlay ? 2 : selected ? 2.2 : 1.4,
+        dashArray: orthogonalOverlay || path.operation === "reference" ? [6, 4] : undefined,
+        toScreen,
+        rectToScreen
+      });
+      const part = visibleParts.get(path.partId)!;
+      shape.opacity = orthogonalOverlay ? Math.min(0.95, part.opacity) : Math.min(part.opacity, designer.layers.fabrication.opacity);
+      new paperScope.PointText({
+        point: toScreen({ x: path.x + 0.8, y: path.y - 0.8 }),
+        content: orthogonalOverlay ? `FAB · ${part.name} · ${path.operation.toUpperCase()}` : `${path.operation.toUpperCase()} · ${path.name}`,
+        fillColor: strokeColor,
+        fontFamily: "monospace",
+        fontSize: orthogonalOverlay ? 9 : 10
       });
     });
   }
@@ -305,11 +357,19 @@ export function drawPaperDesigner({
     designer.routes.forEach((route) => {
       if (route.visible === false) return;
       drawPaperRoute(route, {
-        selected: selectedRouteId === route.id,
+        selected: selectedRouteId === route.id || selectedRouteIds.includes(route.id),
         selectedPointIndex: selectedRouteId === route.id ? selectedRoutePointIndex : undefined,
         opacity: designer.layers.strings.opacity,
         addressablePixelsPerMeter: designer.addressablePixelsPerMeter,
         ledsPerMeter: designer.ledsPerMeter,
+        ledPackageSizeMm: designer.ledPackageSizeMm,
+        pcbWidthMm: designer.ledPcbWidthMm,
+        construction: designer.stripConfiguration?.construction ?? "discrete",
+        cutMode: designer.stripConfiguration?.cutMode ?? "marked_segments",
+        cutSegmentLengthMm: designer.stripConfiguration
+          ? resolvedLedStripCutSegmentLengthMm(designer.stripConfiguration, designer.ledsPerMeter)
+          : 1000 / designer.addressablePixelsPerMeter,
+        colorMode,
         toScreen,
         lengthToScreen
       });
@@ -655,13 +715,17 @@ function drawPaperZone(zone: DesignerZoneForm, options: {
   filletCandidateIndices?: Set<number>;
   filletMode?: boolean;
   opacity: number;
+  colorMode: "day" | "night";
   toScreen: (point: DesignerPoint) => PaperPoint;
   rectToScreen: (shape: { x: number; y: number; width: number; height: number }) => PaperRectangle;
 }) {
+  const idleStroke = options.colorMode === "night" ? "#93c5fd" : "#2563eb";
+  const idleFill = options.colorMode === "night" ? "rgba(96,165,250,0.22)" : "rgba(37,99,235,0.16)";
+  const idleLabel = options.colorMode === "night" ? "#bfdbfe" : "#2563eb";
   const shape = drawPaperClosedShape(zone, {
-    fillColor: options.selected ? "rgba(14,165,233,0.24)" : "rgba(37,99,235,0.16)",
-    strokeColor: options.selected ? "#38bdf8" : "#2563eb",
-    strokeWidth: options.selected ? 2 : 1.6,
+    fillColor: options.selected ? "rgba(14,165,233,0.24)" : idleFill,
+    strokeColor: options.selected ? "#38bdf8" : idleStroke,
+    strokeWidth: options.selected ? 2 : options.colorMode === "night" ? 2 : 1.6,
     toScreen: options.toScreen,
     rectToScreen: options.rectToScreen
   });
@@ -670,7 +734,7 @@ function drawPaperZone(zone: DesignerZoneForm, options: {
   new paperScope.PointText({
     point: labelPoint,
     content: `${zone.name} ${formatDecimal(zone.width)}x${formatDecimal(zone.height)} cm`,
-    fillColor: options.selected ? "#7dd3fc" : "#2563eb",
+    fillColor: options.selected ? "#7dd3fc" : idleLabel,
     fontFamily: "monospace",
     fontSize: 12,
     opacity: Math.max(0.45, options.opacity)
@@ -686,16 +750,20 @@ function drawPaperChannel(channel: DesignerChannelForm, options: {
   filletCandidateIndices?: Set<number>;
   filletMode?: boolean;
   opacity: number;
+  colorMode: "day" | "night";
   toScreen: (point: DesignerPoint) => PaperPoint;
   lengthToScreen: (cm: number) => number;
 }) {
+  const idleColors = options.colorMode === "night"
+    ? { band: "rgba(245,158,11,0.26)", border: "#f59e0b", center: "#fde68a", label: "#fbbf24" }
+    : { band: "rgba(217,119,6,0.22)", border: "#b45309", center: "#78350f", label: "#92400e" };
   const center = channelCenterPolyline(channel);
   if (center.length >= 2) {
     const channelStrokeWidth = Math.max(1, options.lengthToScreen(channelWidthCm(channel)));
     // Draw the band by stroking the center path with the channel width. This is
     // the swept footprint of a circular router bit along the center path.
     const band = new paperScope.Path({
-      strokeColor: options.selected ? "rgba(245,158,11,0.30)" : "rgba(148,163,184,0.16)",
+      strokeColor: options.selected ? "rgba(245,158,11,0.30)" : idleColors.band,
       strokeWidth: channelStrokeWidth,
       strokeJoin: "round",
       strokeCap: channel.cap === "round" ? "round" : "butt",
@@ -705,8 +773,8 @@ function drawPaperChannel(channel: DesignerChannelForm, options: {
     band.closed = channelIsClosed(channel);
 
     const borderOptions = {
-      strokeColor: options.selected ? "#f59e0b" : "#94a3b8",
-      strokeWidth: options.selected ? 1.6 : 1,
+      strokeColor: options.selected ? "#f59e0b" : idleColors.border,
+      strokeWidth: options.selected ? 1.6 : 1.5,
       opacity: options.opacity
     };
     if (!options.interactive) {
@@ -725,8 +793,8 @@ function drawPaperChannel(channel: DesignerChannelForm, options: {
     }
 
     const centerLine = new paperScope.Path({
-      strokeColor: options.selected ? "#fbbf24" : "#cbd5e1",
-      strokeWidth: 1,
+      strokeColor: options.selected ? "#fbbf24" : idleColors.center,
+      strokeWidth: options.selected ? 1 : 1.1,
       dashArray: [5, 4],
       opacity: Math.max(0.5, options.opacity)
     });
@@ -738,7 +806,7 @@ function drawPaperChannel(channel: DesignerChannelForm, options: {
     new paperScope.PointText({
       point: options.toScreen({ x: anchor.x + 1, y: anchor.y - 1.2 }),
       content: `${channel.name} ${channel.widthMm} mm`,
-      fillColor: options.selected ? "#fde68a" : "#94a3b8",
+      fillColor: options.selected ? "#fde68a" : idleColors.label,
       fontFamily: "monospace",
       fontSize: 11,
       opacity: Math.max(0.5, options.opacity)
@@ -814,7 +882,7 @@ function drawPaperShapeNodes(
   });
 }
 
-function drawPaperClosedShape(shape: Pick<DesignerBuildAreaForm, "shape" | "x" | "y" | "width" | "height" | "points" | "contours" | "pathMode" | "fillRule">, options: {
+function drawPaperClosedShape(shape: Pick<DesignerBuildAreaForm, "shape" | "x" | "y" | "width" | "height" | "points" | "contours" | "pathMode" | "fillRule"> & { closed?: boolean }, options: {
   fillColor: string;
   strokeColor: string;
   strokeWidth: number;
@@ -834,7 +902,7 @@ function drawPaperClosedShape(shape: Pick<DesignerBuildAreaForm, "shape" | "x" |
     return compound;
   }
   if (shape.shape === "polygon" && shape.points) {
-    const path = drawPaperContour({ points: shape.points, pathMode: shape.pathMode ?? "straight", closed: true }, options.toScreen);
+    const path = drawPaperContour({ points: shape.points, pathMode: shape.pathMode ?? "straight", closed: shape.closed !== false }, options.toScreen);
     path.set({
       fillColor: options.fillColor,
       strokeColor: options.strokeColor,
@@ -862,7 +930,7 @@ function drawPaperClosedShape(shape: Pick<DesignerBuildAreaForm, "shape" | "x" |
   });
 }
 
-function drawPaperContour(contour: DesignerContour, toScreen: (point: DesignerPoint) => PaperPoint) {
+function drawPaperContour(contour: Pick<DesignerContour, "points" | "pathMode"> & { closed?: boolean }, toScreen: (point: DesignerPoint) => PaperPoint) {
   const path = new paperScope.Path();
   contour.points.forEach((point) => path.add(toScreen(point)));
   if (contour.pathMode === "bezier") {
@@ -872,7 +940,7 @@ function drawPaperContour(contour: DesignerContour, toScreen: (point: DesignerPo
       if (point.handleOut) path.segments[index].handleOut = toScreen({ x: point.x + point.handleOut.x, y: point.y + point.handleOut.y }).subtract(anchor);
     });
   }
-  path.closed = true;
+  path.closed = contour.closed !== false;
   return path;
 }
 
@@ -949,10 +1017,33 @@ function drawPaperRoute(route: DesignerRouteForm, options: {
   opacity: number;
   addressablePixelsPerMeter: number;
   ledsPerMeter: number;
+  ledPackageSizeMm: number;
+  pcbWidthMm: number;
+  construction: "discrete" | "continuous";
+  cutMode: "marked_segments" | "free_cut";
+  cutSegmentLengthMm: number;
+  colorMode: "day" | "night";
   toScreen: (point: DesignerPoint) => PaperPoint;
   lengthToScreen: (cm: number) => number;
 }) {
-  const strokeColor = options.selected ? routeSelectedColor(route.kind) : routeColor(route);
+  const idleLedColors = options.colorMode === "day"
+    ? { board: "#f59e0b", stroke: "#7c2d12", light: "#b45309", packageStroke: "#431407", cut: "#334155" }
+    : { board: "#f8fafc", stroke: routeColor(route), light: "#fbbf24", packageStroke: "#92400e", cut: "#64748b" };
+  const strokeColor = options.selected
+    ? routeSelectedColor(route.kind)
+    : route.kind === "led_string" && options.colorMode === "day"
+      ? idleLedColors.stroke
+      : routeColor(route);
+  if (route.kind === "led_string") {
+    const board = new paperScope.Path({
+      strokeColor: options.selected ? "#fef3c7" : idleLedColors.board,
+      strokeWidth: Math.max(1.2, options.lengthToScreen(options.pcbWidthMm / 10)),
+      strokeCap: "butt",
+      strokeJoin: "round",
+      opacity: Math.max(0.72, options.opacity)
+    });
+    route.points.forEach((point) => board.add(options.toScreen(point)));
+  }
   const mainWidth = route.kind === "data_cable" ? (options.selected ? 3.2 : 2.2) : (options.selected ? 3.4 : 1.8);
   const shadowWidth = mainWidth + 2.2;
   const shadow = new paperScope.Path({
@@ -973,36 +1064,70 @@ function drawPaperRoute(route: DesignerRouteForm, options: {
   route.points.forEach((point) => path.add(options.toScreen(point)));
   path.opacity = Math.max(0.88, options.opacity);
   if (route.kind === "led_string") {
-    // WS2812B "5050" packages are approximately 5 x 5 mm.
-    const packageSide = Math.max(1.5, options.lengthToScreen(0.5));
-    sampleRouteLedDots(route, options.ledsPerMeter, options.addressablePixelsPerMeter).forEach((dot) => {
-      const center = options.toScreen(dot);
-      const ledPackage = new paperScope.Path.Rectangle({
-        rectangle: new paperScope.Rectangle(center.x - packageSide / 2, center.y - packageSide / 2, packageSide, packageSide),
-        fillColor: options.selected ? "#f0abfc" : "#fbbf24",
-        strokeColor: options.selected ? "#831843" : "#92400e",
-        strokeWidth: options.selected ? 1.3 : 0.8,
-        opacity: 1
+    if (options.construction === "continuous") {
+      const lightBand = new paperScope.Path({ strokeColor: options.selected ? "#f0abfc" : idleLedColors.light, strokeWidth: Math.max(1.2, options.lengthToScreen(options.pcbWidthMm / 16)), strokeCap: "round", strokeJoin: "round", opacity: 0.9 });
+      route.points.forEach((point) => lightBand.add(options.toScreen(point)));
+    } else {
+      const packageSide = Math.max(0.1, options.lengthToScreen(options.ledPackageSizeMm / 10));
+      sampleRouteLedDots(route, options.ledsPerMeter, options.addressablePixelsPerMeter).forEach((dot) => {
+        const center = options.toScreen(dot);
+        const ledPackage = new paperScope.Path.Rectangle({
+          rectangle: new paperScope.Rectangle(center.x - packageSide / 2, center.y - packageSide / 2, packageSide, packageSide),
+          fillColor: options.selected ? "#f0abfc" : idleLedColors.light,
+          strokeColor: options.selected ? "#831843" : idleLedColors.packageStroke,
+          strokeWidth: options.selected ? 1.3 : 0.8,
+          opacity: 1
+        });
+        ledPackage.rotate(dot.angle, center);
       });
-      ledPackage.rotate(dot.angle, center);
-    });
+    }
+    if (options.cutMode === "marked_segments") {
+      const cutHalfWidthPx = Math.max(2, options.lengthToScreen(options.pcbWidthMm / 18));
+      sampleRouteCutMarks(route, options.cutSegmentLengthMm).forEach((mark) => {
+        const center = options.toScreen(mark);
+        const radians = (mark.angle + 90) * Math.PI / 180;
+        const delta = new paperScope.Point(Math.cos(radians) * cutHalfWidthPx, Math.sin(radians) * cutHalfWidthPx);
+        new paperScope.Path.Line({ from: center.subtract(delta), to: center.add(delta), strokeColor: options.selected ? "#be185d" : idleLedColors.cut, strokeWidth: 1, opacity: 0.9 });
+      });
+    }
   }
   routeDirectionMarkers(route).forEach((marker) => drawPaperArrowMarker(marker, route.kind, options.selected, options.toScreen));
   route.points.forEach((point, index) => {
-    if (point.joint) {
+    const isInputTerminal = index === 0;
+    const isOutputTerminal = index === route.points.length - 1;
+    const isTerminal = isInputTerminal || isOutputTerminal;
+    const center = options.toScreen(point);
+    const terminalColor = point.joint ? "#22d3ee" : isInputTerminal ? "#22c55e" : "#ef4444";
+    const contrastColor = options.colorMode === "night" ? "#f8fafc" : "#0f172a";
+    if (isTerminal) {
+      const haloRadius = isInputTerminal ? 8.5 : 7;
       new paperScope.Path.Circle({
-        center: options.toScreen(point),
+        center,
+        radius: haloRadius,
+        strokeColor: contrastColor,
+        strokeWidth: 4,
+        opacity: 0.9
+      });
+      new paperScope.Path.Circle({
+        center,
+        radius: haloRadius,
+        strokeColor: terminalColor,
+        strokeWidth: 2.2
+      });
+    } else if (point.joint) {
+      new paperScope.Path.Circle({
+        center,
         radius: 5.2,
         strokeColor: "#22d3ee",
         strokeWidth: 1.4
       });
     }
     new paperScope.Path.Circle({
-      center: options.toScreen(point),
-      radius: point.joint ? 3.8 : options.selectedPointIndex === index ? 3.8 : options.selected ? 3.1 : 2.4,
+      center,
+      radius: isTerminal ? isInputTerminal ? 5.2 : 4.6 : point.joint ? 3.8 : options.selectedPointIndex === index ? 3.8 : options.selected ? 3.1 : 2.4,
       fillColor: routePointFill(route, index, point, options.selectedPointIndex === index),
-      strokeColor: "#020617",
-      strokeWidth: point.joint ? 1.4 : 0.8
+      strokeColor: isTerminal ? contrastColor : "#020617",
+      strokeWidth: isTerminal ? 1.6 : point.joint ? 1.4 : 0.8
     });
   });
 }

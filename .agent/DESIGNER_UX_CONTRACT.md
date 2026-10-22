@@ -44,15 +44,30 @@ Canonical contents:
 - Layers panel toggle and active-layer identification.
 - Compile state, issue count and global fabrication status.
 - Theme, Undo, Redo, Compile and Save.
-- In Animate mode: preview type, an always-labeled `Outlines` checkbox and fullscreen Viewer. Outlines is a visibility state, not a square-shaped drawing-tool button.
+- In Animate mode: preview type, an always-labeled `Outlines` selector and fullscreen Viewer. Outlines is a transient presentation filter with `All`, `Active sources`, `Zones`, `Channels` and `None`; it does not change the document or optical emulation.
 
 Save remains gray and disabled when the current persistent document matches the
 last server-confirmed version. It turns amber and becomes actionable when
 there are unsaved changes; returning to the saved state through Undo returns it
 to gray. Preview/playhead movement does not mark the document dirty. Compile
 uses the same amber pending-state color and a build/compile icon, then returns
-to gray when current. Every icon-only control exposes the same accessible hover
+to gray when current. While Compile is running, the control stays visibly amber,
+shows a spinner, a persistent amber `Compiling physical layout…` status, and a
+`Compiling…` button label, exposes `aria-busy`, and rejects repeat
+submissions until layout derivation and persistence finish. Every icon-only control exposes the same accessible hover
 description through `title` and `aria-label`.
+
+The Compile issues modal uses operator-facing object names, never raw route IDs
+when the referenced object still exists. Each issue persists structured object
+targets. Target chips close the modal, switch to Design, reveal the object's
+construction face when applicable, select it in Layers and center it on the
+canvas. A target that represents a Lighting Setup opens that owner's setup so
+the assignment can be inspected directly. String, Zone and Channel chips reuse
+their object-type icons and Layers colors. For overlapping Lighting Setups, the
+issue card exposes a `Lighting host` selector limited to the conflicting Zone and
+Channel owners; the string chip also reveals the same field first in the
+contextual bar. Legacy string-only issues remain
+readable but cannot invent a target.
 
 Selection-dependent actions or fields do not belong here. In particular, do
 not place object coordinates, shape/path fields, node controls, Lighting,
@@ -153,15 +168,19 @@ Examples:
   Rectangles expose `W/H` and ellipses expose `ØW/ØH`; polygon width/height,
   shape conversion and element/node X/Y stay out of the contextual bar.
   Canvas manipulation remains the geometry editing surface for paths.
-- Channel: router-bit diameter, open/closed path, ends and node type. Channel
+- Channel: open/closed path, ends and node type. Channel
   node coordinates stay off the contextual bar. When a corner node is selected,
   one numeric `Fillet` field in millimeters edits that node directly and redraws
   the center trace immediately. There is no separate activation mode, passive
   Fillet badge, Setup Fillet setting or Channel-specific `Round corner` command.
-- Active Channel tool: one router-bit selector containing common metric and
-  fractional-inch diameters; every option shows both units. The diameter is the
-  live trace width and the width of the created channel. Millimeters remain the
-  canonical stored value.
+- Setup owns one Channel router-bit selector containing common metric and
+  fractional-inch diameters; every option shows both units. The stored diameter
+  is the live trace width and the width of subsequently created Channels.
+  Millimeters remain canonical. Do not duplicate this setting in the contextual
+  bar for the active Channel tool or a selected Channel.
+  During manual tracing, `Enter` validates and deselects the current open
+  Channel without leaving the Channel tool; the next click begins a new
+  Channel. A lone provisional point is cancelled instead of persisted.
   Manual tracing remains the primary interaction. When geometric profiles were
   selected before activating Channel, the same context also offers `Left edge`,
   `Center` or `Right edge` alignment and `Generate Channel`. Endpoint-
@@ -172,6 +191,12 @@ Examples:
   persisted and reused by both manual and generated Channels.
   New open channels use round ends with an implicit radius of half that
   diameter; a flat end remains an explicit per-channel choice.
+  The Layers-panel header owns the global `Construction · Front / Rear / Both`
+  viewport filter, which determines the
+  fabrication side of new Channels in a single-side view. In `Both`, `Create
+  on` explicitly chooses Front or Rear and remembers the last choice. A selected
+  Channel exposes `Fabrication side`; changing it moves the viewport to the new
+  side. This metadata never enables or changes Front, Halo-Lit or Wall Washer.
   Bezier handles remain freely draggable. Designer does not estimate or warn
   about Channel bend radii; the operator may apply `Fillet` explicitly where a
   manufactured corner needs it.
@@ -182,9 +207,10 @@ Examples:
   counters as compound holes and skips open/non-vector content with a notice.
   It never consumes, hides, moves or otherwise mutates the Artwork source or
   any existing layer/object visibility; visibility remains operator-controlled.
-- Route: route type and editing actions. Delete removes the selected route even
-  when it is the final route in the document; an empty Strings collection is a
-  valid authored state.
+- Route: route type and editing actions. With an internal route node selected,
+  Delete removes that node while preserving at least two route points. With the
+  route itself selected, Delete removes the route even when it is the final
+  route in the document; an empty Strings collection is valid authored state.
 - Controller: port count.
 - Light source: source type and Configure source.
 - Face Graphic: pass mode, translucent filter color, selected-node type and
@@ -243,7 +269,17 @@ on the canvas.
 
 Always-available tools:
 
-- Select.
+- Select. Clicking keeps the active-category hit policy. Dragging from empty
+  canvas draws an orthogonal marquee and selects every visible profile it
+  touches within one compatible category. The active category wins when it has
+  hits; otherwise the category with the largest touched profile set activates.
+  Hidden profiles never participate. Diffusors marquee selection includes both
+  Zones and Channels, but mixed selections do not expose profile-only Group or
+  boolean operations. With multiple Diffusors selected, Move drags the complete
+  transient set as one rigid translation while retaining the existing axis,
+  modifier, snap and layer-lock rules. Images, routes, Work Lines and the
+  controller remain click-selected because they are not compatible
+  authoring-group operands.
 - Move. It moves the complete object without exposing node or resize-handle
   editing. Its contextual control fixes movement to X or Y; holding Ctrl (or
   Command on macOS) temporarily releases the constraint and permits movement
@@ -251,6 +287,8 @@ Always-available tools:
   movement, and an initial object click cannot accidentally drag one of its
   nodes or resize handles.
 - Pan.
+- A secondary/right-button drag pans the canvas from any active tool without
+  changing that tool; the browser context menu is suppressed on the canvas.
 - Measure.
 - Work line. It creates a straight, open, continuous construction polyline and
   finishes with Enter or double-click. It is available from Artwork, Reference,
@@ -267,6 +305,10 @@ Always-available tools:
 
 The remaining tools depend on the active layer, for example image placement,
 reference/zone/channel drawing, LED string, data cable and route cutting.
+LED string and data cable remain click-to-trace tools. Enter validates, ends
+and deselects the current route after its first segment without leaving the
+active tool; the next click starts a new route of the same kind. If only the provisional start
+point exists, Enter cancels it instead of persisting an invalid route.
 Face Graphic uses the same rectangle, ellipse, polygon and Bezier interaction
 as the other geometric layers; only its semantic properties differ.
 Its Layers category header owns a transient black/white vinyl-preview toggle:
@@ -308,19 +350,33 @@ may immediately participate in Project Geometry, booleans, offsets and fillets.
 
 `Project Geometry` is a contextual object command, not a rail tool. With a
 geometric source selected, the contextual bar exposes a target selector
-(`Face Graphic`, `Diffusors` or `Reference`) and the command. It immediately
+(`Face Graphic`, `Diffusors`, `Reference` or `Fabrication Plans`) and the command. It immediately
 creates an independent native object in the target layer; there is no new live
-link or `Break Link` step. The active layer, selected source and contextual
-focus remain unchanged so the operator can project several objects quickly.
+link or `Break Link` step. The target layer is revealed, but the active layer,
+selected source and contextual focus remain unchanged so the operator can
+project several objects without navigating back after each command. An explicit
+projection may append its new object to a locked target layer; that lock still
+prevents subsequent geometry editing and protects every pre-existing target
+object.
+When `Fabrication Plans` is selected, the contextual bar additionally requires
+a physical part (existing or new), a name for a new part, and an operation.
+The result is a selectable `Fabrication Path` grouped beneath its
+`Fabrication Part`; this prepares editable manufacturing geometry but does not
+download or generate an export file.
+While `Diffusors` is active and the `Fabrication Plans` visibility eye is on,
+visible fabrication paths appear as a magenta dashed orthogonal overlay labeled
+with their part and operation. This overlay provides immediate projection
+feedback but is not selectable there, so it cannot steal focus from the source
+Diffusor; paths become selectable when `Fabrication Plans` is active.
 Legacy linked projections remain readable and repairable through their source
 selector.
 
-A selected Channel uses this same `Project Geometry` command. The original
-Channel remains the editable and exportable centerline object; the generated
-native object receives the complete swept perimeter, including width, ends and
-corner fillets. Projecting to Face Graphic therefore creates the second,
-independently visible perimeter object without adding another command or
-changing the current focus.
+A selected Channel uses this same `Project Geometry` command. Projecting it to
+`Fabrication Plans` creates an independent open or closed copy of its canonical
+centerline for the CNC router-bit path; it never substitutes the swept borders.
+Area destinations such as Face Graphic still receive the complete swept
+perimeter, including width, ends and corner fillets, because they require a
+closed region. The original Channel remains editable and selected.
 
 Boolean geometry is also contextual, not a rail mode. Select the first/base
 profile normally, then use Shift/Ctrl/Command-click to add profiles from the
@@ -419,6 +475,9 @@ millimeter DXF curve tolerance, minimum-feature guidance, validation results
 and separate SVG/DXF downloads. Blocking errors must prevent download and stay
 visible; warnings must remain visible but allow export. Never imply that this
 dialog generates CAM toolpaths, STL or a machine-specific cut file.
+When `Fabrication Plans` is enabled, export creates one file per visible
+physical part and uses its operator-defined name verbatim as the filename base;
+the file contains only that part's visible paths, grouped by operation.
 
 Ruler visibility and distance measurement are different functions and must not
 share the same icon. The global Ruler control uses the ruler icon. The Measure
@@ -432,8 +491,9 @@ Category activation must be immediate and deterministic:
 - Clicking a category name, its disclosure arrow or one of its folders makes
   that category the active canvas layer and returns the pointer to Select.
 - Once active, every visible object belonging to that category can be selected
-  on the canvas. Zooming or panning must never be required to "finish"
-  activation.
+  on the canvas. The Select marquee may activate another compatible category
+  from visible touched profiles without a prior Layers-panel visit. Zooming or
+  panning must never be required to "finish" activation.
 - Hidden layers and hidden objects are not selectable.
 - Locked layers remain selectable for identification and inspection, but no
   geometry, property or drawing mutation is allowed. Layers communicates the
@@ -472,12 +532,20 @@ Canvas selection and Layers navigation are one synchronized state:
   `Diffusors / Zones` or `Face Graphic`);
   data cable -> `Hardware / Data cables`; LED string -> `Hardware / Strings`;
   controller -> `Hardware / Controller`.
-- Hardware owns one transient `Rear / Front / Both` display filter shared by
-  Strings and Data cables. Every route persists only its Designer mounting-face
+- Design owns one transient `Front / Rear / Both` construction-view filter
+  shared by Channels, Strings and Data cables. Every route persists only its Designer mounting-face
   classification (`rear` or `front`); newly drawn routes inherit the last
   single-surface view. Filtering removes the other surface from canvas drawing,
   hit testing, snapping and both route folders without changing route eyes,
   joints, outputs, serial order, lighting setup, Compile, export or Animate.
+- The persisted Front/Rear classification also isolates electrical topology.
+  Solder compatibility requires the same construction plane in addition to
+  opposite visible polarity and coincident coordinates. Changing a route's
+  plane invalidates Compile; merely changing the viewport filter does not.
+- While one construction face is visible, the
+  canvas shows a subtle theme-aware peripheral cue and a `TOP · FRONT` or
+  `DOWN · REAR` label. `Both` has no ambient bias. The cue is non-interactive
+  and must not recolor geometry or resemble the optical lighting preview.
 - The same mapping must be used by canvas selection and panel selection; do not
   maintain competing ad-hoc mappings in separate components.
 
@@ -493,8 +561,16 @@ permission to restore the Layers category.
 
 Lighting construction belongs to Design. Only Design may create, enable,
 disable or remove Front, Halo-Lit and Wall Washer sources, rename a source,
-assign LED strings, choose the installed front material/diffuser or choose the
-physical receiver. These are installation attributes, not animation controls.
+choose the installed front material/diffuser or choose the physical receiver.
+LED strings are not manually assigned: Compile maps Front sources to intersecting
+Front strings and Halo/Wall Washer sources to intersecting Rear strings. A selected
+LED string may optionally choose a Lighting host (Zone or Channel) to narrow that
+geometric mapping; Auto keeps the current geometric behavior. Strings generated
+from a Channel inherit that Channel as their host. The Lighting Setup modal
+presents the compiled result read-only.
+New Zones default to Front; new Channels
+default to Front or Halo according to their creation surface. Wall Washer stays
+explicit. These are installation attributes, not animation controls.
 
 Animate may tune only calibration parameters of sources that already exist:
 
@@ -503,8 +579,8 @@ Animate may tune only calibration parameters of sources that already exist:
 - Halo-Lit: intensity, spread, softness, wall gap and face color.
 - Wall Washer: intensity, spread, softness, direction, throw, beam and falloff.
 
-Animate must not show mode enable checkboxes, Add/Remove, source naming, LED
-string assignment, material selection or receiver selection. If the selected
+Animate must not show mode enable checkboxes, Add/Remove, source naming, compiled
+string mapping, material selection or receiver selection. If the selected
 target has no configured source, Animate directs the operator to Design.
 
 Selecting a timeline clip must keep that clip selected and select/highlight its
@@ -536,6 +612,10 @@ the contextual bar.
 
 Lighting status and setup remain in the panel. The contextual bar does not
 repeat lighting modes, materials, incomplete states or an empty-state legend.
+The row lightbulb is amber when at least one Lighting Setup is enabled for that
+owner. It reports persisted setup state immediately and does not depend on
+Compile freshness or compiled string membership; mapping warnings remain inside
+the Lighting Setup modal.
 
 ## Placement Test For New Controls
 

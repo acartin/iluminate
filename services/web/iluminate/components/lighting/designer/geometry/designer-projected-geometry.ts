@@ -1,17 +1,18 @@
-import type { DesignerForm, DesignerGeometry, DesignerPoint } from "@/lib/lighting/partitura-model";
+import type { DesignerForm, DesignerGeometry, DesignerPoint, DesignerProjectionLayer } from "@/lib/lighting/partitura-model";
 import { resolveDesignerProjectionGeometry as resolveCanonicalProjectionGeometry } from "@/lib/lighting/partitura-model";
 import { resolveChannelOutlineContours } from "../rendering/channel-swept-outline";
 
-/**
- * Projecting a Channel means projecting its physical swept perimeter. The
- * editable Channel remains the independently visible/exportable centerline.
- */
-export function resolveDesignerProjectionGeometry(designer: DesignerForm, projectionId: string) {
+/** Area projections use the swept perimeter; fabrication keeps the canonical centerline toolpath. */
+export function resolveDesignerProjectionGeometry(
+  designer: DesignerForm,
+  projectionId: string,
+  destination?: DesignerProjectionLayer | "fabrication"
+) {
   const projection = designer.projections.find((entry) => entry.id === projectionId);
   const channel = projection
     ? designer.channels.find((entry) => entry.geometryId === projection.sourceGeometryId)
     : null;
-  if (!projection || !channel) return resolveCanonicalProjectionGeometry(designer, projectionId);
+  if (!projection || !channel || destination === "fabrication") return resolveCanonicalProjectionGeometry(designer, projectionId);
 
   const contours = resolveChannelOutlineContours(channel);
   if (!contours.length) return { geometry: null, issue: "collapsed" as const, warnings: [] };
