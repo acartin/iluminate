@@ -20,7 +20,7 @@ export type DesignerContour = {
   closed: true;
 };
 
-export const DESIGNER_SCHEMA_VERSION = 19 as const;
+export const DESIGNER_SCHEMA_VERSION = 21 as const;
 export const DEFAULT_CHANNEL_ROUTER_DIAMETER_MM = 10;
 
 /**
@@ -178,7 +178,7 @@ export type DesignerFabricationPathForm = {
 export type DesignerGroupForm = {
   id: string;
   name: string;
-  members: Array<{ type: "zone" | "group"; id: string }>;
+  members: Array<{ type: "zone" | "channel" | "group"; id: string }>;
 };
 
 /** Visual authoring group; separate from electrical/effect Zone groups. */
@@ -217,6 +217,25 @@ export type DesignerChannelForm = {
 };
 
 export type DesignerOpticalMode = "front" | "halo" | "wall_wash";
+export type DesignerLightingSide = "front" | "rear";
+
+const DESIGNER_GROUP_LIGHT_TARGET_PREFIX = "effect_target";
+
+export function designerOpticalModeSide(mode: DesignerOpticalMode): DesignerLightingSide {
+  return mode === "front" ? "front" : "rear";
+}
+
+export function designerGroupLightTargetId(groupId: string, side: DesignerLightingSide) {
+  // Runtime ids are validated by lighting-core and may only contain letters,
+  // numbers, underscores and hyphens. Keep the authored group id intact while
+  // using an unambiguous, validator-safe prefix for its sided animation target.
+  return `${DESIGNER_GROUP_LIGHT_TARGET_PREFIX}_${side}_${groupId}`;
+}
+
+export function parseDesignerGroupLightTargetId(targetId: string): { groupId: string; side: DesignerLightingSide } | null {
+  const match = targetId.match(/^effect_target_(front|rear)_(.+)$/);
+  return match ? { side: match[1] as DesignerLightingSide, groupId: match[2] } : null;
+}
 
 export const DESIGNER_GLOBAL_LIGHT_SOURCE_TARGETS: ReadonlyArray<{ id: string; mode: DesignerOpticalMode; name: string }> = [
   { id: "full_front", mode: "front", name: "All Front" },
@@ -318,6 +337,8 @@ export type DesignerRouteForm = {
   lightingHost?: DesignerLightingHost;
   points: DesignerPoint[];
   visible?: boolean;
+  /** Authoring-only effective lock; normally inherited from a layer or sublayer. */
+  locked?: boolean;
 };
 
 export type DesignerControllerForm = {
@@ -347,6 +368,36 @@ export type DesignerLayersForm = {
   hardware: DesignerLayerSettings;
   strings: DesignerLayerSettings;
 };
+
+/** Fixed system buckets may contain user-authored organizational sublayers. */
+export type DesignerSublayerScope =
+  | "artwork"
+  | "reference"
+  | "zones"
+  | "channels"
+  | "faceGraphic"
+  | "strings"
+  | "dataCables";
+
+export type DesignerSystemSublayerScope = Exclude<DesignerSublayerScope, "faceGraphic">;
+
+/**
+ * Authoring-only organization. Sublayers never compile into pixel mapping,
+ * effects or fabrication output; they only mask visibility/locking in Design.
+ */
+export type DesignerSublayerForm = {
+  id: string;
+  name: string;
+  scope: DesignerSublayerScope;
+  visible: boolean;
+  locked: boolean;
+  objectIds: string[];
+};
+
+export type DesignerSystemSublayerSettings = Record<DesignerSystemSublayerScope, {
+  visible: boolean;
+  locked: boolean;
+}>;
 
 export type DesignerArtworkForm = {
   id: string;
@@ -397,18 +448,6 @@ export type DesignerAlignmentMarksForm = {
   spacingMm: number;
 };
 
-export type DesignerFaceGraphicVisibilityPreset = {
-  id: string;
-  name: string;
-  visibleObjectKeys: string[];
-};
-
-export type DesignerDiffusorVisibilityPreset = {
-  id: string;
-  name: string;
-  visibleObjectKeys: string[];
-};
-
 export type DesignerForm = {
   /** Missing on legacy documents; normalization always writes the current version. */
   designerSchemaVersion?: typeof DESIGNER_SCHEMA_VERSION;
@@ -417,10 +456,6 @@ export type DesignerForm = {
   projections: DesignerProjection[];
   derivedGeometries: DesignerDerivedGeometry[];
   texts: DesignerText[];
-  /** Named snapshots of Face Graphic object-eye states. */
-  faceGraphicVisibilityPresets: DesignerFaceGraphicVisibilityPreset[];
-  /** Named snapshots of Diffusors object-eye states. */
-  diffusorVisibilityPresets: DesignerDiffusorVisibilityPreset[];
   canvasWidthCm: number;
   canvasHeightCm: number;
   /** Selected strip product copied from the catalog; source ids are provenance only. */
@@ -452,6 +487,10 @@ export type DesignerForm = {
   rulerVisible: boolean;
   sourceSvg: string | null;
   layers: DesignerLayersForm;
+  /** Persistent masks for the fixed rows inside each top-level layer. */
+  systemSublayers: DesignerSystemSublayerSettings;
+  /** User-created children of the fixed system sublayers shown in Layers. */
+  sublayers: DesignerSublayerForm[];
   artwork: DesignerArtworkForm[];
   /** Construction-only open polylines, globally shown or hidden. */
   workLinesVisible: boolean;
@@ -714,7 +753,14 @@ export function normalizeDefaultSignLayout(document: PartituraDocument) {
   const fallback = createDefaultPartituraDocument(document.projectId);
   const source = clonePartituraDocument(document);
   const designer = normalizeDesigner(source.designer, source.compiledLayout);
-  const targetIds = new Set(["full_sign", ...DESIGNER_GLOBAL_LIGHT_SOURCE_TARGETS.map((target) => target.id), ...designer.lightSources.map((source) => source.id), ...designer.zones.map((zone) => zone.id), ...designer.channels.map((channel) => channel.id), ...designer.groups.map((group) => group.id)]);
+  const targetIds = new Set([
+    "full_sign",
+    ...DESIGNER_GLOBAL_LIGHT_SOURCE_TARGETS.map((target) => target.id),
+    ...designer.lightSources.map((source) => source.id),
+    ...designer.zones.map((zone) => zone.id),
+    ...designer.channels.map((channel) => channel.id),
+    ...designer.groups.flatMap((group) => [group.id, designerGroupLightTargetId(group.id, "front"), designerGroupLightTargetId(group.id, "rear")])
+  ]);
   // An empty scene list is a valid authoring state while Animate is being composed.
   const scenes = Array.isArray(source.scenes) ? source.scenes : fallback.scenes;
 
@@ -777,14 +823,14 @@ export function createDefaultDesigner(): DesignerForm {
     rulerVisible: true,
     sourceSvg: null,
     layers: defaultDesignerLayers(),
+    systemSublayers: defaultDesignerSystemSublayers(),
+    sublayers: [],
     artwork: [],
     workLinesVisible: true,
     workLines: [],
     projections: [],
     derivedGeometries: [],
     texts: [],
-    faceGraphicVisibilityPresets: [],
-    diffusorVisibilityPresets: [],
     buildAreas: [
       { id: "build_area_main", name: "Main Sign Face", shape: "rect", x: 40, y: 0, width: 120, height: 40, visible: true, locked: false, opacity: 1 },
       { id: "build_area_logo", name: "Round Logo Reference", shape: "ellipse", x: 108, y: 2, width: 18, height: 18, visible: true, locked: false, opacity: 0.9 },
@@ -914,6 +960,7 @@ function normalizeDesigner(designer?: DesignerForm, compiledLayout?: PartituraDo
       designSurface: route.designSurface === "front" ? "front" : "rear",
       ...(lightingHost ? { lightingHost } : {}),
       visible: route.visible !== false,
+      ...(route.locked === true ? { locked: true } : {}),
       points: Array.isArray(route.points) ? route.points.filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y)).map((point) => ({ x: point.x, y: point.y, ...(point.joint ? { joint: true } : {}) })) : []
     };
   }).filter((route) => route.points.length >= 2) : fallback.routes;
@@ -987,14 +1034,14 @@ function normalizeDesigner(designer?: DesignerForm, compiledLayout?: PartituraDo
     rulerVisible: typeof designer.rulerVisible === "boolean" ? designer.rulerVisible : fallback.rulerVisible,
     sourceSvg: typeof designer.sourceSvg === "string" ? designer.sourceSvg : null,
     layers: normalizeDesignerLayers(designer.layers, fallback.layers),
+    systemSublayers: normalizeDesignerSystemSublayers(designer.systemSublayers),
+    sublayers: normalizeDesignerSublayers(designer.sublayers),
     artwork: Array.isArray(designer.artwork) ? designer.artwork.map(normalizeDesignerArtwork) : [],
     workLinesVisible: designer.workLinesVisible !== false,
     workLines: normalizeDesignerWorkLines(designer.workLines),
     projections: normalizeDesignerProjections(designer.projections),
     derivedGeometries: normalizeDesignerDerivedGeometries(designer.derivedGeometries),
     texts: normalizeDesignerTexts(designer.texts),
-    faceGraphicVisibilityPresets: normalizeFaceGraphicVisibilityPresets(designer.faceGraphicVisibilityPresets),
-    diffusorVisibilityPresets: normalizeDiffusorVisibilityPresets(designer.diffusorVisibilityPresets),
     buildAreas: normalizeBuildAreas(designer, fallback.buildAreas),
     controller: normalizeController(designer.controller, fallback.controller),
     zones: Array.isArray(designer.zones) ? designer.zones.map(normalizeDesignerZone) : fallback.zones,
@@ -1002,7 +1049,7 @@ function normalizeDesigner(designer?: DesignerForm, compiledLayout?: PartituraDo
     fabricationParts: normalizeFabricationParts(designer.fabricationParts),
     fabricationPaths: normalizeFabricationPaths(designer.fabricationPaths),
     vectorGroups: normalizeDesignerVectorGroups(designer),
-    groups: Array.isArray(designer.groups) ? designer.groups.filter((group) => typeof group.id === "string" && typeof group.name === "string").map((group) => ({ id: group.id, name: group.name, members: Array.isArray(group.members) ? group.members.filter((member) => member?.type === "zone" || member?.type === "group") : [] })) : [],
+    groups: Array.isArray(designer.groups) ? designer.groups.filter((group) => typeof group.id === "string" && typeof group.name === "string").map((group) => ({ id: group.id, name: group.name, members: Array.isArray(group.members) ? group.members.filter((member) => member?.type === "zone" || member?.type === "channel" || member?.type === "group") : [] })) : [],
     channels: normalizeDesignerChannels(designer.channels),
     lightSources: normalizeLightSources(rawLightSources, routes, compiledLayout),
     routes
@@ -1604,38 +1651,6 @@ function normalizeDesignerTexts(texts: DesignerText[] | undefined): DesignerText
   });
 }
 
-function normalizeFaceGraphicVisibilityPresets(presets: DesignerFaceGraphicVisibilityPreset[] | undefined): DesignerFaceGraphicVisibilityPreset[] {
-  if (!Array.isArray(presets)) return [];
-  const usedIds = new Set<string>();
-  return presets.flatMap((preset, index) => {
-    if (!preset) return [];
-    const id = typeof preset.id === "string" && preset.id.trim() ? preset.id.trim() : `face_graphic_visibility_${index + 1}`;
-    if (usedIds.has(id)) return [];
-    usedIds.add(id);
-    const name = typeof preset.name === "string" && preset.name.trim() ? preset.name.trim() : `Preset ${index + 1}`;
-    const visibleObjectKeys = Array.isArray(preset.visibleObjectKeys)
-      ? Array.from(new Set(preset.visibleObjectKeys.filter((key): key is string => typeof key === "string" && /^(faceGraphic|projection|derived|text):[^:]+$/.test(key))))
-      : [];
-    return [{ id, name, visibleObjectKeys }];
-  });
-}
-
-function normalizeDiffusorVisibilityPresets(presets: DesignerDiffusorVisibilityPreset[] | undefined): DesignerDiffusorVisibilityPreset[] {
-  if (!Array.isArray(presets)) return [];
-  const usedIds = new Set<string>();
-  return presets.flatMap((preset, index) => {
-    if (!preset) return [];
-    const id = typeof preset.id === "string" && preset.id.trim() ? preset.id.trim() : `diffusor_visibility_${index + 1}`;
-    if (usedIds.has(id)) return [];
-    usedIds.add(id);
-    const name = typeof preset.name === "string" && preset.name.trim() ? preset.name.trim() : `Preset ${index + 1}`;
-    const visibleObjectKeys = Array.isArray(preset.visibleObjectKeys)
-      ? Array.from(new Set(preset.visibleObjectKeys.filter((key): key is string => typeof key === "string" && /^(zone|channel|projection|derived|text):[^:]+$/.test(key))))
-      : [];
-    return [{ id, name, visibleObjectKeys }];
-  });
-}
-
 function normalizeChannelPoints(points: DesignerPoint[] | undefined): DesignerPoint[] {
   if (!Array.isArray(points)) return [];
   return points
@@ -1675,6 +1690,62 @@ function normalizeDesignerLayers(layers: (Partial<DesignerLayersForm> & { svg?: 
     hardware: normalizeDesignerLayer(layers?.hardware, fallback.hardware),
     strings: normalizeDesignerLayer(layers?.strings, fallback.strings)
   };
+}
+
+const DESIGNER_SUBLAYER_SCOPES = new Set<DesignerSublayerScope>([
+  "artwork",
+  "reference",
+  "zones",
+  "channels",
+  "faceGraphic",
+  "strings",
+  "dataCables"
+]);
+
+function defaultDesignerSystemSublayers(): DesignerSystemSublayerSettings {
+  return {
+    artwork: { visible: true, locked: false },
+    reference: { visible: true, locked: false },
+    zones: { visible: true, locked: false },
+    channels: { visible: true, locked: false },
+    strings: { visible: true, locked: false },
+    dataCables: { visible: true, locked: false }
+  };
+}
+
+function normalizeDesignerSystemSublayers(settings: Partial<DesignerSystemSublayerSettings> | undefined): DesignerSystemSublayerSettings {
+  const fallback = defaultDesignerSystemSublayers();
+  return Object.fromEntries((Object.keys(fallback) as DesignerSystemSublayerScope[]).map((scope) => [scope, {
+    visible: settings?.[scope]?.visible !== false,
+    locked: settings?.[scope]?.locked === true
+  }])) as DesignerSystemSublayerSettings;
+}
+
+function normalizeDesignerSublayers(sublayers: DesignerSublayerForm[] | undefined): DesignerSublayerForm[] {
+  if (!Array.isArray(sublayers)) return [];
+  const ids = new Set<string>();
+  const claimedByScope = new Map<DesignerSublayerScope, Set<string>>();
+  const normalized: DesignerSublayerForm[] = [];
+  for (const candidate of sublayers) {
+    if (!candidate || typeof candidate.id !== "string" || !candidate.id || ids.has(candidate.id)) continue;
+    if (!DESIGNER_SUBLAYER_SCOPES.has(candidate.scope)) continue;
+    const claimed = claimedByScope.get(candidate.scope) ?? new Set<string>();
+    const objectIds = Array.isArray(candidate.objectIds)
+      ? candidate.objectIds.filter((id): id is string => typeof id === "string" && Boolean(id) && !claimed.has(id))
+      : [];
+    objectIds.forEach((id) => claimed.add(id));
+    claimedByScope.set(candidate.scope, claimed);
+    ids.add(candidate.id);
+    normalized.push({
+      id: candidate.id,
+      name: typeof candidate.name === "string" && candidate.name.trim() ? candidate.name.trim() : "Sublayer",
+      scope: candidate.scope,
+      visible: candidate.visible !== false,
+      locked: candidate.locked === true,
+      objectIds
+    });
+  }
+  return normalized;
 }
 
 function normalizeDesignerArtwork(artwork: DesignerArtworkForm): DesignerArtworkForm {

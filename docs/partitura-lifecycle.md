@@ -244,12 +244,21 @@ Edit scenes/clips/effect params -> Save optional, Compile not required if physic
 Click Save -> persists current document_json; it does not compile secretly.
 Click Compile -> regenerates compiledLayout, clears stale preview/generated artifacts, and saves the compiled document.
 
+Large editable documents are gzip-compressed by the browser before PATCH. A
+successful Save returns only persistence metadata; it never echoes the complete
+document or generated artifact back to the browser. Catalog/list endpoints
+return summaries rather than `document_json`.
+
 `compiledLayout.validation` keeps its error/warning text arrays and may include
 structured `issues` that reference affected Designer objects. These references
 are editor navigation metadata only; they do not change firmware output.
 Compile belongs to Design; Animate consumes an already compiled document.
 Click Play/Preview -> requires a fresh compiledLayout; it may generate a temporary preview artifact but must not persist it as truth.
 Click Generate -> creates and saves generated_json from the current document_json + fresh compiledLayout.
+Persistent Generate is addressed by partitura ID: the server reads the already
+saved `document_json`, validates it and persists `generated_json` in one
+operation. Temporary Animate preview may submit the unsaved in-memory document,
+but that preview never becomes persistence truth.
 Click Share -> regenerates/saves first, then creates an isolated render artifact and access policy.
 ESP32 Download -> reads generated_json only.
 ```

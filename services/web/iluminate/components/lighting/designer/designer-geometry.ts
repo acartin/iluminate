@@ -507,6 +507,38 @@ export function createLedStringFromChannel(channel: DesignerChannelForm, designe
   return { ...route, name: `${channel.name} string`, lightingHost: { type: "channel", id: channel.id }, points };
 }
 
+export function createLedStringsFromZonePaths(
+  zone: Pick<DesignerZoneForm, "id" | "name">,
+  paths: Array<Pick<DesignerChannelForm, "points" | "pathMode" | "closed">>,
+  designer: DesignerForm,
+  designSurface: DesignerRouteSurface
+) {
+  const created: DesignerRouteForm[] = [];
+  paths.forEach((path, index) => {
+    const channelSnapshot: DesignerChannelForm = {
+      id: `__zone_string_${zone.id}_${index}`,
+      name: zone.name,
+      points: path.points,
+      pathMode: path.pathMode,
+      widthMm: designer.ledPcbWidthMm,
+      closed: path.closed,
+      cap: "round",
+      fabricationSurface: designSurface,
+      visible: true,
+      locked: false,
+      opacity: 1
+    };
+    const route = createLedStringFromChannel(channelSnapshot, { ...designer, routes: [...designer.routes, ...created] });
+    if (!route) return;
+    created.push({
+      ...route,
+      name: `${zone.name} string${index ? ` ${index + 1}` : ""}`,
+      lightingHost: { type: "zone", id: zone.id }
+    });
+  });
+  return created;
+}
+
 export type SelectedStringConnectionPlan =
   | { upstream: DesignerRouteForm; downstream: DesignerRouteForm; output: number; reason: null }
   | { upstream: null; downstream: null; output: null; reason: string };

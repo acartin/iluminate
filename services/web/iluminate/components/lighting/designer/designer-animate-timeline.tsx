@@ -1,11 +1,11 @@
 "use client";
 
 import * as React from "react";
-import { ChevronDown, ChevronUp, Eye, EyeOff, GripVertical, Pause, Play, Plus, Trash2 } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronUp, CircleDot, Eye, EyeOff, GripVertical, Pause, Play, Plus, Search, Sparkles, Trash2, Waves } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { EffectDefinition, EffectParameterDefinition } from "@/lib/lighting/effect-catalog";
-import { DESIGNER_GLOBAL_LIGHT_SOURCE_TARGETS, createClipIdentity, designerGlobalLightSourceMode, nextEmptyClipLayer, type ClipForm, type ClipParams, type PartituraDocument, type SceneForm } from "@/lib/lighting/partitura-model";
-import { clipIdForSelectedTargets, clipScopeTargets, clipTargetsForSelection, explicitClipTargetSelectionSettled } from "./designer-animation-selection";
+import { DESIGNER_GLOBAL_LIGHT_SOURCE_TARGETS, createClipIdentity, designerGlobalLightSourceMode, parseDesignerGroupLightTargetId, nextEmptyClipLayer, type ClipForm, type ClipParams, type DesignerLightingSide, type PartituraDocument, type SceneForm } from "@/lib/lighting/partitura-model";
+import { animationClipTargetOptions, animationClipTargetSide, clipIdForSelectedTargets, clipScopeTargets, designerOpticalTargetsForClipTarget, explicitClipTargetSelectionSettled, type AnimationClipTargetOption } from "./designer-animation-selection";
 
 type Props = {
   document: PartituraDocument;
@@ -20,6 +20,8 @@ type Props = {
   playing: boolean;
   hasPreview: boolean;
   onTogglePlayback: () => void;
+  onEditInteractionStart?: () => void;
+  onEditInteractionEnd?: () => void;
   collapsed?: boolean;
   onToggleCollapsed?: () => void;
   onClipTargetSelect?: (targetId: string | null) => void;
@@ -48,6 +50,8 @@ export function DesignerAnimateTimeline({
   playing,
   hasPreview,
   onTogglePlayback,
+  onEditInteractionStart,
+  onEditInteractionEnd,
   collapsed = false,
   onToggleCollapsed,
   onClipTargetSelect,
@@ -55,6 +59,7 @@ export function DesignerAnimateTimeline({
 }: Props) {
   const activeScene = document.scenes.find((scene) => scene.id === document.activeSceneId) ?? document.scenes[0];
   const lightSources = document.designer?.lightSources ?? [];
+  const designer = document.designer;
   const sourceTargetIds = new Set(lightSources.map((source) => source.targetId));
   const availableGlobalModes = new Set(lightSources.filter((source) => source.enabled && source.stringIds.length > 0).map((source) => source.mode));
   const targets = [
@@ -64,9 +69,10 @@ export function DesignerAnimateTimeline({
     ...(document.designer?.channels ?? []).filter((channel) => !sourceTargetIds.has(channel.id)).map((channel) => ({ id: channel.id, name: channel.name || channel.id })),
     ...(document.designer?.groups ?? []).map((group) => ({ id: group.id, name: group.name || group.id }))
   ];
-  const creatableSourceIds = new Set(lightSources.filter((source) => source.enabled && source.stringIds.length > 0).map((source) => source.id));
-  const clipCreationTargets = clipTargetsForSelection(targets, selectedTargetIds).filter((target) => creatableSourceIds.has(target.id));
+  const targetOptions = designer ? animationClipTargetOptions(designer, document.compiledLayout) : [];
   const [selectedClipId, setSelectedClipId] = useStatefulClip(activeScene?.clips ?? []);
+  const [targetPickerIntent, setTargetPickerIntent] = React.useState<{ clipId?: string } | null>(null);
+  const [targetPickerSide, setTargetPickerSide] = React.useState<DesignerLightingSide>("front");
   const pendingExplicitClipIdRef = React.useRef<string | undefined>(undefined);
   const [timelineDrag, setTimelineDrag] = React.useState<TimelineDrag | null>(null);
   const [zoomFactor, setZoomFactor] = React.useState(1);
@@ -98,17 +104,19 @@ export function DesignerAnimateTimeline({
     const pendingClipId = pendingExplicitClipIdRef.current;
     if (pendingClipId) {
       const pendingClip = activeScene.clips.find((clip) => clip.id === pendingClipId);
-      const compatibleTargetIds = pendingClip && designerGlobalLightSourceMode(pendingClip.target)
-        ? clipScopeTargets(lightSources, pendingClip.target).map((target) => target.id)
-        : [];
+      const compatibleTargetIds = pendingClip ? [
+        ...(designerGlobalLightSourceMode(pendingClip.target) ? clipScopeTargets(lightSources, pendingClip.target).map((target) => target.id) : []),
+        ...(designer ? designerOpticalTargetsForClipTarget(designer, pendingClip.target).map((target) => target.id) : [])
+      ] : [];
       if (!explicitClipTargetSelectionSettled(activeScene.clips, pendingClipId, selectedTargetIds, compatibleTargetIds)) return;
       pendingExplicitClipIdRef.current = undefined;
       return;
     }
     if (!selectedTargetIds.length) return;
-    const compatibleTargetIds = selectedClip && designerGlobalLightSourceMode(selectedClip.target)
-      ? clipScopeTargets(lightSources, selectedClip.target).map((target) => target.id)
-      : [];
+    const compatibleTargetIds = selectedClip ? [
+      ...(designerGlobalLightSourceMode(selectedClip.target) ? clipScopeTargets(lightSources, selectedClip.target).map((target) => target.id) : []),
+      ...(designer ? designerOpticalTargetsForClipTarget(designer, selectedClip.target).map((target) => target.id) : [])
+    ] : [];
     const nextClipId = clipIdForSelectedTargets(activeScene.clips, selectedClipId, selectedTargetIds, compatibleTargetIds);
     if (nextClipId !== selectedClipId) setSelectedClipId(nextClipId);
   }, [activeScene, selectedClipId, selectedTargetIdsKey, setSelectedClipId]);
@@ -181,8 +189,27 @@ export function DesignerAnimateTimeline({
     if (selectedClip?.layer === layer) setSelectedClipId(undefined);
   }
 
+  function openTargetPicker(clip?: ClipForm) {
+    if (clip && designer) setTargetPickerSide(animationClipTargetSide(designer, clip.target));
+    else setTargetPickerSide("front");
+    setTargetPickerIntent(clip ? { clipId: clip.id } : {});
+    if (collapsed) onToggleCollapsed?.();
+  }
+
+  function chooseTarget(targetId: string) {
+    const clipId = targetPickerIntent?.clipId;
+    if (clipId) {
+      updateClip(clipId, { target: targetId });
+      onSelectedClipTargetChange?.(targetId);
+      onClipTargetSelect?.(targetId);
+    } else {
+      addClip(targetId);
+    }
+    setTargetPickerIntent(null);
+  }
+
   function addClip(targetId: string) {
-    if (!activeScene || !creatableSourceIds.has(targetId)) return;
+    if (!activeScene || !targetOptions.some((target) => target.id === targetId && target.available)) return;
     const layer = nextEmptyClipLayer(activeScene);
     const identity = createClipIdentity(activeScene.clips);
     const effect = effects.solid ?? Object.values(effects)[0];
@@ -220,9 +247,13 @@ export function DesignerAnimateTimeline({
     event.stopPropagation();
     event.preventDefault();
     selectClip(clip);
+    onEditInteractionStart?.();
     const drag: TimelineDrag = { type: "clip", clip, mode, originX: event.clientX, originY: event.clientY };
     setTimelineDrag(drag);
-    bindWindowDrag((moveEvent) => moveClipDrag(moveEvent.clientX, moveEvent.clientY, drag), () => setTimelineDrag(null));
+    bindWindowDrag((moveEvent) => moveClipDrag(moveEvent.clientX, moveEvent.clientY, drag), () => {
+      setTimelineDrag(null);
+      onEditInteractionEnd?.();
+    });
   }
 
   function beginPlayheadDrag(event: React.PointerEvent<HTMLElement>) {
@@ -294,12 +325,9 @@ export function DesignerAnimateTimeline({
           </div>
           <Button type="button" variant="outline" density="compact" title="New scene" onClick={addScene}><Plus className="h-4 w-4" />Scene</Button>
           <Button type="button" variant="outline" density="compact" onClick={addLane}><Plus className="h-4 w-4" />Track</Button>
-          {clipCreationTargets.map((target) => (
-            <Button key={target.id} type="button" variant="outline" density="compact" title={`Add clip for ${target.name}`} onClick={() => addClip(target.id)}>
-              <Plus className="h-4 w-4" />{clipSourceLabel(document, target.id)} clip
-            </Button>
-          ))}
-          {!clipCreationTargets.length ? <span className="shrink-0 text-xs text-muted-foreground">Select a zone with an assigned light strip</span> : null}
+          <Button type="button" variant="outline" density="compact" title="Create a clip and choose its target" onClick={() => openTargetPicker()}>
+            <Plus className="h-4 w-4" />Clip
+          </Button>
           <div className="h-6 w-px shrink-0 bg-border" />
           <Button type="button" density="compact" disabled={previewing} onClick={hasPreview ? onTogglePlayback : onPreview}>{playing ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}{previewing ? "Rendering" : playing ? "Pause" : "Play"}</Button>
           <div className="shrink-0 font-mono text-body-sm text-muted-foreground">{Math.round(previewTimeMs)} ms</div>
@@ -342,7 +370,7 @@ export function DesignerAnimateTimeline({
                 {(activeScene.clips ?? []).map((clip) => {
                   const left = TRACK_GUTTER_WIDTH + timeToPx(clip.startMs, pxPerSecond);
                   const width = Math.max(34, timeToPx(clip.durationMs, pxPerSecond));
-                  const targetName = targets.find((target) => target.id === clip.target)?.name ?? clip.target;
+                  const targetName = targetOptions.find((target) => target.id === clip.target)?.name ?? targets.find((target) => target.id === clip.target)?.name ?? clip.target;
                   const targetPresentation = clipTargetPresentation(document, clip.target);
                   return <ClipBlock
                     key={clip.id}
@@ -371,21 +399,26 @@ export function DesignerAnimateTimeline({
             </div>
           </div>
           <div className="min-h-0 overflow-auto border-l border-border-2 p-3">
-            <div className="mb-3 text-body-sm font-semibold">{selectedClip ? selectedClip.name : "Select a clip"}</div>
-            {selectedClip ? <ClipInspector
+            <div className="mb-3 text-body-sm font-semibold">{targetPickerIntent ? (targetPickerIntent.clipId ? "Change target" : "New clip") : selectedClip ? selectedClip.name : "Select a clip"}</div>
+            {targetPickerIntent ? <AnimationTargetPicker
+              options={targetOptions}
+              side={targetPickerSide}
+              selectedTargetId={targetPickerIntent.clipId ? activeScene.clips.find((clip) => clip.id === targetPickerIntent.clipId)?.target : undefined}
+              onSideChange={setTargetPickerSide}
+              onSelect={chooseTarget}
+              onCancel={() => setTargetPickerIntent(null)}
+            /> : selectedClip ? <ClipInspector
               clip={selectedClip}
-              scopeTargets={clipScopeTargets(lightSources, selectedClip.target)}
+              targetOption={targetOptions.find((target) => target.id === selectedClip.target)}
+              targetLabel={targets.find((target) => target.id === selectedClip.target)?.name ?? selectedClip.target}
               effect={effects[selectedClip.effect]}
               effects={effects}
+              onChooseTarget={() => openTargetPicker(selectedClip)}
               onChange={(patch) => {
                 updateClip(selectedClip.id, patch);
-                if (patch.target !== undefined) {
-                  onSelectedClipTargetChange?.(patch.target);
-                  onClipTargetSelect?.(patch.target);
-                }
               }}
               onDelete={() => removeClip(selectedClip.id)}
-            /> : <div className="rounded-md border border-dashed p-4 text-body-sm text-muted-foreground">Select a zone, add a clip, then Play.</div>}
+            /> : <div className="rounded-md border border-dashed p-4 text-body-sm text-muted-foreground">Add a clip, choose its target, then Play.</div>}
           </div>
         </div> : null}
       </div>
@@ -450,8 +483,75 @@ function TimelineGrid({ durationMs, laneCount, pxPerSecond }: { durationMs: numb
   </>;
 }
 
-function ClipInspector({ clip, scopeTargets, effect, effects, onChange, onDelete }: { clip: ClipForm; scopeTargets: Array<{ id: string; name: string }>; effect?: EffectDefinition; effects: Record<string, EffectDefinition>; onChange: (patch: Partial<ClipForm>) => void; onDelete: () => void }) {
+function AnimationTargetPicker({ options, side, selectedTargetId, onSideChange, onSelect, onCancel }: {
+  options: AnimationClipTargetOption[];
+  side: DesignerLightingSide;
+  selectedTargetId?: string;
+  onSideChange: (side: DesignerLightingSide) => void;
+  onSelect: (targetId: string) => void;
+  onCancel: () => void;
+}) {
+  const [query, setQuery] = React.useState("");
+  const normalizedQuery = query.trim().toLowerCase();
+  const visible = options.filter((option) => option.side === side && (!normalizedQuery || `${option.name} ${option.detail}`.toLowerCase().includes(normalizedQuery)));
+  const categories = [
+    { id: "effectTargets" as const, label: "Effect targets", icon: Sparkles, iconClass: "text-violet-600" },
+    { id: "zones" as const, label: "Zones", icon: CircleDot, iconClass: "text-sky-600" },
+    { id: "channels" as const, label: "Channels", icon: Waves, iconClass: "text-amber-600" },
+    { id: "global" as const, label: "Global", icon: Sparkles, iconClass: "text-emerald-600" }
+  ];
+  return <div className="space-y-3">
+    <div className="grid grid-cols-2 rounded-md border border-border-2 bg-surface-2 p-0.5">
+      {(["front", "rear"] as const).map((candidate) => <button
+        key={candidate}
+        type="button"
+        className={`h-8 rounded text-body-sm font-semibold ${side === candidate ? "bg-primary text-primary-foreground shadow-sm" : "text-muted-foreground hover:bg-surface-hover hover:text-foreground"}`}
+        onClick={() => onSideChange(candidate)}
+      >{candidate === "front" ? "Front" : "Rear"}</button>)}
+    </div>
+    <label className="flex h-9 items-center gap-2 rounded-md border border-input bg-card px-2">
+      <Search className="h-4 w-4 shrink-0 text-muted-foreground" />
+      <input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} className="min-w-0 flex-1 bg-transparent text-body-sm outline-none" placeholder="Search targets" />
+    </label>
+    <div className="max-h-[280px] space-y-3 overflow-y-auto pr-1">
+      {categories.map((category) => {
+        const entries = visible
+          .filter((option) => option.category === category.id)
+          .sort((left, right) => Number(right.available) - Number(left.available));
+        if (!entries.length) return null;
+        const Icon = category.icon;
+        return <section key={category.id}>
+          <div className="mb-1 flex h-6 items-center gap-1.5 px-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+            <Icon className={`h-3.5 w-3.5 ${category.iconClass}`} />{category.label}
+          </div>
+          <div className="space-y-1">
+            {entries.map((option) => <button
+              key={option.id}
+              type="button"
+              disabled={!option.available}
+              className={`flex min-h-10 w-full items-center gap-2 rounded-md border px-2 py-1.5 text-left ${selectedTargetId === option.id ? "border-blue-500 bg-blue-500/10" : "border-transparent hover:border-border-2 hover:bg-surface-hover"} disabled:cursor-not-allowed disabled:opacity-45`}
+              title={option.available ? `Use ${option.name}` : option.detail}
+              onClick={() => onSelect(option.id)}
+            >
+              <Icon className={`h-4 w-4 shrink-0 ${category.iconClass}`} />
+              <span className="min-w-0 flex-1">
+                <span className="block truncate text-body-sm font-medium">{option.name}</span>
+                <span className="block truncate text-[10px] text-muted-foreground">{option.detail}</span>
+              </span>
+            </button>)}
+          </div>
+        </section>;
+      })}
+      {!visible.length ? <div className="rounded-md border border-dashed p-4 text-center text-body-sm text-muted-foreground">No targets match this side and search.</div> : null}
+    </div>
+    <Button type="button" variant="ghost" density="compact" className="w-full" onClick={onCancel}><ChevronLeft className="h-4 w-4" />Cancel</Button>
+  </div>;
+}
+
+function ClipInspector({ clip, targetOption, targetLabel, effect, effects, onChooseTarget, onChange, onDelete }: { clip: ClipForm; targetOption?: AnimationClipTargetOption; targetLabel: string; effect?: EffectDefinition; effects: Record<string, EffectDefinition>; onChooseTarget: () => void; onChange: (patch: Partial<ClipForm>) => void; onDelete: () => void }) {
   const definition = effect ?? effects.solid;
+  const TargetIcon = targetOption?.category === "effectTargets" ? Sparkles : targetOption?.category === "channels" ? Waves : CircleDot;
+  const targetColor = targetOption?.category === "effectTargets" ? "text-violet-600" : targetOption?.category === "channels" ? "text-amber-600" : "text-sky-600";
   return <div className="space-y-2">
     <label className="block text-meta font-medium text-muted-foreground">
       Name
@@ -467,22 +567,25 @@ function ClipInspector({ clip, scopeTargets, effect, effects, onChange, onDelete
         }}
       />
     </label>
-    {scopeTargets.length ? <Select label="Scope" value={clip.target} options={scopeTargets.map((target) => [target.id, target.name])} onChange={(target) => onChange({ target })} /> : <div className="rounded-md border border-amber-400/60 bg-amber-50 p-3 text-xs text-amber-950">Legacy Full sign clip. Replace it with a clip created from a zone light source.</div>}
+    <label className="block text-meta font-medium text-muted-foreground">
+      Target
+      <button type="button" className="mt-1 flex h-10 w-full items-center gap-2 rounded-md border border-input bg-card px-3 text-left text-foreground hover:border-blue-500 hover:bg-surface-hover" onClick={onChooseTarget}>
+        <TargetIcon className={`h-4 w-4 shrink-0 ${targetColor}`} />
+        <span className="min-w-0 flex-1 truncate text-body-sm">{targetOption ? `${targetOption.side === "front" ? "Front" : "Rear"} · ${targetOption.name}` : targetLabel}</span>
+        <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+      </button>
+    </label>
     <Select label="Effect" value={clip.effect} options={Object.values(effects).map((item) => [item.id, item.label])} onChange={(effectId) => onChange({ effect: effectId, params: defaultParams(effects[effectId]) })} />
     {definition ? <div className="space-y-2 border-t border-border-2 pt-3">{Object.entries(definition.parameters).map(([key, parameter]) => <ParameterInput key={key} name={key} definition={parameter} value={clip.params[key]} onChange={(value) => onChange({ params: { ...clip.params, [key]: value } })} />)}</div> : null}
     <Button type="button" variant="ghost" density="compact" className="w-full text-destructive" onPointerDown={stopTimelinePointer} onClick={onDelete}><Trash2 className="h-4 w-4" />Delete clip</Button>
   </div>;
 }
 
-function clipSourceLabel(document: PartituraDocument, targetId: string) {
-  const mode = document.designer?.lightSources.find((source) => source.id === targetId)?.mode;
-  if (mode === "front") return "Front";
-  if (mode === "halo") return "Halo";
-  if (mode === "wall_wash") return "Wall Wash";
-  return "Target";
-}
-
 function clipTargetPresentation(document: PartituraDocument, targetId: string) {
+  const groupTarget = parseDesignerGroupLightTargetId(targetId);
+  if (groupTarget) return groupTarget.side === "front"
+    ? { label: "Front", borderClass: "border-violet-500", badgeClass: "bg-violet-100 text-violet-800" }
+    : { label: "Rear", borderClass: "border-violet-500", badgeClass: "bg-violet-100 text-violet-800" };
   const globalMode = designerGlobalLightSourceMode(targetId);
   const mode = document.designer?.lightSources.find((source) => source.id === targetId)?.mode ?? globalMode;
   const scope = globalMode ? "All " : "";

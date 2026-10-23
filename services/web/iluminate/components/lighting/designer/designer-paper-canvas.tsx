@@ -69,6 +69,15 @@ export type DesignerAnimationPixel = {
 
 export type DesignerAnimationDiffuser = "as_built" | "led_map";
 
+function moveSelectedToHitPriority<T extends { id: string }>(items: T[], selectedId: string | null | undefined, priority: "start" | "end") {
+  if (!selectedId) return items;
+  const index = items.findIndex((item) => item.id === selectedId);
+  if (index < 0 || priority === "start" && index === 0 || priority === "end" && index === items.length - 1) return items;
+  const selected = items[index];
+  const remaining = items.filter((_, itemIndex) => itemIndex !== index);
+  return priority === "start" ? [selected, ...remaining] : [...remaining, selected];
+}
+
 export function pointNearAlignmentMarks(designer: DesignerForm, point: DesignerPoint, toleranceCm: number) {
   if (!designer.alignmentMarks.enabled) return false;
   const spacingCm = designer.alignmentMarks.spacingMm / 10;
@@ -230,6 +239,20 @@ export function DesignerStudioCanvas({
   const displayedDesigner = displayedRoutes.length === designer.routes.length && displayedChannels.length === designer.channels.length
     ? designer
     : { ...designer, routes: displayedRoutes, channels: displayedChannels };
+  // Preserve the current selection when overlapping objects share the pointer.
+  // Each collection follows the traversal direction used by pickDesignerHit.
+  const hitTestDesigner = tool === "select" || tool === "move" ? {
+    ...displayedDesigner,
+    artwork: moveSelectedToHitPriority(displayedDesigner.artwork, selectedArtworkId, "end"),
+    buildAreas: moveSelectedToHitPriority(displayedDesigner.buildAreas, selectedBuildAreaId, "end"),
+    workLines: moveSelectedToHitPriority(displayedDesigner.workLines, selectedWorkLineId, "end"),
+    zones: moveSelectedToHitPriority(displayedDesigner.zones, selectedZoneId, "start"),
+    channels: moveSelectedToHitPriority(displayedDesigner.channels, selectedChannelId, "start"),
+    faceGraphics: moveSelectedToHitPriority(displayedDesigner.faceGraphics, selectedFaceGraphicId, "start"),
+    texts: moveSelectedToHitPriority(displayedDesigner.texts, selectedTextId, "end"),
+    fabricationPaths: moveSelectedToHitPriority(displayedDesigner.fabricationPaths, selectedFabricationPathId, "end"),
+    routes: moveSelectedToHitPriority(displayedDesigner.routes, selectedRouteId, "end")
+  } : displayedDesigner;
   const wiringSurfaceAtmosphere = presentation === "design" && routeSurfaceView !== "both"
     ? routeSurfaceView
     : null;
@@ -320,24 +343,28 @@ export function DesignerStudioCanvas({
     const canvas = canvasRef.current;
     const loadedPaper = paperRef.current;
     if (!canvas || canvasSize.width < 1 || canvasSize.height < 1 || !paperReady || !loadedPaper?.setup) return;
-    // SVG inspection uses a temporary PaperScope. Always reclaim the visible
-    // canvas scope before constructing a frame.
-    loadedPaper.activate();
-    setPaperScope(loadedPaper);
-    canvas.style.width = `${canvasSize.width}px`;
-    canvas.style.height = `${canvasSize.height}px`;
+    // Coalesce rapid React commits into one Paper frame. Pointer drags can
+    // update several pieces of derived state before the browser paints; only
+    // the newest frame is useful.
+    const frameId = window.requestAnimationFrame(() => {
+      // SVG inspection uses a temporary PaperScope. Always reclaim the visible
+      // canvas scope before constructing a frame.
+      loadedPaper.activate();
+      setPaperScope(loadedPaper);
+      canvas.style.width = `${canvasSize.width}px`;
+      canvas.style.height = `${canvasSize.height}px`;
 
-    const setup = paperSetupRef.current;
-    if (!setup || setup.canvas !== canvas) {
-      loadedPaper.setup(canvas);
-      paperSetupRef.current = { canvas, width: canvasSize.width, height: canvasSize.height };
-    } else if (setup.width !== canvasSize.width || setup.height !== canvasSize.height) {
-      loadedPaper.view.viewSize = new loadedPaper.Size(canvasSize.width, canvasSize.height);
-      paperSetupRef.current = { canvas, width: canvasSize.width, height: canvasSize.height };
-    }
-    try {
-      if (presentation === "animate" && compiledLayout) drawPaperAnimationMap({ designer, layout: compiledLayout, viewport, selectedZoneId, canvasSize, colorMode, animationPixels, animationDiffusers });
-      else drawPaperDesigner({
+      const setup = paperSetupRef.current;
+      if (!setup || setup.canvas !== canvas) {
+        loadedPaper.setup(canvas);
+        paperSetupRef.current = { canvas, width: canvasSize.width, height: canvasSize.height };
+      } else if (setup.width !== canvasSize.width || setup.height !== canvasSize.height) {
+        loadedPaper.view.viewSize = new loadedPaper.Size(canvasSize.width, canvasSize.height);
+        paperSetupRef.current = { canvas, width: canvasSize.width, height: canvasSize.height };
+      }
+      try {
+        if (presentation === "animate" && compiledLayout) drawPaperAnimationMap({ designer, layout: compiledLayout, viewport, selectedZoneId, canvasSize, colorMode, animationPixels, animationDiffusers });
+        else drawPaperDesigner({
         designer: channelDragPreview ? {
           ...displayedDesigner,
           channels: displayedDesigner.channels.map((channel) => channel.id === channelDragPreview.id ? channelDragPreview : channel)
@@ -373,14 +400,16 @@ export function DesignerStudioCanvas({
         faceGraphicVinylPreview,
         canvasSize,
         colorMode
-      });
-    } catch (error) {
-      // Rendering is a derived view. Never let one malformed object leave the
-      // canvas cleared while the authoritative objects still exist in Layers.
-      console.error("Designer canvas frame failed.", error);
-    } finally {
-      loadedPaper.view.update();
-    }
+        });
+      } catch (error) {
+        // Rendering is a derived view. Never let one malformed object leave the
+        // canvas cleared while the authoritative objects still exist in Layers.
+        console.error("Designer canvas frame failed.", error);
+      } finally {
+        loadedPaper.view.update();
+      }
+    });
+    return () => window.cancelAnimationFrame(frameId);
   }, [activeLayer, animationDiffusers, animationPixels, canvasSize, channelDragPreview, channelGenerationPreview, colorMode, compiledLayout, designer, drag, faceGraphicVinylPreview, measurement, paperReady, pathTrimPreview, presentation, primitiveDraft, routeDraft, routeSurfaceView, selectedBuildAreaId, selectedBuildAreaPointIndex, selectedChannelId, selectedChannelPointIndex, selectedController, selectedDerivedGeometryId, selectedFaceGraphicId, selectedFaceGraphicPointIndex, selectedFabricationPathId, selectedGeometryKeys, selectedProjectionId, selectedRouteId, selectedRouteIds, selectedRoutePointIndex, selectedTextId, selectedWorkLineId, selectedWorkLinePointIndex, selectedZoneId, selectedZonePointIndex, shapeDraft, viewport]);
 
   useEffect(() => {
@@ -1181,7 +1210,7 @@ export function DesignerStudioCanvas({
                 })()
               : null)
       : null;
-    const pickedHit = pickDesignerHit(displayedDesigner, activeLayer, point, viewport, canvasSize);
+    const pickedHit = pickDesignerHit(hitTestDesigner, activeLayer, point, viewport, canvasSize);
     const pickedOwner = designerWholeObjectHit(pickedHit);
     const pickedOwnerIsSelected = Boolean(pickedOwner && (
       pickedOwner.type === "artwork" && pickedOwner.id === selectedArtworkId
@@ -1193,11 +1222,21 @@ export function DesignerStudioCanvas({
       || pickedOwner.type === "channel" && pickedOwner.id === selectedChannelId
       || pickedOwner.type === "route" && pickedOwner.id === selectedRouteId
       || pickedOwner.type === "controller" && selectedController
+      || (pickedOwner.type === "zone" || pickedOwner.type === "channel") && selectedGeometryKeys?.includes(`${pickedOwner.type}:${pickedOwner.id}`)
     ));
     const rawHit = selectedFilletHit
       ?? (tool === "select" ? selectedShapePointHit : null)
       ?? (tool === "select" ? designerInitialSelectHit(pickedHit, pickedOwnerIsSelected) : pickedHit);
     const hit = tool === "move" ? designerWholeObjectHit(rawHit) : rawHit;
+    const wholeHit = designerWholeObjectHit(hit);
+    const wholeObjectMoveRequested = tool === "move" || Boolean(
+      tool === "select"
+      && pickedOwnerIsSelected
+      && hit
+      && wholeHit
+      && hit.type === wholeHit.type
+      && hit.id === wholeHit.id
+    );
     if (tool === "fillet") {
       const target = designerFilletCornerForHit(designer, hit);
       const targetsSelectedObject = target && (
@@ -1243,48 +1282,52 @@ export function DesignerStudioCanvas({
     event.currentTarget.setPointerCapture(event.pointerId);
     const selectedDiffusorKeys = selectedGeometryKeys?.filter((key) => key.startsWith("zone:") || key.startsWith("channel:")) ?? [];
     const hitSelectionKey = hit.type === "zone" || hit.type === "channel" ? `${hit.type}:${hit.id}` : null;
-    if (tool === "move" && hitSelectionKey && selectedDiffusorKeys.length > 1 && selectedDiffusorKeys.includes(hitSelectionKey)) {
-      if (!designer.layers.zones.locked) setDrag({ type: "diffusor-selection-move", start: point, original: designer, selectionKeys: selectedDiffusorKeys, anchorKey: hitSelectionKey });
+    if (wholeObjectMoveRequested && hitSelectionKey && selectedDiffusorKeys.length > 1 && selectedDiffusorKeys.includes(hitSelectionKey)) {
+      const containsLocked = selectedDiffusorKeys.some((key) => {
+        const [kind, id] = key.split(":");
+        return kind === "zone" ? designer.zones.find((entry) => entry.id === id)?.locked === true : designer.channels.find((entry) => entry.id === id)?.locked === true;
+      });
+      if (!designer.layers.zones.locked && !containsLocked) setDrag({ type: "diffusor-selection-move", start: point, original: designer, selectionKeys: selectedDiffusorKeys, anchorKey: hitSelectionKey });
       return;
     }
     if (hit.type === "build_area") {
       const buildArea = designer.buildAreas.find((entry) => entry.id === hit.id);
       if (!buildArea) return;
       onSelect({ type: "build_area", id: buildArea.id });
-      if (tool !== "move" || designer.layers.artwork.locked) return;
+      if (!wholeObjectMoveRequested || designer.layers.artwork.locked || buildArea.locked) return;
       setDrag({ type: "build-area-move", buildAreaId: buildArea.id, start: point, original: buildArea });
     }
     if (hit.type === "artwork") {
       const artwork = designer.artwork.find((entry) => entry.id === hit.id);
       if (!artwork) return;
       onSelect({ type: "artwork", id: artwork.id });
-      if (tool !== "move" || designer.layers.artwork.locked) return;
+      if (!wholeObjectMoveRequested || designer.layers.artwork.locked || artwork.locked) return;
       setDrag({ type: "artwork-move", artworkId: artwork.id, start: point, original: artwork });
     }
     if (hit.type === "artwork_resize") {
       const artwork = designer.artwork.find((entry) => entry.id === hit.id);
       if (!artwork) return;
       onSelect({ type: "artwork", id: artwork.id });
-      if (designer.layers.artwork.locked) return;
+      if (designer.layers.artwork.locked || artwork.locked) return;
       setDrag({ type: "artwork-resize", artworkId: artwork.id, handle: hit.handle, start: point, original: artwork });
     }
     if (hit.type === "build_area_resize") {
       const buildArea = designer.buildAreas.find((entry) => entry.id === hit.id);
       if (!buildArea) return;
       onSelect({ type: "build_area", id: buildArea.id });
-      if (designer.layers.artwork.locked) return;
+      if (designer.layers.artwork.locked || buildArea.locked) return;
       setDrag({ type: "build-area-resize", buildAreaId: buildArea.id, handle: hit.handle, start: point, original: buildArea });
     }
     if (hit.type === "build_area_point") {
       onSelect({ type: "build_area", id: hit.id, pointIndex: hit.pointIndex });
-      if (designer.layers.artwork.locked) return;
+      if (designer.layers.artwork.locked || designer.buildAreas.find((entry) => entry.id === hit.id)?.locked) return;
       setDrag({ type: "build-area-point", buildAreaId: hit.id, pointIndex: hit.pointIndex });
     }
     if (hit.type === "work_line") {
       const line = designer.workLines.find((entry) => entry.id === hit.id);
       if (!line) return;
       onSelect({ type: "work_line", id: line.id });
-      if (tool !== "move") return;
+      if (!wholeObjectMoveRequested) return;
       setDrag({ type: "work-line-move", workLineId: line.id, start: point, original: line });
     }
     if (hit.type === "work_line_point") {
@@ -1295,26 +1338,26 @@ export function DesignerStudioCanvas({
       const zone = designer.zones.find((entry) => entry.id === hit.id);
       if (!zone) return;
       onSelect({ type: "zone", id: zone.id });
-      if (tool !== "move" || designer.layers.zones.locked) return;
+      if (!wholeObjectMoveRequested || designer.layers.zones.locked || zone.locked) return;
       setDrag({ type: "zone-move", zoneId: zone.id, start: point, original: zone });
     }
     if (hit.type === "zone_resize") {
       const zone = designer.zones.find((entry) => entry.id === hit.id);
       if (!zone) return;
       onSelect({ type: "zone", id: zone.id });
-      if (designer.layers.zones.locked) return;
+      if (designer.layers.zones.locked || zone.locked) return;
       setDrag({ type: "zone-resize", zoneId: zone.id, handle: hit.handle, start: point, original: zone });
     }
     if (hit.type === "zone_point") {
       onSelect({ type: "zone", id: hit.id, pointIndex: hit.pointIndex });
-      if (designer.layers.zones.locked) return;
+      if (designer.layers.zones.locked || designer.zones.find((entry) => entry.id === hit.id)?.locked) return;
       setDrag({ type: "zone-point", zoneId: hit.id, pointIndex: hit.pointIndex });
     }
     if (hit.type === "face_graphic") {
       const element = designer.faceGraphics.find((entry) => entry.id === hit.id);
       if (!element) return;
       onSelect({ type: "face_graphic", id: element.id });
-      if (tool !== "move" || designer.layers.faceGraphic.locked || element.locked) return;
+      if (!wholeObjectMoveRequested || designer.layers.faceGraphic.locked || element.locked) return;
       setDrag({ type: "face-graphic-move", elementId: element.id, start: point, original: element });
     }
     if (hit.type === "fabrication_path") {
@@ -1322,7 +1365,7 @@ export function DesignerStudioCanvas({
       if (!path) return;
       onSelect({ type: "fabrication_path", id: path.id });
       const part = designer.fabricationParts.find((entry) => entry.id === path.partId);
-      if (tool === "move" && !designer.layers.fabrication.locked && !part?.locked && !path.locked) {
+      if (wholeObjectMoveRequested && !designer.layers.fabrication.locked && !part?.locked && !path.locked) {
         setDrag({ type: "fabrication-path-move", pathId: path.id, start: point, original: path });
       }
       return;
@@ -1352,7 +1395,7 @@ export function DesignerStudioCanvas({
       const text = designer.texts.find((entry) => entry.id === hit.id);
       if (!text) return;
       onSelect({ type: "text", id: text.id });
-      if (tool !== "move" || designer.layers[text.targetLayer].locked || text.locked) return;
+      if (!wholeObjectMoveRequested || designer.layers[text.targetLayer].locked || text.locked) return;
       setDrag({ type: "text-move", textId: text.id, start: point, original: text });
       return;
     }
@@ -1360,26 +1403,26 @@ export function DesignerStudioCanvas({
       const channel = designer.channels.find((entry) => entry.id === hit.id);
       if (!channel) return;
       onSelect({ type: "channel", id: channel.id });
-      if (tool !== "move" || designer.layers.zones.locked) return;
+      if (!wholeObjectMoveRequested || designer.layers.zones.locked || channel.locked) return;
       setDrag({ type: "channel-move", channelId: channel.id, start: point, original: channel });
     }
     if (hit.type === "channel_point") {
       onSelect({ type: "channel", id: hit.id, pointIndex: hit.pointIndex });
-      if (designer.layers.zones.locked) return;
+      if (designer.layers.zones.locked || designer.channels.find((entry) => entry.id === hit.id)?.locked) return;
       setDrag({ type: "channel-point", channelId: hit.id, pointIndex: hit.pointIndex });
     }
     if (hit.type === "route") {
       const route = designer.routes.find((entry) => entry.id === hit.id);
       if (!route) return;
       onSelect({ type: "route", id: route.id });
-      if (tool !== "move" || designer.layers.strings.locked) return;
+      if (!wholeObjectMoveRequested || designer.layers.strings.locked || route.locked) return;
       setDrag({ type: "route-move", routeId: route.id, start: point, original: route });
     }
     if (hit.type === "route_point") {
       const route = designer.routes.find((entry) => entry.id === hit.id);
       if (!route) return;
       onSelect({ type: "route", id: route.id, pointIndex: hit.pointIndex });
-      if (designer.layers.strings.locked) return;
+      if (designer.layers.strings.locked || route.locked) return;
       if (tool === "cut") {
         onCutRoutePoint(route.id, hit.pointIndex);
         return;
@@ -1396,7 +1439,7 @@ export function DesignerStudioCanvas({
     }
     if (hit.type === "controller") {
       onSelect({ type: "controller", id: designer.controller.id });
-      if (tool !== "move" || designer.layers.hardware.locked) return;
+      if (!wholeObjectMoveRequested || designer.layers.hardware.locked) return;
       setDrag({ type: "controller-move", start: point, original: designer.controller, originalRoutes: designer.routes });
     }
   }

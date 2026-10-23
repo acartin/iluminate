@@ -257,7 +257,7 @@ export function drawPaperDesigner({
         : designer.channels.find((channel) => channel.id === source.targetId);
       if (!target) return;
       const color = source.mode === "front" ? "#f59e0b" : source.mode === "halo" ? "#a78bfa" : "#38bdf8";
-      designer.routes.filter((route) => route.kind === "led_string" && source.stringIds.includes(route.id)).forEach((route) => {
+      designer.routes.filter((route) => route.kind === "led_string" && route.visible !== false && source.stringIds.includes(route.id)).forEach((route) => {
         sampleRouteLedDots(route, designer.addressablePixelsPerMeter, designer.addressablePixelsPerMeter)
           .filter((dot) => source.targetType === "zone"
             ? pointInsideDesignerShape(target as DesignerZoneForm, dot)
@@ -356,8 +356,9 @@ export function drawPaperDesigner({
   if (designer.layers.strings.visible && !vinylPreviewActive) {
     designer.routes.forEach((route) => {
       if (route.visible === false) return;
+      const selected = selectedRouteId === route.id || selectedRouteIds.includes(route.id);
       drawPaperRoute(route, {
-        selected: selectedRouteId === route.id || selectedRouteIds.includes(route.id),
+        selected,
         selectedPointIndex: selectedRouteId === route.id ? selectedRoutePointIndex : undefined,
         opacity: designer.layers.strings.opacity,
         addressablePixelsPerMeter: designer.addressablePixelsPerMeter,
@@ -370,6 +371,7 @@ export function drawPaperDesigner({
           ? resolvedLedStripCutSegmentLengthMm(designer.stripConfiguration, designer.ledsPerMeter)
           : 1000 / designer.addressablePixelsPerMeter,
         colorMode,
+        showPhysicalDetails: selected || lengthToScreen(1) >= 14,
         toScreen,
         lengthToScreen
       });
@@ -1023,6 +1025,7 @@ function drawPaperRoute(route: DesignerRouteForm, options: {
   cutMode: "marked_segments" | "free_cut";
   cutSegmentLengthMm: number;
   colorMode: "day" | "night";
+  showPhysicalDetails: boolean;
   toScreen: (point: DesignerPoint) => PaperPoint;
   lengthToScreen: (cm: number) => number;
 }) {
@@ -1067,7 +1070,7 @@ function drawPaperRoute(route: DesignerRouteForm, options: {
     if (options.construction === "continuous") {
       const lightBand = new paperScope.Path({ strokeColor: options.selected ? "#f0abfc" : idleLedColors.light, strokeWidth: Math.max(1.2, options.lengthToScreen(options.pcbWidthMm / 16)), strokeCap: "round", strokeJoin: "round", opacity: 0.9 });
       route.points.forEach((point) => lightBand.add(options.toScreen(point)));
-    } else {
+    } else if (options.showPhysicalDetails) {
       const packageSide = Math.max(0.1, options.lengthToScreen(options.ledPackageSizeMm / 10));
       sampleRouteLedDots(route, options.ledsPerMeter, options.addressablePixelsPerMeter).forEach((dot) => {
         const center = options.toScreen(dot);
@@ -1081,7 +1084,7 @@ function drawPaperRoute(route: DesignerRouteForm, options: {
         ledPackage.rotate(dot.angle, center);
       });
     }
-    if (options.cutMode === "marked_segments") {
+    if (options.cutMode === "marked_segments" && options.showPhysicalDetails) {
       const cutHalfWidthPx = Math.max(2, options.lengthToScreen(options.pcbWidthMm / 18));
       sampleRouteCutMarks(route, options.cutSegmentLengthMm).forEach((mark) => {
         const center = options.toScreen(mark);
@@ -1091,7 +1094,7 @@ function drawPaperRoute(route: DesignerRouteForm, options: {
       });
     }
   }
-  routeDirectionMarkers(route).forEach((marker) => drawPaperArrowMarker(marker, route.kind, options.selected, options.toScreen));
+  if (options.showPhysicalDetails) routeDirectionMarkers(route).forEach((marker) => drawPaperArrowMarker(marker, route.kind, options.selected, options.toScreen));
   route.points.forEach((point, index) => {
     const isInputTerminal = index === 0;
     const isOutputTerminal = index === route.points.length - 1;
@@ -1114,7 +1117,7 @@ function drawPaperRoute(route: DesignerRouteForm, options: {
         strokeColor: terminalColor,
         strokeWidth: 2.2
       });
-    } else if (point.joint) {
+    } else if (point.joint && options.showPhysicalDetails) {
       new paperScope.Path.Circle({
         center,
         radius: 5.2,
@@ -1122,7 +1125,7 @@ function drawPaperRoute(route: DesignerRouteForm, options: {
         strokeWidth: 1.4
       });
     }
-    new paperScope.Path.Circle({
+    if (isTerminal || options.selected || options.showPhysicalDetails) new paperScope.Path.Circle({
       center,
       radius: isTerminal ? isInputTerminal ? 5.2 : 4.6 : point.joint ? 3.8 : options.selectedPointIndex === index ? 3.8 : options.selected ? 3.1 : 2.4,
       fillColor: routePointFill(route, index, point, options.selectedPointIndex === index),

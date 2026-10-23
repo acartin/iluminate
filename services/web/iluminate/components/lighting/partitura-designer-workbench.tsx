@@ -4,8 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { CrudResourcePage } from "@/components/crud/crud-resource-page";
 import { CrudResourceConfig } from "@/components/crud/types";
-import type { PersistedPartitura } from "@/lib/lighting/partitura-model";
 import type { PersistedProject } from "@/lib/server/projects";
+import type { PartituraSummary } from "@/lib/server/partituras";
 
 type DesignerRecord = Record<string, unknown> & {
   id: string;
@@ -85,8 +85,7 @@ const designerCrudConfig: CrudResourceConfig<DesignerRecord> = {
   editFields: []
 };
 
-function recordFromPartitura(partitura: PersistedPartitura, projectName: string): DesignerRecord {
-  const designer = partitura.document.designer;
+function recordFromPartitura(partitura: PartituraSummary, projectName: string): DesignerRecord {
   return {
     id: partitura.id,
     name: partitura.name,
@@ -94,18 +93,18 @@ function recordFromPartitura(partitura: PersistedPartitura, projectName: string)
     projectId: partitura.projectId,
     project: projectName,
     status: partitura.status,
-    canvas: designer ? `${designer.canvasWidthCm}x${designer.canvasHeightCm} cm` : "Not configured",
-    pixelsPerMeter: designer?.addressablePixelsPerMeter ?? designer?.ledDensityPerMeter ?? 0,
-    ledsPerMeter: designer?.ledsPerMeter ?? designer?.addressablePixelsPerMeter ?? designer?.ledDensityPerMeter ?? 0,
-    zones: designer?.zones.length ?? 0,
-    routes: designer?.routes.length ?? 0,
-    pixels: partitura.document.compiledLayout?.pixelMap.length ?? 0,
+    canvas: partitura.canvasWidthCm > 0 && partitura.canvasHeightCm > 0 ? `${partitura.canvasWidthCm}x${partitura.canvasHeightCm} cm` : "Not configured",
+    pixelsPerMeter: partitura.pixelsPerMeter,
+    ledsPerMeter: partitura.ledsPerMeter,
+    zones: partitura.zones,
+    routes: partitura.routes,
+    pixels: partitura.pixels,
     updatedAt: new Date(partitura.updatedAt).toLocaleString()
   };
 }
 
 export function PartituraDesignerWorkbench() {
-  const [records, setRecords] = useState<PersistedPartitura[]>([]);
+  const [records, setRecords] = useState<PartituraSummary[]>([]);
   const [projects, setProjects] = useState<PersistedProject[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -120,7 +119,7 @@ export function PartituraDesignerWorkbench() {
           fetch("/api/lighting/projects", { cache: "no-store" })
         ]);
         const [partiturasPayload, projectsPayload] = await Promise.all([
-          partiturasResponse.json() as Promise<{ records?: PersistedPartitura[] }>,
+          partiturasResponse.json() as Promise<{ records?: PartituraSummary[] }>,
           projectsResponse.json() as Promise<{ records?: PersistedProject[] }>
         ]);
         if (!cancelled) {

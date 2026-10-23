@@ -54,7 +54,6 @@ export class Webgl2PlayerRenderer {
   private colorTexture: WebGLTexture | null = null;
   private faceMaskTexture: WebGLTexture | null = null;
   private allPixels: DrawBatch | null = null;
-  private directPixels: DrawBatch | null = null;
   private zoneOutlines: OutlineBatch | null = null;
   private channelOutlines: OutlineBatch | null = null;
   private activeZoneOutlines: OutlineBatch | null = null;
@@ -151,12 +150,10 @@ export class Webgl2PlayerRenderer {
 
     const allIndices = scene.partitura.pixelMap.map((pixel) => pixel.index);
     this.allPixels = this.createBatch(allIndices);
-    const opticalIndices = new Set<number>();
     this.treatments = scene.visualScene.treatments
       .flatMap((source) => {
         const indices = source.pixelIndices.filter((index) => Number.isInteger(index) && index >= 0 && index < scene.partitura.pixelMap.length);
         if (!indices.length) return [];
-        indices.forEach((index) => opticalIndices.add(index));
         const targetMaskMode = opticalTargetMaskMode(source.mode);
         const targetMask = targetMaskMode === 0 ? null : this.createTargetMaskTexture(scene.visualScene, source);
         return [{
@@ -169,7 +166,6 @@ export class Webgl2PlayerRenderer {
           targetMaskMode: targetMask ? targetMaskMode : 0
         }];
       });
-    this.directPixels = this.createBatch(allIndices.filter((index) => !opticalIndices.has(index)));
     this.zoneOutlines = this.createOutlineBatch(buildOutlineSegments(scene.visualScene.shapes.filter((shape) => shape.kind === "zone")));
     this.channelOutlines = this.createOutlineBatch(buildOutlineSegments(scene.visualScene.shapes.filter((shape) => shape.kind === "channel")));
     this.activeZoneOutlines = this.createOutlineBatch(buildOutlineSegments(outlineShapesForMode(scene.visualScene.shapes, scene.visualScene.treatments, "active", "zone")));
@@ -281,7 +277,6 @@ export class Webgl2PlayerRenderer {
       gl.bindTexture(gl.TEXTURE_2D, treatment.targetMaskTexture);
       this.drawBatch(treatment.batch, this.directPixelRadius(), 1, 0, treatment.useFaceMask, treatment.targetMaskMode, treatment.targetMaskBounds);
     }
-    this.drawBatch(this.directPixels, this.directPixelRadius(), 1, 0, false);
     this.drawOutlines();
     gl.disable(gl.BLEND);
   }
@@ -467,7 +462,7 @@ export class Webgl2PlayerRenderer {
   private releaseSceneResources() {
     const gl = this.gl;
     if (!gl) return;
-    const batches = [this.allPixels, this.directPixels, ...this.treatments.map((treatment) => treatment.batch)];
+    const batches = [this.allPixels, ...this.treatments.map((treatment) => treatment.batch)];
     const released = new Set<WebGLVertexArrayObject>();
     for (const batch of batches) {
       if (!batch || released.has(batch.vao)) continue;
@@ -479,7 +474,6 @@ export class Webgl2PlayerRenderer {
       if (treatment.targetMaskTexture) gl.deleteTexture(treatment.targetMaskTexture);
     }
     this.allPixels = null;
-    this.directPixels = null;
     this.treatments = [];
     for (const outline of [this.zoneOutlines, this.channelOutlines, this.activeZoneOutlines, this.activeChannelOutlines, this.selectedOutline]) this.releaseOutlineBatch(outline);
     this.zoneOutlines = null;

@@ -1,4 +1,4 @@
-import { designerGlobalLightSourceMode, designerGlobalLightSourceTarget, type ClipForm, type DesignerForm, type DesignerOpticalMode } from "@/lib/lighting/partitura-model";
+import { DESIGNER_GLOBAL_LIGHT_SOURCE_TARGETS, designerGlobalLightSourceMode, designerGlobalLightSourceTarget, designerGroupLightTargetId, designerOpticalModeSide, parseDesignerGroupLightTargetId, type ClipForm, type DesignerForm, type DesignerLightingSide, type DesignerOpticalMode, type PartituraDocument } from "@/lib/lighting/partitura-model";
 import type { DesignerSelection } from "./types";
 
 /** Returns every clip target represented by the current canvas selection. */
@@ -16,6 +16,22 @@ export function designerClipTargetIdsForSelection(designer: DesignerForm, select
 /** Resolves a clip target to the zone/channel owners that Animate can calibrate. */
 export function designerOpticalTargetsForClipTarget(designer: DesignerForm, targetId: string | null) {
   if (!targetId) return [];
+  const groupTarget = parseDesignerGroupLightTargetId(targetId);
+  const directGroupId = designer.groups.some((group) => group.id === targetId) ? targetId : null;
+  const groupId = groupTarget?.groupId ?? directGroupId;
+  if (groupId) {
+    const groupById = new Map(designer.groups.map((group) => [group.id, group]));
+    const owners = new Map<string, { type: "zone" | "channel"; id: string }>();
+    const visit = (id: string, trail: string[] = []) => {
+      if (trail.includes(id)) return;
+      groupById.get(id)?.members.forEach((member) => {
+        if (member.type === "group") visit(member.id, [...trail, id]);
+        else owners.set(`${member.type}:${member.id}`, { type: member.type, id: member.id });
+      });
+    };
+    visit(groupId);
+    return Array.from(owners.values());
+  }
   const globalMode = designerGlobalLightSourceMode(targetId);
   const sources = globalMode
     ? designer.lightSources.filter((source) => source.mode === globalMode && source.enabled && source.stringIds.length > 0)
@@ -31,6 +47,63 @@ export function designerOpticalTargetsForClipTarget(designer: DesignerForm, targ
     if (designer.channels.some((channel) => channel.id === targetId)) targets.push({ type: "channel", id: targetId });
   }
   return targets.filter((target, index) => targets.findIndex((entry) => entry.type === target.type && entry.id === target.id) === index);
+}
+
+export type AnimationClipTargetOption = {
+  id: string;
+  name: string;
+  category: "effectTargets" | "zones" | "channels" | "global";
+  side: DesignerLightingSide;
+  detail: string;
+  available: boolean;
+};
+
+export function animationClipTargetSide(designer: DesignerForm, targetId: string): DesignerLightingSide {
+  const groupTarget = parseDesignerGroupLightTargetId(targetId);
+  if (groupTarget) return groupTarget.side;
+  const mode = designer.lightSources.find((source) => source.id === targetId)?.mode ?? designerGlobalLightSourceMode(targetId);
+  return mode ? designerOpticalModeSide(mode) : "front";
+}
+
+export function animationClipTargetOptions(designer: DesignerForm, compiledLayout?: PartituraDocument["compiledLayout"]): AnimationClipTargetOption[] {
+  const compiledGroupIds = new Set(compiledLayout?.groups.map((group) => group.id) ?? []);
+  const mappedTargetIds = new Set(compiledLayout?.zones.filter((zone) => zone.pixelIds.length > 0).map((zone) => zone.id) ?? []);
+  const zoneById = new Map(designer.zones.map((zone) => [zone.id, zone]));
+  const channelById = new Map(designer.channels.map((channel) => [channel.id, channel]));
+  const modeLabel = (mode: DesignerOpticalMode) => mode === "front" ? "Front" : mode === "halo" ? "Halo" : "Wall Wash";
+  const groups = designer.groups.flatMap((group) => (["front", "rear"] as const).map((side): AnimationClipTargetOption => {
+    const id = designerGroupLightTargetId(group.id, side);
+    const available = compiledGroupIds.has(id);
+    return {
+      id,
+      name: group.name,
+      category: "effectTargets",
+      side,
+      detail: available ? `${group.members.length} member${group.members.length === 1 ? "" : "s"}` : "No assigned lighting on this side",
+      available
+    };
+  }));
+  const sources = designer.lightSources.map((source): AnimationClipTargetOption => {
+    const owner = source.targetType === "zone" ? zoneById.get(source.targetId) : channelById.get(source.targetId);
+    const available = source.enabled && source.stringIds.length > 0 && mappedTargetIds.has(source.id);
+    return {
+      id: source.id,
+      name: owner?.name ?? source.name,
+      category: source.targetType === "zone" ? "zones" : "channels",
+      side: designerOpticalModeSide(source.mode),
+      detail: available ? modeLabel(source.mode) : `${modeLabel(source.mode)} · No assigned pixels`,
+      available
+    };
+  });
+  const global = DESIGNER_GLOBAL_LIGHT_SOURCE_TARGETS.flatMap((target): AnimationClipTargetOption[] => compiledGroupIds.has(target.id) ? [{
+    id: target.id,
+    name: target.name,
+    category: "global",
+    side: designerOpticalModeSide(target.mode),
+    detail: modeLabel(target.mode),
+    available: true
+  }] : []);
+  return [...groups, ...sources, ...global];
 }
 
 /** Keeps each independently addressable source available when creating a clip for one canvas target. */

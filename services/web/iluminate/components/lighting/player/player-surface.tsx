@@ -1,6 +1,6 @@
 "use client";
 
-import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import type { Partitura } from "@iluminate/lighting-core";
 import type { DesignerForm } from "@/lib/lighting/partitura-model";
 import { clamp, pickAnimationTarget, worldHitTolerance } from "../designer/designer-geometry";
@@ -56,7 +56,11 @@ export const PlayerSurface = forwardRef<PlayerSurfaceHandle, PlayerSurfaceProps>
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const rendererRef = useRef<Webgl2PlayerRenderer | null>(null);
   const controllerRef = useRef<PlayerController | null>(null);
-  const visualScene = useMemo(() => buildVisualScene(partitura, designer, layout), [partitura, designer, layout]);
+  const visualSceneCacheRef = useRef<{ designer: DesignerForm; layout: CompiledDesignerLayout; visualScene: ReturnType<typeof buildVisualScene> } | null>(null);
+  if (visualSceneCacheRef.current?.designer !== designer || visualSceneCacheRef.current.layout !== layout) {
+    visualSceneCacheRef.current = { designer, layout, visualScene: buildVisualScene(partitura, designer, layout) };
+  }
+  const visualScene = visualSceneCacheRef.current.visualScene;
   const sceneRef = useRef({ partitura, visualScene });
   const presentationRef = useRef(presentation);
   const faceMaskEnabledRef = useRef(faceMaskEnabled);
@@ -186,19 +190,8 @@ export const PlayerSurface = forwardRef<PlayerSurfaceHandle, PlayerSurfaceProps>
   }, []);
 
   useEffect(() => {
-    const renderer = rendererRef.current;
     const controller = controllerRef.current;
-    if (!renderer || !controller) return;
-    renderer.loadScene({ partitura, visualScene });
-    loadedRendererSceneRef.current = { partitura, visualScene };
-    renderer.updateViewport(viewportRef.current);
-    renderer.updatePresentation(presentation);
-    renderer.updateFaceMaskEnabled(faceMaskEnabled);
-    renderer.updateOpticalSettings(settings);
-    renderer.updateSelection(playerOutlineSelection(selection));
-    renderer.updateColorMode(colorMode);
-    const size = sizeRef.current;
-    renderer.resize(size.width, size.height, size.pixelRatio);
+    if (!controller) return;
     let cancelled = false;
     void controller.load(partitura).then(() => {
       if (cancelled) return;
@@ -212,8 +205,8 @@ export const PlayerSurface = forwardRef<PlayerSurfaceHandle, PlayerSurfaceProps>
     const renderer = rendererRef.current;
     if (!renderer) return;
     const loaded = loadedRendererSceneRef.current;
-    if (loaded?.partitura === partitura && loaded.visualScene === visualScene) return;
-    const nextScene = { partitura, visualScene };
+    if (loaded?.visualScene === visualScene) return;
+    const nextScene = { partitura: sceneRef.current.partitura, visualScene };
     renderer.loadScene(nextScene);
     loadedRendererSceneRef.current = nextScene;
     renderer.updateViewport(viewportRef.current);
@@ -228,7 +221,7 @@ export const PlayerSurface = forwardRef<PlayerSurfaceHandle, PlayerSurfaceProps>
     if (controller && controllerState !== "empty" && controllerState !== "loading" && controllerState !== "error" && controllerState !== "destroyed") {
       controller.seek(controller.getStatus().timeMs);
     }
-  }, [partitura, visualScene]);
+  }, [visualScene]);
 
   useEffect(() => {
     const renderer = rendererRef.current;

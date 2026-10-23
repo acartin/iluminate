@@ -1,18 +1,20 @@
 import { NextResponse } from "next/server";
 import { getMenu } from "@/lib/api";
-import { deletePartitura, getPartituraForClient, updatePartitura } from "@/lib/server/partituras";
+import { deletePartitura, getPartituraForClient, savePartituraDocument } from "@/lib/server/partituras";
+import { jsonResponse, readJsonRequest } from "@/lib/server/compressed-json";
+import type { PartituraDocument, PersistedPartitura } from "@/lib/lighting/partitura-model";
 
 export const runtime = "nodejs";
 
 export async function GET(
-  _request: Request,
+  request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
   const menu = await getMenu();
   const partitura = await getPartituraForClient(id, menu.tenant.client_id);
   if (!partitura) return NextResponse.json({ message: "Partitura not found." }, { status: 404 });
-  return NextResponse.json({ partitura });
+  return jsonResponse(request, { partitura });
 }
 
 export async function PATCH(
@@ -21,10 +23,23 @@ export async function PATCH(
 ) {
   const { id } = await params;
   const menu = await getMenu();
-  const body = await request.json().catch(() => ({}));
-  const partitura = await updatePartitura(id, body, menu.tenant.client_id);
-  if (!partitura) return NextResponse.json({ message: "Partitura not found." }, { status: 404 });
-  return NextResponse.json({ partitura });
+  const body = await readJsonRequest<{
+    name?: string;
+    status?: PersistedPartitura["status"];
+    document?: PartituraDocument;
+    clearGeneratedPartitura?: boolean;
+  }>(request).catch(() => null);
+  if (!body?.document || !body.name || !body.status) {
+    return NextResponse.json({ message: "name, status and document are required." }, { status: 400 });
+  }
+  const saved = await savePartituraDocument(id, {
+    name: body.name,
+    status: body.status,
+    document: body.document,
+    clearGeneratedPartitura: body.clearGeneratedPartitura !== false
+  }, menu.tenant.client_id);
+  if (!saved) return NextResponse.json({ message: "Partitura not found." }, { status: 404 });
+  return NextResponse.json({ saved });
 }
 
 export async function DELETE(

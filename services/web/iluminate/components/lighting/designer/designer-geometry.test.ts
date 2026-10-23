@@ -3,8 +3,8 @@ import { describe, it } from "node:test";
 import { readFile } from "node:fs/promises";
 import paper from "paper";
 import type { VisualShape } from "@iluminate/lighting-core";
-import type { ClipForm, DesignerChannelForm } from "../../../lib/lighting/partitura-model";
-import { DESIGNER_SCHEMA_VERSION, addDefaultLightSourcesForNewTargets, canonicalizeDesignerGeometry, createDefaultOpticalTreatment, createDefaultPartituraDocument, createNewPartituraDocument, nextEmptyClipLayer, normalizeDefaultSignLayout, resolveDesignerDerivedGeometry, resolveDesignerProjectionGeometry, wouldCreateDesignerDerivedGeometryCycle, wouldCreateDesignerProjectionCycle } from "../../../lib/lighting/partitura-model";
+import type { ClipForm, DesignerChannelForm, DesignerGeometry, DesignerZoneForm } from "../../../lib/lighting/partitura-model";
+import { DESIGNER_SCHEMA_VERSION, addDefaultLightSourcesForNewTargets, canonicalizeDesignerGeometry, createDefaultOpticalTreatment, createDefaultPartituraDocument, createNewPartituraDocument, designerGroupLightTargetId, nextEmptyClipLayer, normalizeDefaultSignLayout, resolveDesignerDerivedGeometry, resolveDesignerProjectionGeometry, wouldCreateDesignerDerivedGeometryCycle, wouldCreateDesignerProjectionCycle } from "../../../lib/lighting/partitura-model";
 import { designerFilletCornerIsEligible, filletDesignerGeometry, filletDesignerGeometryExact, offsetDesignerGeometry } from "../../../lib/lighting/designer-derived-geometry";
 import { DEFAULT_DESIGNER_FONT_ID, designerFontResource } from "../../../lib/lighting/designer-font-catalog";
 import { designerTextToGeometry } from "../../../lib/lighting/designer-text-geometry";
@@ -18,20 +18,21 @@ import { applyDesignerGeometryCommand, applyDesignerNativeFillet } from "./geome
 import { applyDesignerBooleanOperation, validateDesignerGeometryTopology } from "./geometry/designer-geometry-boolean";
 import { trimDesignerChannelPathAtPoint, trimDesignerPathAtPoint } from "./geometry/designer-path-trim";
 import { channelPathsFromGeometries, generatedChannelName } from "./geometry/designer-channel-from-path";
+import { generateDesignerLightboxZone, uniqueLightboxZoneName } from "./geometry/designer-lightbox-zone";
 import { resolveDesignerProjectionGeometry as resolveProjectedGeometry } from "./geometry/designer-projected-geometry";
 import { applyFaceGraphicToOpticalMode, applyFaceGraphicTransmission, faceGraphicMaskUv, faceGraphicTransmissionAtPoint, frontMaterialOffStyle, orderOpticalTreatmentsForRendering, resolvePhysicalFaceGraphics } from "../player/optical-model";
 import { buildOutlineSegments, faceMaskTextureSize, opticalOccluderShapes, opticalTargetMaskBounds, opticalTargetMaskMode, opticalTargetShape, outlineSelectionVisible, outlineShapesForMode, selectedOutlineShapes, targetMaskTextureSize } from "../player/gpu/webgl2-player-renderer";
 import { resolveChannelOutlineContours, sweptChannelOutlineContours } from "./rendering/channel-swept-outline";
 import { generateDesignerFabricationExport, sha256Hex } from "./fabrication/designer-fabrication-export";
-import { applyFaceGraphicObjectVisibility, faceGraphicObjectKeys, sameFaceGraphicVisibility, visibleFaceGraphicObjectKeys } from "./designer-face-graphic-visibility";
-import { applyDiffusorObjectVisibility, diffusorObjectKeys, sameDiffusorVisibility, visibleDiffusorObjectKeys } from "./designer-diffusor-visibility";
+import { assignDesignerObjectsToSublayer, designerWithSublayerMasks, inheritDesignerSublayerForCopy, insertDesignerCopyAbove, nextDesignerSublayer, removeDesignerSublayer, restoreDesignerSublayerAuthoredState } from "./designer-sublayers";
 import { channelMatchesSurfaceView, designerAdditiveSelectionRequested, designerConstrainedMoveDelta, designerInitialSelectHit, designerLayerForSelection, designerSelectionForClipTarget, designerWholeObjectHit, routeMatchesSurfaceView } from "./types";
-import { clipIdForSelectedTargets, clipLightSourcesForTarget, clipScopeTargets, clipTargetsForSelection, designerClipTargetIdsForSelection, designerOpticalTargetsForClipTarget, explicitClipTargetSelectionSettled } from "./designer-animation-selection";
+import { animationClipTargetOptions, clipIdForSelectedTargets, clipLightSourcesForTarget, clipScopeTargets, clipTargetsForSelection, designerClipTargetIdsForSelection, designerOpticalTargetsForClipTarget, explicitClipTargetSelectionSettled } from "./designer-animation-selection";
 import {
   channelBorderPolylines,
   channelCenterPolyline,
   channelIsClosed,
   createLedStringFromChannel,
+  createLedStringsFromZonePaths,
   controllerPortPoint,
   canSolderRoutes,
   deleteDesignerRoute,
@@ -76,6 +77,90 @@ import {
 } from "./designer-geometry";
 
 describe("Layers panel organization", () => {
+  it("persists authoring sublayers without changing compilation and masks child eyes non-destructively", () => {
+    const document = createDefaultPartituraDocument();
+    const designer = document.designer!;
+    const zone = designer.zones[0];
+    const sublayer = { ...nextDesignerSublayer(designer, "zones", [zone.id]), visible: false, locked: true, name: "Acrylic" };
+    const organized = normalizeDefaultSignLayout({ ...document, designer: { ...designer, sublayers: [sublayer] } }).designer!;
+    const masked = designerWithSublayerMasks(organized);
+
+    assert.equal(organized.sublayers[0]?.name, "Acrylic");
+    assert.equal(organized.zones[0]?.visible, true);
+    assert.equal(masked.zones[0]?.visible, false);
+    assert.equal(masked.zones[0]?.locked, true);
+    assert.equal(designerCompileSignature(organized), designerCompileSignature({ ...organized, sublayers: [] }));
+
+    const restored = restoreDesignerSublayerAuthoredState(organized, { ...masked, zones: masked.zones.map((entry) => entry.id === zone.id ? { ...entry, x: entry.x + 1 } : entry) });
+    assert.equal(restored.zones[0]?.visible, true);
+    assert.equal(restored.zones[0]?.locked, zone.locked);
+    assert.equal(restored.zones[0]?.x, zone.x + 1);
+
+    const fixedHidden = designerWithSublayerMasks({
+      ...organized,
+      systemSublayers: { ...organized.systemSublayers, zones: { visible: false, locked: true } }
+    });
+    assert.equal(fixedHidden.zones[0]?.visible, false);
+    assert.equal(fixedHidden.zones[0]?.locked, true);
+    assert.equal(designerCompileSignature(organized), designerCompileSignature({ ...organized, systemSublayers: fixedHidden.systemSublayers }));
+  });
+
+  it("moves selected objects between sublayers and returns them to the fixed parent when a sublayer is removed", () => {
+    const designer = createDefaultPartituraDocument().designer!;
+    const first = { ...nextDesignerSublayer(designer, "zones", [designer.zones[0].id]), id: "layer_first" };
+    const second = { ...nextDesignerSublayer({ ...designer, sublayers: [first] }, "zones"), id: "layer_second" };
+    const assigned = assignDesignerObjectsToSublayer([first, second], "zones", [designer.zones[0].id, designer.zones[1].id], second.id);
+    assert.deepEqual(assigned[0].objectIds, []);
+    assert.deepEqual(assigned[1].objectIds, [designer.zones[0].id, designer.zones[1].id]);
+    assert.deepEqual(removeDesignerSublayer(assigned, second.id), [assigned[0]]);
+  });
+
+  it("places a duplicate immediately above its source and inherits its user sublayer", () => {
+    const ordered = [{ id: "top" }, { id: "source" }, { id: "bottom" }];
+    assert.deepEqual(insertDesignerCopyAbove(ordered, "source", { id: "copy" }).map((item) => item.id), ["top", "copy", "source", "bottom"]);
+
+    const sublayers = [{ id: "layer_1", name: "Letters", scope: "zones" as const, visible: true, locked: false, objectIds: ["top", "source", "bottom"] }];
+    assert.deepEqual(inheritDesignerSublayerForCopy(sublayers, "zones", "source", "copy")[0].objectIds, ["top", "copy", "source", "bottom"]);
+    assert.strictEqual(inheritDesignerSublayerForCopy(sublayers, "channels", "source", "copy")[0], sublayers[0]);
+  });
+
+  it("keeps row reordering available inside sublayers and avoids nested drop targets stealing the pointer", async () => {
+    const [panelSource, workspaceSource] = await Promise.all([
+      readFile("components/lighting/designer/designer-ui.tsx", "utf8"),
+      readFile("components/lighting/partitura-workspace.tsx", "utf8")
+    ]);
+
+    assert.match(panelSource, /const members = new Set\(sublayer\.objectIds\);\s*const rowIds = ids\.filter\(\(id\) => members\.has\(id\)\)/);
+    assert.match(panelSource, /if \(activeLayer !== overLayer\) \{[\s\S]*?onAssignObjects\(moving, overLayer, overId\);[\s\S]*?\} else \{[\s\S]*?onReorder\(activeId, overId\)/);
+    assert.match(panelSource, /<div role="treeitem" aria-expanded=\{expanded\} className="ml-2 border-l border-border\/80">\s*<div ref=\{setNodeRef\}/);
+    assert.doesNotMatch(panelSource, /<div ref=\{setNodeRef\} className="\{?`?ml-2 border-l/);
+    assert.match(panelSource, /data-sublayer-root-drop=\{rootDropScope\}/);
+    assert.match(panelSource, /function SublayerRootDropTarget[\s\S]*?useDroppable\(\{ id: `sublayer-root:\$\{scope\}` \}\)/);
+    assert.doesNotMatch(panelSource, />Base level<\/div>/);
+    assert.match(workspaceSource, /function moveDesignerItemsBefore<[\s\S]*?remaining\.slice\(0, beforeIndex\)[\s\S]*?movedItems/);
+  });
+
+  it("authors Effect targets through the same create, rename, expand, and drag flow as sublayers", async () => {
+    const [panelSource, workspaceSource] = await Promise.all([
+      readFile("components/lighting/designer/designer-ui.tsx", "utf8"),
+      readFile("components/lighting/partitura-workspace.tsx", "utf8")
+    ]);
+
+    assert.match(panelSource, /effect-target-drop:\$\{group\.id\}/);
+    assert.match(panelSource, /onAddObjectsToGroup\(overId\.slice\("effect-target-drop:"\.length\), scope === "zones" \? "zone" : "channel", moving\)/);
+    assert.match(panelSource, /title="New effect target"/);
+    assert.match(panelSource, /label="Effect targets"\s*icon=\{Sparkles\}/);
+    assert.match(panelSource, /label="Zones"[\s\S]*label="Channels"[\s\S]*\{effectTargets\}/);
+    assert.match(panelSource, /onDragEnd=\{handleDiffusorDragEnd\}/);
+    assert.match(panelSource, /withinDndContext/);
+    assert.doesNotMatch(panelSource, /createPortal|effectTargetsHost/);
+    assert.match(panelSource, /double-click to rename · drop Zones or Channels here/);
+    assert.match(panelSource, /Remove \$\{label\} from \$\{group\.name\}/);
+    assert.doesNotMatch(panelSource, /aria-label=\{`Include \$\{zone\.name/);
+    assert.match(workspaceSource, /function addObjectsToGroup\(groupId: string, memberType: "zone" \| "channel", objectIds: string\[\]\)/);
+    assert.match(workspaceSource, /name: `Effect target \$\{index\}`/);
+  });
+
   it("forwards Ctrl, Command, and Shift row clicks as additive geometry selection", async () => {
     assert.equal(designerAdditiveSelectionRequested({ shiftKey: true, ctrlKey: false, metaKey: false }), true);
     assert.equal(designerAdditiveSelectionRequested({ shiftKey: false, ctrlKey: true, metaKey: false }), true);
@@ -95,16 +180,32 @@ describe("Layers panel organization", () => {
     assert.match(source, /label="Artwork"\s+order=\{1\}/);
     assert.match(source, /label="Hardware"\s+order=\{2\}/);
     assert.match(source, /label="Diffusors"\s+order=\{3\}/);
-    assert.match(source, /label="Face Graphic"\s+order=\{4\}/);
+    assert.match(source, /label="Face Graphic"[\s\S]{0,80}order=\{4\}/);
 
     const hardwareStart = source.indexOf('label="Hardware"');
     const faceGraphicStart = source.indexOf('label="Face Graphic"', hardwareStart);
     const hardwareSection = source.slice(hardwareStart, faceGraphicStart);
     assert.ok(hardwareStart >= 0 && faceGraphicStart > hardwareStart);
-    assert.match(hardwareSection, /label="Strings"[\s\S]{0,80}icon=\{Waypoints\}[\s\S]{0,80}order=\{1\}/);
+    assert.match(hardwareSection, /label="Strings"[\s\S]*?icon=\{Waypoints\}[\s\S]*?order=\{1\}/);
     assert.match(hardwareSection, /route\.kind === "led_string"[\s\S]*?icon=\{Waypoints\}/);
-    assert.match(hardwareSection, /label="Data cables"[\s\S]{0,80}icon=\{Cable\}[\s\S]{0,80}order=\{2\}/);
-    assert.match(hardwareSection, /label="Controller"[\s\S]{0,80}icon=\{Cpu\}[\s\S]{0,80}order=\{3\}/);
+    assert.match(hardwareSection, /label="Data cables"[\s\S]*?icon=\{Cable\}[\s\S]*?order=\{2\}/);
+    assert.match(hardwareSection, /label="Controller"[\s\S]*?icon=\{Cpu\}[\s\S]*?order=\{3\}/);
+    assert.match(source, /label="Images"\s+icon=\{ImageIcon\}/);
+    assert.match(source, /label="Reference"\s+icon=\{SquareDashed\}/);
+    assert.match(source, /label="Work Lines"\s+icon=\{SquareCenterlineDashedVertical\}/);
+    assert.match(source, /label="Channels"\s+icon=\{Waves\}/);
+    assert.doesNotMatch(source, /<LayerPanelSection[\s\S]{0,100}\sicon=\{/);
+  });
+
+  it("activates the first expanded category, then keeps disclosure independent from active-layer selection", async () => {
+    const source = await readFile("components/lighting/designer/designer-ui.tsx", "utf8");
+    const toggleLayer = source.slice(source.indexOf("function toggleLayer"), source.indexOf("const normalizedSearch"));
+    const hardware = source.slice(source.indexOf('label="Hardware"'), source.indexOf('label="Face Graphic"'));
+
+    assert.match(toggleLayer, /setExpandedLayers/);
+    assert.match(toggleLayer, /!expandedLayers\[layer\] && activeLayer === null[\s\S]*activateLayer\(layer\)/);
+    assert.match(hardware, /onToggle=\{\(\) => \{[\s\S]*?strings: !expanded, hardware: !expanded/);
+    assert.match(hardware, /!expanded && activeLayer === null[\s\S]*activateLayer\("hardware"\)/);
   });
 
   it("preserves the canvas layer mapping used by panel and canvas selection", () => {
@@ -139,22 +240,45 @@ describe("Layers panel organization", () => {
     assert.doesNotMatch(panelSource, /onPatchLayer\("strings", patch\);\s*onPatchLayer\("hardware", patch\)/);
   });
 
-  it("gives Zones and Channels folders atomic master visibility eyes", async () => {
+  it("shows the Controller's effective visibility and can reveal its hidden Hardware parent", async () => {
+    const [panelSource, workspaceSource] = await Promise.all([
+      readFile("components/lighting/designer/designer-ui.tsx", "utf8"),
+      readFile("components/lighting/partitura-workspace.tsx", "utf8")
+    ]);
+
+    assert.match(panelSource, /visible=\{designer\.layers\.hardware\.visible && designer\.controller\.visible !== false\}/);
+    assert.match(panelSource, /onPatchController\(\{ visible: !\(designer\.layers\.hardware\.visible && designer\.controller\.visible !== false\) \}\)/);
+    assert.match(workspaceSource, /patch\.visible === true && !designer\.layers\.hardware\.visible[\s\S]*?hardware: \{ \.\.\.designer\.layers\.hardware, visible: true \}/);
+    assert.match(workspaceSource, /designer\.layers\.hardware\.locked && !visibilityOnly/);
+  });
+
+  it("gives fixed Zones and Channels sublayers non-destructive visibility and lock masks", async () => {
     const panelSource = await readFile("components/lighting/designer/designer-ui.tsx", "utf8");
     const workspaceSource = await readFile("components/lighting/partitura-workspace.tsx", "utf8");
 
-    assert.match(panelSource, /label="Zones"[\s\S]{0,220}visible=\{designer\.zones\.every/);
-    assert.match(panelSource, /onSetDiffusorFolderVisibility\("zones", !designer\.zones\.every/);
-    assert.match(panelSource, /label="Channels"[\s\S]{0,240}visible=\{designer\.channels\.every/);
-    assert.match(panelSource, /onSetDiffusorFolderVisibility\("channels", !designer\.channels\.every/);
+    assert.match(panelSource, /label="Zones"[\s\S]{0,600}visible=\{designer\.systemSublayers\.zones\.visible\}/);
+    assert.match(panelSource, /onPatchSystemSublayer\("zones", \{ visible:/);
+    assert.match(panelSource, /label="Channels"[\s\S]{0,600}visible=\{designer\.systemSublayers\.channels\.visible\}/);
+    assert.match(panelSource, /onPatchSystemSublayer\("channels", \{ locked:/);
     assert.match(panelSource, /`Hide all \$\{label\}` : `Show all \$\{label\}`/);
-    assert.match(workspaceSource, /function setDiffusorFolderVisibility\([\s\S]*?zones: designer\.zones\.map\(\(zone\) => \(\{ \.\.\.zone, visible \}\)\)[\s\S]*?channels: designer\.channels\.map\(\(channel\) => \(\{ \.\.\.channel, visible \}\)\)/);
+    assert.match(workspaceSource, /function patchDesignerSystemSublayer\([\s\S]*?systemSublayers:[\s\S]*?\[scope\]:/);
+    assert.doesNotMatch(workspaceSource, /function setDiffusorFolderVisibility/);
+  });
+
+  it("hides Lighting Setup LED indicators together with their masked String", async () => {
+    const rendererSource = await readFile("components/lighting/designer/designer-paper-renderer.ts", "utf8");
+    const emitterSection = rendererSource.slice(
+      rendererSource.indexOf("// Lighting Setup emitters"),
+      rendererSource.indexOf("if (designer.layers.faceGraphic.visible)")
+    );
+
+    assert.match(emitterSection, /route\.kind === "led_string" && route\.visible !== false && source\.stringIds\.includes\(route\.id\)/);
   });
 
   it("uses one color language for visibility and lock states across layer headers and rows", async () => {
     const panelSource = await readFile("components/lighting/designer/designer-ui.tsx", "utf8");
-    assert.match(panelSource, /function layerVisibilityStateClass[\s\S]*?border-blue-300[\s\S]*?text-muted-foreground/);
-    assert.match(panelSource, /function layerLockStateClass[\s\S]*?border-red-500[\s\S]*?border-emerald-500/);
+    assert.match(panelSource, /function layerVisibilityStateClass[\s\S]*?border-transparent[\s\S]*?border-slate-400/);
+    assert.match(panelSource, /function layerLockStateClass[\s\S]*?border-amber-500[\s\S]*?border-transparent/);
     assert.match(panelSource, /layerVisibilityStateClass\(visible !== false\)/);
     assert.match(panelSource, /layerLockStateClass\(locked === true\)/);
     assert.match(panelSource, /layerVisibilityStateClass\(layer\.visible\)/);
@@ -226,100 +350,27 @@ describe("Designer Select marquee", () => {
     assert.match(canvasSource, /event\.button === 2[\s\S]{0,120}startPanDrag\(event\)/);
     assert.match(canvasSource, /onContextMenu=\{\(event\) => event\.preventDefault\(\)\}/);
     assert.match(canvasSource, /data-designer-marquee="true"/);
-    assert.match(canvasSource, /tool === "move"[\s\S]{0,260}diffusor-selection-move/);
+    assert.match(canvasSource, /wholeObjectMoveRequested && hitSelectionKey[\s\S]{0,700}diffusor-selection-move/);
     assert.match(canvasSource, /moveDesignerMarqueeDiffusors\(drag\.original, drag\.selectionKeys, drag\.anchorKey/);
     assert.match(workspaceSource, /onMarqueeSelect=\{selectDesignerMarqueeItems\}/);
   });
 });
 
-describe("Face Graphic visibility presets", () => {
-  it("captures and applies native, projected, derived, and text object eyes without touching other layers", () => {
-    const designer = createDefaultPartituraDocument("face_visibility_presets").designer;
-    const sourceGeometryId = designer.zones[0].geometryId!;
-    designer.faceGraphics = [{ id: "face_1", name: "Face", shape: "rect", x: 1, y: 1, width: 10, height: 5, passMode: "clear", filterColor: "#FFFFFF", visible: true, locked: false, opacity: 1 }];
-    designer.projections = [
-      { id: "projection_face", name: "Face projection", geometryId: "geometry_projection_face", sourceGeometryId, targetLayer: "faceGraphic", linked: true, visible: false },
-      { id: "projection_reference", name: "Reference projection", geometryId: "geometry_projection_reference", sourceGeometryId, targetLayer: "reference", linked: true, visible: true }
-    ];
-    designer.derivedGeometries = [{ id: "derived_face", name: "Face offset", geometryId: "geometry_derived_face", sourceGeometryId, targetLayer: "faceGraphic", operation: "offset", distanceMm: 2, join: "round", miterLimit: 4, visible: true }];
-    designer.texts = [{ id: "text_face", name: "Face text", text: "A", fontId: DEFAULT_DESIGNER_FONT_ID, fontHash: designerFontResource(DEFAULT_DESIGNER_FONT_ID)!.hash, fontSizeMm: 20, trackingMm: 0, lineHeight: 1.2, alignment: "left", x: 1, y: 1, targetLayer: "faceGraphic", visible: false, locked: false, opacity: 1 }];
-
-    assert.deepEqual(faceGraphicObjectKeys(designer), ["faceGraphic:face_1", "projection:projection_face", "derived:derived_face", "text:text_face"]);
-    assert.deepEqual(visibleFaceGraphicObjectKeys(designer), ["faceGraphic:face_1", "derived:derived_face"]);
-    const applied = applyFaceGraphicObjectVisibility(designer, ["projection:projection_face", "text:text_face"]);
-    assert.equal(applied.faceGraphics[0].visible, false);
-    assert.equal(applied.projections[0].visible, true);
-    assert.equal(applied.projections[1].visible, true);
-    assert.equal(applied.derivedGeometries[0].visible, false);
-    assert.equal(applied.texts[0].visible, true);
-    assert.equal(sameFaceGraphicVisibility(visibleFaceGraphicObjectKeys(applied), ["projection:projection_face", "text:text_face"]), true);
-  });
-
-  it("persists custom presets while keeping them outside electrical compilation", () => {
-    const baseline = normalizeDefaultSignLayout(JSON.parse(JSON.stringify(createDefaultPartituraDocument("face_visibility_persistence"))));
-    const compileBefore = designerCompileSignature(baseline.designer);
-    baseline.designer.faceGraphicVisibilityPresets = [{ id: "preset_stencil", name: "Stencil", visibleObjectKeys: ["faceGraphic:letter_u", "derived:u_offset", "derived:u_offset"] }];
-    const normalized = normalizeDefaultSignLayout(JSON.parse(JSON.stringify(baseline)));
-    assert.deepEqual(normalized.designer.faceGraphicVisibilityPresets, [{ id: "preset_stencil", name: "Stencil", visibleObjectKeys: ["faceGraphic:letter_u", "derived:u_offset"] }]);
-    assert.equal(designerCompileSignature(normalized.designer), compileBefore);
-  });
-
-  it("keeps the Face Graphic preset bar limited to create, update, delete, and visibility application", async () => {
-    const panelSource = await readFile("components/lighting/designer/designer-ui.tsx", "utf8");
-    assert.match(panelSource, /FaceGraphicVisibilityBar[\s\S]*?All on[\s\S]*?All off/);
-    assert.match(panelSource, /scopeLabel="Face Graphic"/);
-    assert.match(panelSource, /aria-label=\{`Create \$\{scopeLabel\} visibility preset`\}/);
-    assert.match(panelSource, /aria-label=\{`Update \$\{scopeLabel\} visibility preset`\}/);
-    assert.match(panelSource, /aria-label=\{`Delete \$\{scopeLabel\} visibility preset`\}/);
-    assert.match(panelSource, /title="Create visibility preset"/);
-    assert.match(panelSource, /title="Delete visibility preset\?"/);
-    assert.doesNotMatch(panelSource, /window\.(?:prompt|confirm)/);
-  });
-});
-
-describe("Diffusors visibility presets", () => {
-  it("captures and applies every Diffusors object eye without touching Face Graphic or Reference", () => {
-    const designer = createDefaultPartituraDocument("diffusor_visibility_presets").designer;
-    const sourceGeometryId = designer.zones[0].geometryId!;
-    designer.channels = [{ id: "channel_1", name: "Channel", widthMm: 10, points: [{ x: 0, y: 0 }, { x: 5, y: 5 }], pathMode: "straight", closed: false, cap: "round", visible: false, locked: false, opacity: 1 }];
-    designer.faceGraphics = [{ id: "face_1", name: "Face", shape: "rect", x: 1, y: 1, width: 10, height: 5, passMode: "clear", filterColor: "#FFFFFF", visible: true, locked: false, opacity: 1 }];
-    designer.projections = [
-      { id: "projection_zones", name: "Zone projection", geometryId: "geometry_projection_zones", sourceGeometryId, targetLayer: "zones", linked: true, visible: false },
-      { id: "projection_reference", name: "Reference projection", geometryId: "geometry_projection_reference", sourceGeometryId, targetLayer: "reference", linked: true, visible: true }
-    ];
-    designer.derivedGeometries = [{ id: "derived_zones", name: "Zone offset", geometryId: "geometry_derived_zones", sourceGeometryId, targetLayer: "zones", operation: "offset", distanceMm: 2, join: "round", miterLimit: 4, visible: true }];
-    designer.texts = [{ id: "text_zones", name: "Zone text", text: "A", fontId: DEFAULT_DESIGNER_FONT_ID, fontHash: designerFontResource(DEFAULT_DESIGNER_FONT_ID)!.hash, fontSizeMm: 20, trackingMm: 0, lineHeight: 1.2, alignment: "left", x: 1, y: 1, targetLayer: "zones", visible: false, locked: false, opacity: 1 }];
-
-    assert.ok(diffusorObjectKeys(designer).includes("channel:channel_1"));
-    assert.ok(diffusorObjectKeys(designer).includes("projection:projection_zones"));
-    assert.ok(visibleDiffusorObjectKeys(designer).includes("derived:derived_zones"));
-    assert.equal(visibleDiffusorObjectKeys(designer).includes("channel:channel_1"), false);
-    const applied = applyDiffusorObjectVisibility(designer, ["channel:channel_1", "projection:projection_zones", "text:text_zones"]);
-    assert.equal(applied.zones.every((zone) => zone.visible === false), true);
-    assert.equal(applied.channels[0].visible, true);
-    assert.equal(applied.projections[0].visible, true);
-    assert.equal(applied.projections[1].visible, true);
-    assert.equal(applied.derivedGeometries[0].visible, false);
-    assert.equal(applied.texts[0].visible, true);
-    assert.equal(applied.faceGraphics[0].visible, true);
-    assert.equal(sameDiffusorVisibility(visibleDiffusorObjectKeys(applied), ["channel:channel_1", "projection:projection_zones", "text:text_zones"]), true);
-  });
-
-  it("persists Diffusors presets independently and exposes the same compact manager", async () => {
-    const baseline = normalizeDefaultSignLayout(JSON.parse(JSON.stringify(createDefaultPartituraDocument("diffusor_visibility_persistence"))));
-    const compileBefore = designerCompileSignature(baseline.designer);
-    baseline.designer.faceGraphicVisibilityPresets = [{ id: "face_view", name: "Face", visibleObjectKeys: ["faceGraphic:face_1"] }];
-    baseline.designer.diffusorVisibilityPresets = [{ id: "diffusor_view", name: "Routing", visibleObjectKeys: ["zone:zone_1", "channel:channel_1", "faceGraphic:invalid", "zone:zone_1"] }];
-    const normalized = normalizeDefaultSignLayout(JSON.parse(JSON.stringify(baseline)));
-    assert.deepEqual(normalized.designer.diffusorVisibilityPresets, [{ id: "diffusor_view", name: "Routing", visibleObjectKeys: ["zone:zone_1", "channel:channel_1"] }]);
-    assert.deepEqual(normalized.designer.faceGraphicVisibilityPresets, [{ id: "face_view", name: "Face", visibleObjectKeys: ["faceGraphic:face_1"] }]);
-    assert.equal(designerCompileSignature(normalized.designer), compileBefore);
+describe("Layers visibility", () => {
+  it("uses layer eyes only and drops obsolete visibility presets from normalized JSON", async () => {
+    const legacy = JSON.parse(JSON.stringify(createDefaultPartituraDocument("obsolete_visibility_presets")));
+    legacy.designer.faceGraphicVisibilityPresets = [{ id: "face_view", name: "Face", visibleObjectKeys: ["faceGraphic:face_1"] }];
+    legacy.designer.diffusorVisibilityPresets = [{ id: "diffusor_view", name: "Routing", visibleObjectKeys: ["zone:zone_1"] }];
+    legacy.designer.systemSublayers.faceGraphic = { visible: false, locked: true };
+    const normalized = normalizeDefaultSignLayout(legacy);
+    assert.equal("faceGraphicVisibilityPresets" in normalized.designer, false);
+    assert.equal("diffusorVisibilityPresets" in normalized.designer, false);
+    assert.equal("faceGraphic" in normalized.designer.systemSublayers, false);
 
     const panelSource = await readFile("components/lighting/designer/designer-ui.tsx", "utf8");
-    assert.match(panelSource, /label="Diffusors"[\s\S]*?<DiffusorVisibilityBar/);
-    assert.match(panelSource, /function DiffusorVisibilityBar[\s\S]*?designer\.diffusorVisibilityPresets/);
-    assert.match(panelSource, /scopeLabel="Diffusors"[\s\S]*?diffusorObjectKeys\(designer\)[\s\S]*?visibleDiffusorObjectKeys\(designer\)/);
-    assert.doesNotMatch(panelSource, /window\.(?:prompt|confirm)/);
+    assert.match(panelSource, /label="Channels"\s+icon=\{Waves\}/);
+    assert.doesNotMatch(panelSource, /label="Elements"|systemSublayers\.faceGraphic/);
+    assert.doesNotMatch(panelSource, /VisibilityPreset|Current visibility|All on|All off/);
   });
 });
 
@@ -406,6 +457,21 @@ describe("New partitura document", () => {
       [{ x: 7, y: 3 }, { x: 7, y: 3 }]
     );
     assert.deepEqual(moved.zones[2], normalized.zones[2]);
+  });
+
+  it("keeps the compile signature stable when PostgreSQL reorders effect-target member keys", () => {
+    const designer = createDefaultPartituraDocument("effect_target_signature").designer!;
+    const memberId = designer.zones[0].id;
+    const typeFirst = {
+      ...designer,
+      groups: [{ id: "group_1", name: "Letters", members: [{ type: "zone" as const, id: memberId }] }]
+    };
+    const idFirst = {
+      ...designer,
+      groups: [{ id: "group_1", name: "Letters", members: [{ id: memberId, type: "zone" as const }] }]
+    };
+
+    assert.equal(designerCompileSignature(typeFirst), designerCompileSignature(idFirst));
   });
 });
 
@@ -819,22 +885,6 @@ describe("SVG artwork path import", () => {
   });
 });
 
-describe("Generator workspace tabs", () => {
-  it("exposes only Overview while keeping registry-based tab state", async () => {
-    const source = await readFile("components/lighting/partitura-workspace.tsx", "utf8");
-    const tabsStart = source.indexOf("const tabs = [");
-    const tabsEnd = source.indexOf("];", tabsStart);
-    const tabRegistry = source.slice(tabsStart, tabsEnd);
-
-    assert.ok(tabsStart >= 0 && tabsEnd > tabsStart);
-    assert.match(tabRegistry, /id: "overview", label: "Overview"/);
-    assert.doesNotMatch(tabRegistry, /label: "Scenes"|label: "Simulator"/);
-    assert.match(source, /tabs\.some\(\(tab\) => tab\.id === requestedTab\)/);
-    assert.doesNotMatch(source, /<ScenesTab\s/);
-    assert.doesNotMatch(source, /<SimulatorTab\s/);
-  });
-});
-
 describe("Designer navigation and tenant-scoped project filtering", () => {
   it("keeps Designer as the single menu entry and redirects legacy Generator routes", async () => {
     const [menuSource, generatorPage, generatorDetailPage] = await Promise.all([
@@ -860,9 +910,10 @@ describe("Designer navigation and tenant-scoped project filtering", () => {
     ]);
 
     assert.match(projectsRoute, /listProjects\(menu\.tenant\.client_id\)/);
-    assert.match(partiturasRoute, /listPartituras\(menu\.tenant\.client_id\)/);
+    assert.match(partiturasRoute, /listPartituraSummaries\(menu\.tenant\.client_id\)/);
     assert.match(projectsServer, /client\.id::text = \$1 or client\.client_key = \$1/);
     assert.match(partiturasServer, /c\.id::text = \$1 or c\.client_key = \$1/);
+    assert.match(partiturasServer, /jsonb_array_length\(p\.document_json #> '\{compiledLayout,pixelMap\}'\)/);
     assert.match(designerSource, /key: "projectId"/);
     assert.match(designerSource, /allLabel: "All projects"/);
     assert.doesNotMatch(designerSource, /client_id.*searchParams|searchParams.*client_id/);
@@ -914,6 +965,56 @@ describe("Designer snap-to-grid control", () => {
     assert.match(canvasSource, /type: "alignment-guide-move"/);
     assert.match(canvasSource, /tool === "move" && designer\.alignmentMarks\.enabled && !designer\.alignmentMarks\.locked && pointNearAlignmentMarks/);
     assert.match(rendererSource, /drawPaperAlignmentMarks\(designer/);
+  });
+});
+
+describe("Channel lightbox Zone generation", () => {
+  const parent: DesignerGeometry = {
+    id: "geometry_zone_i",
+    kind: "rect",
+    x: 0,
+    y: 0,
+    width: 20,
+    height: 20
+  };
+  const channel: DesignerChannelForm = {
+    id: "channel_i",
+    name: "i inset 4 mm",
+    points: [{ x: 3, y: 3 }, { x: 17, y: 3 }, { x: 17, y: 17 }, { x: 3, y: 17 }],
+    pathMode: "straight",
+    widthMm: 10,
+    closed: true,
+    cap: "butt",
+    fabricationSurface: "front",
+    visible: true,
+    locked: false,
+    opacity: 1
+  };
+
+  it("materializes the region inside a closed Channel and names it from its containing profile", () => {
+    const result = generateDesignerLightboxZone(channel, [{ name: "i", geometry: parent }], "zone_9", []);
+
+    assert.equal(result.issue, undefined);
+    assert.equal(result.profileName, "i");
+    assert.equal(result.zone?.name, "i lightbox");
+    assert.equal(result.zone?.shape, "polygon");
+    assert.equal(result.zone?.geometryId, "geometry_zone_zone_9");
+    assert.ok((result.zone?.width ?? 0) < 14);
+    assert.ok((result.zone?.height ?? 0) < 14);
+    assert.ok((result.zone?.points?.length ?? 0) >= 4);
+  });
+
+  it("uses deterministic suffixes and rejects invalid physical inputs", () => {
+    assert.equal(uniqueLightboxZoneName("i", ["i lightbox", "i lightbox 2"]), "i lightbox 3");
+    assert.equal(generateDesignerLightboxZone({ ...channel, closed: false }, [{ name: "i", geometry: parent }], "zone_10", []).issue, "open-channel");
+    const outside = { ...channel, points: channel.points.map((point) => ({ ...point, x: point.x + 30 })) };
+    assert.equal(generateDesignerLightboxZone(outside, [{ name: "i", geometry: parent }], "zone_11", []).issue, "missing-profile");
+  });
+
+  it("exposes one contextual command without changing the Channel or its mother profile", async () => {
+    const workspaceSource = await readFile("components/lighting/partitura-workspace.tsx", "utf8");
+    assert.match(workspaceSource, /Generate lightbox Zone/);
+    assert.match(workspaceSource, /zones: \[\.\.\.designer\.zones, result\.zone\]/);
   });
 });
 
@@ -2185,12 +2286,24 @@ describe("Designer global command bar", () => {
     assert.match(commandBar, /aria-busy=\{compiling\}/);
     assert.match(workspaceSource, /const MIN_COMPILE_INDICATOR_MS = 700/);
     assert.match(workspaceSource, /requestAnimationFrame\(\(\) => requestAnimationFrame\(\(\) => resolve\(\)\)\)/);
-    assert.match(workspaceSource, /setCompiling\(true\)[\s\S]*?waitForCompileIndicatorPaint\(\)[\s\S]*?await save\(nextDocument, null\)[\s\S]*?indicatorRemainingMs[\s\S]*?setCompiling\(false\)/);
+    assert.match(workspaceSource, /setCompiling\(true\)[\s\S]*?waitForCompileIndicatorPaint\(\)[\s\S]*?await compileDesignerDocument\([\s\S]*?await save\(nextDocument\)[\s\S]*?indicatorRemainingMs[\s\S]*?setCompiling\(false\)/);
     assert.match(workspaceSource, /role="status"[\s\S]*?aria-live="assertive"[\s\S]*?Compiling physical layout…/);
     assert.match(commandBar, /Review issues \(\{compileIssueCount\}\)/);
     assert.match(commandBar, /onClick=\{\(\) => setCompileIssuesOpen\(true\)\}/);
     assert.doesNotMatch(commandBar, /hidden xl:inline">\{compileControlLabel\}/);
     assert.match(commandBar, /disabled=\{editorMode !== "animate" && !canAnimate\}/);
+  });
+
+  it("compiles once in a Worker and keeps Save free of generated artifacts", async () => {
+    const [workspaceSource, compileClientSource] = await Promise.all([
+      readFile("components/lighting/partitura-workspace.tsx", "utf8"),
+      readFile("components/lighting/designer/designer-compile-client.ts", "utf8")
+    ]);
+    assert.match(compileClientSource, /new Worker\(new URL\("\.\/designer-compile-worker\.ts"/);
+    assert.doesNotMatch(compileClientSource, /^import \{ buildDocumentFromDesigner \}/m);
+    assert.doesNotMatch(workspaceSource, /generatedPartitura: persistedGeneratedPartitura/);
+    assert.match(workspaceSource, /clearGeneratedPartitura/);
+    assert.match(workspaceSource, /compressedJsonRequest/);
   });
 });
 
@@ -2211,7 +2324,7 @@ describe("Designer contextual properties", () => {
     ]);
     const contextualBar = workspaceSource.slice(
       workspaceSource.indexOf('{editorMode === "design" ? <div className="flex h-10'),
-      workspaceSource.indexOf('<div className={`grid min-h-0 flex-1')
+      workspaceSource.indexOf('className={`grid min-h-0 flex-1')
     );
     const detailFields = designerUiSource.slice(designerUiSource.indexOf("function detailFields("), designerUiSource.indexOf("function IconToggle("));
 
@@ -2226,7 +2339,7 @@ describe("Designer contextual properties", () => {
   it("reuses one fixed Copy, Paste and Delete action group across copyable Layers objects", async () => {
     const workspaceSource = await readFile("components/lighting/partitura-workspace.tsx", "utf8");
     assert.match(workspaceSource, /selection\.type === "artwork" \|\| selection\.type === "zone" \|\| selection\.type === "channel" \|\| selection\.type === "face_graphic" \|\| selection\.type === "route"/);
-    assert.match(workspaceSource, /if \(clipboard\.type === "channel"\)[\s\S]*?channels: \[\.\.\.designer\.channels, copy\]/);
+    assert.match(workspaceSource, /if \(clipboard\.type === "channel"\)[\s\S]*?channels: insertDesignerCopyAbove\(designer\.channels, source\.id, copy\)/);
 
     const deleteStart = workspaceSource.indexOf("function deleteSelection()");
     const deleteEnd = workspaceSource.indexOf("function copySelection()", deleteStart);
@@ -2240,6 +2353,19 @@ describe("Designer contextual properties", () => {
     assert.match(actions, /aria-label="Copy selected object"[\s\S]*aria-label="Paste copied object"[\s\S]*aria-label="Delete selection"/);
     assert.match(actions, /disabled=\{!canPasteSelection\}/);
     assert.match(actions, /<Copy [^>]*\/>[\s\S]*<ClipboardPaste [^>]*\/>[\s\S]*<Trash2 [^>]*\/>/);
+
+    const focusStart = workspaceSource.indexOf("function focusCreatedCanvasObject(");
+    const pasteStart = workspaceSource.indexOf("function pasteSelection()", focusStart);
+    const pasteEnd = workspaceSource.indexOf("function zoomToFit()", pasteStart);
+    const focusSource = workspaceSource.slice(focusStart, pasteStart);
+    const pasteSource = workspaceSource.slice(pasteStart, pasteEnd);
+    const splitStart = workspaceSource.indexOf("function splitRoute(");
+    const splitEnd = workspaceSource.indexOf("function handleCutRoutePoint(", splitStart);
+    const splitSource = workspaceSource.slice(splitStart, splitEnd);
+    assert.match(focusSource, /setGeometrySelections\(isDesignerGeometrySelection\(nextSelection\) \? \[nextSelection\] : \[\]\)/);
+    assert.match(focusSource, /setSelectedRouteIds\(nextSelection\.type === "route" \? \[nextSelection\.id\] : \[\]\)/);
+    assert.equal(pasteSource.match(/focusCreatedCanvasObject\(/g)?.length, 5);
+    assert.match(splitSource, /focusCreatedCanvasObject\(\{ type: "route", id: secondRoute\.id \}\)/);
   });
 
   it("keeps object workflow actions visible and forbids contextual catch-all menus", async () => {
@@ -2272,6 +2398,16 @@ describe("Designer contextual properties", () => {
     assert.match(contextualBar, /<span>Union<\/span>[\s\S]*<span>Subtract<\/span>[\s\S]*<span>Intersect<\/span>[\s\S]*<span>Exclude<\/span>/);
     assert.doesNotMatch(contextualBar, /title="(?:More|Actions|Path operations)"|aria-label="(?:More|Actions|Path operations)"|<Ellipsis |Path operations/);
     assert.match(contextualBar, /label="Offset"[\s\S]*<Tally2 className="h-4 w-4" \/> Offset Path[\s\S]*label="Project to"[\s\S]*Project Geometry/);
+    assert.match(contextualBar, /selectedZone \? <>[\s\S]*Generate Channel[\s\S]*Generate LED string/);
+    assert.match(contextualBar, /label="Alignment"[\s\S]*value=\{channelPathAlignment\}[\s\S]*Left edge[\s\S]*Center[\s\S]*Right edge[\s\S]*Inside offset[\s\S]*Outside offset/);
+    assert.match(contextualBar, /label="Alignment offset" value=\{channelPathOffsetMm\}/);
+    assert.match(workspaceSource, /selectedZoneAlignedPaths\(designer\.channelRouterDiameterMm\)/);
+    assert.match(workspaceSource, /selectedZoneAlignedPaths\(designer\.ledPcbWidthMm\)/);
+    assert.match(workspaceSource, /createLedStringsFromZonePaths\(selectedZone, result\.paths, designer, surface\)/);
+    const stringGenerationStart = workspaceSource.indexOf("function generateOffsetStringsFromSelectedZone()");
+    const stringGenerationEnd = workspaceSource.indexOf("function generateLightboxZoneFromSelectedChannel()", stringGenerationStart);
+    const stringGenerationSource = workspaceSource.slice(stringGenerationStart, stringGenerationEnd);
+    assert.doesNotMatch(stringGenerationSource, /setSelection\(\{ type: "route"|setSelectedRouteIds|setGeometrySelections|setActiveLayer\("strings"\)|setActiveLayerTarget/);
     assert.match(contextualBar, /Create Zones[\s\S]*Generate Holes[\s\S]*Convert to paths/);
   });
 
@@ -2598,6 +2734,23 @@ describe("Channel creation from selected paths", () => {
     assert.deepEqual(route.points[0], route.points[route.points.length - 1]);
     assert.deepEqual(route.points[0], { x: 4, y: 3 });
   });
+
+  it("generates independent offset strings explicitly hosted by their source Zone", () => {
+    const designer = createNewPartituraDocument("zone_offset_string").designer;
+    const zone: DesignerZoneForm = { id: "zone_offset", name: "Letter A", shape: "polygon", x: 0, y: 0, width: 5, height: 5, points: [{ x: 0, y: 0 }, { x: 5, y: 0 }, { x: 5, y: 5 }, { x: 0, y: 5 }], pathMode: "straight", visible: true, locked: false, opacity: 1 };
+    const paths = [
+      { points: [{ x: 1, y: 1 }, { x: 4, y: 1 }, { x: 4, y: 4 }, { x: 1, y: 4 }], pathMode: "straight" as const, closed: true },
+      { points: [{ x: 2, y: 2 }, { x: 3, y: 2 }, { x: 3, y: 3 }, { x: 2, y: 3 }], pathMode: "straight" as const, closed: true }
+    ];
+    const routes = createLedStringsFromZonePaths(zone, paths, designer, "front");
+
+    assert.equal(routes.length, 2);
+    assert.notEqual(routes[0].id, routes[1].id);
+    assert.deepEqual(routes.map((route) => route.lightingHost), [{ type: "zone", id: zone.id }, { type: "zone", id: zone.id }]);
+    assert.deepEqual(routes.map((route) => route.designSurface), ["front", "front"]);
+    assert.deepEqual(routes.map((route) => route.name), [`${zone.name} string`, `${zone.name} string 2`]);
+    assert.deepEqual(routes.map((route) => route.points[0]), routes.map((route) => route.points.at(-1)));
+  });
 });
 
 describe("automatic string connection", () => {
@@ -2665,7 +2818,9 @@ describe("safe whole-object movement", () => {
     assert.match(canvasSource, /tool !== "move" \|\| event\.ctrlKey \|\| event\.metaKey/);
     assert.match(canvasSource, /tool === "move" \? designerWholeObjectHit\(rawHit\) : rawHit/);
     assert.match(canvasSource, /tool === "select" \? designerInitialSelectHit\(pickedHit, pickedOwnerIsSelected\) : pickedHit/);
-    assert.match(canvasSource, /if \(tool !== "move" \|\| designer\.layers\.zones\.locked\) return;\s*setDrag\(\{ type: "zone-move"/);
+    assert.match(canvasSource, /tool === "select"[\s\S]*?pickedOwnerIsSelected[\s\S]*?hit\.type === wholeHit\.type/);
+    assert.match(canvasSource, /if \(!wholeObjectMoveRequested \|\| designer\.layers\.zones\.locked \|\| zone\.locked\) return;\s*setDrag\(\{ type: "zone-move"/);
+    assert.match(canvasSource, /pickDesignerHit\(hitTestDesigner, activeLayer/);
   });
 });
 
@@ -2765,6 +2920,13 @@ describe("Face Graphic authoring", () => {
 });
 
 describe("Face Graphic optical renderer", () => {
+  it("keeps physically present pixels without an optical source out of As built", async () => {
+    const rendererSource = await readFile("components/lighting/player/gpu/webgl2-player-renderer.ts", "utf8");
+
+    assert.match(rendererSource, /if \(this\.presentation === "led_map"\) \{[\s\S]{0,300}this\.drawBatch\(this\.allPixels/);
+    assert.doesNotMatch(rendererSource, /directPixels/);
+  });
+
   it("clips Front illumination to its owning zone", async () => {
     const zone = { id: "zone_front", kind: "zone" as const } as VisualShape;
     const channel = { id: "channel_front", kind: "channel" as const } as VisualShape;
@@ -3033,6 +3195,35 @@ describe("timeline clip placement", () => {
       { id: "a", name: "A", target: "full_sign", effect: "solid", blend: "replace", startMs: 0, durationMs: 1000, layer: 0, params: {} },
       { id: "b", name: "B", target: "full_sign", effect: "solid", blend: "replace", startMs: 1000, durationMs: 1000, layer: 1, params: {} }
     ] }), 2);
+  });
+
+  it("coalesces clip drags into one cancelable preview generation", async () => {
+    const [timelineSource, workspaceSource] = await Promise.all([
+      readFile("components/lighting/designer/designer-animate-timeline.tsx", "utf8"),
+      readFile("components/lighting/partitura-workspace.tsx", "utf8")
+    ]);
+
+    assert.match(timelineSource, /onEditInteractionStart\?\.\(\)[\s\S]*bindWindowDrag[\s\S]*onEditInteractionEnd\?\.\(\)/);
+    assert.match(workspaceSource, /if \(animationTimelineInteractionRef\.current\) return;[\s\S]*ANIMATION_PREVIEW_DEBOUNCE_MS/);
+    assert.match(workspaceSource, /animationGenerationAbortRef\.current\?\.abort\(\)/);
+    assert.match(workspaceSource, /signal: abortController\.signal/);
+    assert.doesNotMatch(
+      workspaceSource.slice(workspaceSource.indexOf("async function previewAnimation"), workspaceSource.indexOf("async function publishScene")),
+      /replaceDocument\(previewDocument\)/
+    );
+    assert.doesNotMatch(
+      workspaceSource.slice(workspaceSource.indexOf("function updateAnimationDocument"), workspaceSource.indexOf("const canCopySelection")),
+      /void previewAnimation/
+    );
+  });
+
+  it("reloads the animation Worker without rebuilding optical masks for clip-only changes", async () => {
+    const surfaceSource = await readFile("components/lighting/player/player-surface.tsx", "utf8");
+
+    assert.match(surfaceSource, /visualSceneCacheRef\.current\?\.designer !== designer \|\| visualSceneCacheRef\.current\.layout !== layout/);
+    assert.match(surfaceSource, /void controller\.load\(partitura\)/);
+    assert.match(surfaceSource, /\}, \[partitura\]\);/);
+    assert.match(surfaceSource, /renderer\.loadScene\(nextScene\)[\s\S]*\}, \[visualScene\]\);/);
   });
 });
 
@@ -3397,17 +3588,40 @@ describe("timeline clip target selection", () => {
     const target = designer.zones[0];
     const string = designer.routes.find((route) => route.kind === "led_string");
     assert.ok(target && string);
+    const channel: DesignerChannelForm = {
+      id: "channel_fondo",
+      name: "Fondo channel",
+      points: [{ x: 44, y: 4 }, { x: 100, y: 4 }],
+      pathMode: "straight",
+      widthMm: 10,
+      closed: false,
+      cap: "round",
+      fabricationSurface: "rear",
+      visible: true,
+      locked: false,
+      opacity: 1
+    };
+    designer.channels = [channel];
     designer.lightSources = [
       { ...createDefaultOpticalTreatment("zone", target.id, "front"), id: "source_front" },
-      { ...createDefaultOpticalTreatment("zone", target.id, "halo"), id: "source_halo" }
+      { ...createDefaultOpticalTreatment("zone", target.id, "halo"), id: "source_halo" },
+      { ...createDefaultOpticalTreatment("channel", channel.id, "halo"), id: "source_channel_halo" }
     ];
+    designer.groups = [{ id: "group_letters", name: "Letters", members: [{ type: "zone", id: target.id }, { type: "channel", id: channel.id }] }];
 
     const compiled = buildDocumentFromDesigner({ ...createDefaultPartituraDocument("typed_global_targets"), designer });
+    assert.match(designerGroupLightTargetId("group_letters", "rear"), /^[A-Za-z][A-Za-z0-9_-]*$/);
     assert.equal(compiled.compiledLayout?.groups.find((group) => group.id === "full_front"), undefined);
-    assert.deepEqual(compiled.compiledLayout?.groups.find((group) => group.id === "full_halo")?.members, [{ type: "zone", id: "source_halo" }]);
+    assert.deepEqual(compiled.compiledLayout?.groups.find((group) => group.id === "full_halo")?.members, [{ type: "zone", id: "source_halo" }, { type: "zone", id: "source_channel_halo" }]);
+    assert.equal(compiled.compiledLayout?.groups.find((group) => group.id === designerGroupLightTargetId("group_letters", "front")), undefined);
+    assert.deepEqual(compiled.compiledLayout?.groups.find((group) => group.id === designerGroupLightTargetId("group_letters", "rear"))?.members, [{ type: "zone", id: "source_halo" }, { type: "zone", id: "source_channel_halo" }]);
     assert.deepEqual(compiledStringIdsForSource(compiled.compiledLayout, "source_front"), []);
     assert.deepEqual(compiledStringIdsForSource(compiled.compiledLayout, "source_halo"), [string.id]);
-    assert.deepEqual(compiled.designer?.lightSources.map((source) => source.stringIds), [[], [string.id]]);
+    assert.deepEqual(compiled.designer?.lightSources.map((source) => source.stringIds), [[], [string.id], [string.id]]);
+    const options = animationClipTargetOptions(compiled.designer!, compiled.compiledLayout);
+    assert.equal(options.find((option) => option.id === designerGroupLightTargetId("group_letters", "front"))?.available, false);
+    assert.equal(options.find((option) => option.id === designerGroupLightTargetId("group_letters", "rear"))?.available, true);
+    assert.deepEqual(designerOpticalTargetsForClipTarget(compiled.designer!, designerGroupLightTargetId("group_letters", "rear")), [{ type: "zone", id: target.id }, { type: "channel", id: channel.id }]);
   });
 
   it("omits an empty global light-source target instead of generating an invalid fallback zone", () => {
@@ -3423,13 +3637,18 @@ describe("timeline clip target selection", () => {
     assert.deepEqual(resolveGeneratedPartituraTarget("installation", layout), { type: "installation" });
   });
 
-  it("requires a selected source with an assigned strip to create a clip", async () => {
+  it("creates clips through one categorized Front/Rear target picker", async () => {
     const source = await readFile("components/lighting/designer/designer-animate-timeline.tsx", "utf8");
 
-    assert.match(source, /creatableSourceIds\.has\(targetId\)/);
-    assert.match(source, /Select a zone with an assigned light strip/);
-    assert.match(source, /Select label="Scope"/);
-    assert.doesNotMatch(source, /clipCreationTargets\[0\]\?\.id \?\? "full_sign"/);
+    assert.match(source, /title="Create a clip and choose its target"/);
+    assert.match(source, /function AnimationTargetPicker/);
+    assert.match(source, /\["front", "rear"\]/);
+    assert.match(source, /Effect targets/);
+    assert.match(source, /Zones/);
+    assert.match(source, /Channels/);
+    assert.match(source, /Search targets/);
+    assert.doesNotMatch(source, /Select a zone with an assigned light strip/);
+    assert.doesNotMatch(source, /Select label="Scope"/);
   });
 
   it("renames the selected clip from its inspector", async () => {
@@ -3526,20 +3745,24 @@ describe("work lines", () => {
     assert.match(workLinesFolder, /count=\{designer\.workLines\.length\}/);
     assert.match(workLinesFolder, /<WorkLineRows designer=\{designer\}/);
     assert.match(workLinesFolder, /visible=\{designer\.workLinesVisible\}/);
-    assert.match(imagesFolder, /visible=\{imagesVisible\}[\s\S]*?onSetArtworkFolderVisibility\("images"/);
-    assert.match(referenceFolder, /visible=\{referenceVisible\}[\s\S]*?onSetArtworkFolderVisibility\("reference"/);
+    assert.match(imagesFolder, /visible=\{designer\.systemSublayers\.artwork\.visible\}[\s\S]*?onPatchSystemSublayer\("artwork"/);
+    assert.match(referenceFolder, /visible=\{designer\.systemSublayers\.reference\.visible\}[\s\S]*?onPatchSystemSublayer\("reference"/);
     assert.match(workLinesFolder, /onSetArtworkFolderVisibility\("workLines"/);
     assert.equal((panelSource.match(/<WorkLineRows designer=\{designer\}/g) ?? []).length, 1);
-    assert.match(panelSource, /No Work Lines yet\./);
+    assert.match(panelSource, /if \(!lines\.length\) return null/);
+    assert.doesNotMatch(panelSource, /No Work Lines/);
+    assert.doesNotMatch(panelSource, /Use the Image tool to place/);
+    assert.match(panelSource, /<LayerOpacityControl label=\{label\} value=\{layer\.opacity\}/);
+    assert.match(panelSource, /aria-expanded=\{open\}[\s\S]*?<Blend className="h-3\.5 w-3\.5"/);
     assert.match(panelSource, /onSetArtworkVisibility\(patch\.visible\)/);
     assert.match(workspaceSource, /function setArtworkVisibility\(visible: boolean\)[\s\S]*?artwork: \{ \.\.\.designer\.layers\.artwork, visible \},[\s\S]*?reference: \{ \.\.\.designer\.layers\.reference, visible \}/);
-    assert.match(workspaceSource, /function setArtworkFolderVisibility\(folder: "images" \| "reference" \| "workLines", visible: boolean\)/);
+    assert.match(workspaceSource, /function setArtworkFolderVisibility\(_folder: "workLines", visible: boolean\)/);
     assert.match(panelSource, /workLines: true/);
     assert.match(canvasSource, /name: `Work line \$\{next\}`,[\s\S]*?layer: "artwork"/);
     const workLineRenderer = rendererSource.slice(rendererSource.indexOf("function drawPaperWorkLine"), rendererSource.indexOf("function drawPaperBuildArea"));
     assert.doesNotMatch(workLineRenderer, /dashArray/);
     assert.match(rendererSource, /dashArray: draft\.target === "work_line" \? undefined : \[8, 5\]/);
-    assert.match(workspaceSource, /activeLayer === "artwork" \|\| activeLayer === "reference" \|\| activeLayer === "zones" \|\| activeLayer === "faceGraphic" \? \([\s\S]*?Work line · continuous construction reference/);
+    assert.match(workspaceSource, /activeLayerTarget\?\.scope === "workLines" \? \([\s\S]*?Work line · continuous construction reference/);
     assert.equal(designerLayerForSelection({ type: "work_line", id: "work_line_1" }), "artwork");
   });
 
@@ -3822,7 +4045,8 @@ describe("physical light mounts", () => {
     assert.match(workspaceSource, /label="Strip preset"[\s\S]*?previewSelectedLedStripProfile/);
     assert.doesNotMatch(workspaceSource, /applySelectedLedStripProfile/);
     assert.match(workspaceSource, />Cancel<\/Button>[\s\S]*?>Apply changes<\/Button>/);
-    assert.match(workspaceSource, /designer=\{ledStripPreviewDesigner\}/);
+    assert.match(workspaceSource, /const canvasDesigner = designerWithSublayerMasks\(ledStripPreviewDesigner\)/);
+    assert.match(workspaceSource, /designer=\{canvasDesigner\}/);
     assert.match(workspaceSource, /onChange=\{updateDesignerFromCanvas\}/);
     assert.match(workspaceSource, /construction === "continuous"[\s\S]*cutMode === "free_cut"/);
     assert.match(workspaceSource, /label="LEDs \/ cut"/);
@@ -4159,11 +4383,21 @@ describe("Fabrication Plans", () => {
     assert.match(workspace, /\+ New fabrication part/);
     assert.match(workspace, /Independent \$\{projectionFabricationOperation\} path created/);
     assert.match(layers, /label="Fabrication Plans"/);
-    assert.match(layers, /Project geometry into this physical part/);
-    assert.match(layers, /expandedFabricationParts\[part\.id\] \?\? true/);
+    assert.doesNotMatch(layers, /Project geometry into this physical part/);
+    assert.match(workspace, /selectedFabricationPart[\s\S]*?ToolbarField label="Name"[\s\S]*?ToolbarField label="Side"[\s\S]*?ToolbarField label="Material"[\s\S]*?ToolbarNumber label="Thickness"/);
+    assert.match(layers, /expandedFabricationParts\[part\.id\] === true/);
     assert.match(layers, /\[part\.id\]: !expanded/);
     assert.match(workspace, /"includeFabricationPlans", "Fabrication Plans"/);
     assert.match(workspace, /file\.downloadBaseName/);
+  });
+
+  it("keeps every nested Layers disclosure collapsed until explicitly opened or selected", async () => {
+    const layers = await readFile(new URL("designer-ui.tsx", import.meta.url), "utf8");
+    assert.match(layers, /function EffectTargetDropRow[\s\S]*?useState\(false\)/);
+    assert.match(layers, /expanded=\{expanded\[sublayer\.id\] === true\}/);
+    assert.match(layers, /\[sublayer\.id\]: current\[sublayer\.id\] !== true/);
+    assert.match(layers, /containingIds[\s\S]*?next\[id\] = true/);
+    assert.doesNotMatch(layers, /expanded=\{expanded\[sublayer\.id\] !== false\}/);
   });
 
   it("shows fabrication feedback over Diffusors without making the overlay interactive", async () => {
