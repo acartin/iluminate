@@ -51,7 +51,7 @@ Effects target only these normal authoring concepts:
 - **Zone:** a named visual geometry, such as `L vertical`, `L base`, `star`,
   `background`, or `full sign`. It selects all pixelMap pixels inside that
   geometry. A pixel may belong to more than one zone.
-- **Group:** a named collection of zones and/or other groups, for example
+- **Group:** a named collection of zones, channels and/or other groups, for example
   `Letter L`, `word CARIBE`, or `full sign`. Groups create no pixels and do not
   alter wiring. They may nest, but cycles are invalid.
 - **Light source:** a named Front, Halo or Wall Wash emitter attached to a zone
@@ -64,6 +64,15 @@ The UI should use light sources and groups as the normal selectable targets for
 clips when sources exist. Legacy zone targets remain valid during migration.
 A string remains visible as physical fabrication information, not the ordinary
 effect-authoring language.
+
+Effect-target groups remain side-neutral authoring objects. Animate presents a
+Front/Rear choice before the categorized target list. Compile materializes a
+selected group side as `effect_target_<front|rear>_<groupId>` and resolves only
+enabled, mapped member light sources on that side. Rear intentionally contains
+both Halo and Wall Wash sources; it does not introduce a third construction
+plane. Zones and Channels use the same drag/drop membership flow in Layers;
+Channels remain authored as Channels and are emitted as zone-compatible targets
+only in the compiled runtime contract.
 
 A disabled light source is construction state, not an active render target.
 Clips may remain authored against it for later reuse, but generation omits them.

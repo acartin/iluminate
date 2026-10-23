@@ -95,7 +95,7 @@ Cuando cambien canvas, defaults, rutas, snap/soldadura, controlador o persistenc
 4. Verificar por API que el documento activo esperado sea visible:
 
 ```bash
-curl -s http://localhost:8420/api/lighting/partituras | jq -r '.records[] | "\(.id) \(.partituraKey) \(.name) \(.status) \(.document.designer.canvasWidthCm)cm routes=\(.document.designer.routes|length)"'
+curl -s http://localhost:8420/api/lighting/partituras | jq -r '.records[] | "\(.id) \(.partituraKey) \(.name) \(.status) \(.canvasWidthCm)cm routes=\(.routes)"'
 ```
 
 Estado local esperado tras el reset actual:

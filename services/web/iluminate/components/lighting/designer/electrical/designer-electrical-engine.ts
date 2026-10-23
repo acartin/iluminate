@@ -5,6 +5,7 @@ export {
   controllerConnectedPorts,
   controllerPortPoint,
   createLedStringFromChannel,
+  createLedStringsFromZonePaths,
   createRouteFromDraft,
   deleteDesignerRoute,
   detachSolderedRoutePoint,

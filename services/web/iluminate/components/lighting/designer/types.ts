@@ -12,6 +12,7 @@ import type {
   DesignerRouteForm,
   DesignerRouteKind,
   DesignerRouteSurface,
+  DesignerSublayerScope,
   DesignerText,
   DesignerWorkLineForm,
   DesignerZoneForm
@@ -28,6 +29,7 @@ export type DesignerSelection =
   | { type: "zone"; id: string; pointIndex?: number }
   | { type: "face_graphic"; id: string; pointIndex?: number }
   | { type: "fabrication_path"; id: string; pointIndex?: number }
+  | { type: "fabrication_part"; id: string }
   | { type: "projection"; id: string }
   | { type: "derived_geometry"; id: string }
   | { type: "text"; id: string }
@@ -39,6 +41,8 @@ export type DesignerSelection =
 export type ResizeHandle = "nw" | "ne" | "sw" | "se";
 export type DesignerViewport = { x: number; y: number; width: number; height: number };
 export type DesignerActiveLayer = keyof DesignerLayersForm;
+export type DesignerLayerTreeScope = DesignerSublayerScope | "workLines" | "controller" | "effectTargets" | "fabrication";
+export type DesignerLayerTarget = { scope: DesignerLayerTreeScope; sublayerId: string | null; fabricationPartId?: string };
 export type DesignerRouteSurfaceView = "rear" | "front" | "both";
 export function designerAdditiveSelectionRequested(event: { shiftKey: boolean; ctrlKey: boolean; metaKey: boolean }) {
   return event.shiftKey || event.ctrlKey || event.metaKey;
@@ -65,7 +69,7 @@ export function designerLayerForSelection(selection: DesignerSelection): Designe
   if (selection.type === "artwork" || selection.type === "build_area" || selection.type === "work_line") return "artwork";
   if (selection.type === "zone" || selection.type === "channel") return "zones";
   if (selection.type === "face_graphic") return "faceGraphic";
-  if (selection.type === "fabrication_path") return "fabrication";
+  if (selection.type === "fabrication_path" || selection.type === "fabrication_part") return "fabrication";
   if (selection.type === "light_source") return "lightSources";
   if (selection.type === "controller") return "hardware";
   if (selection.type === "route") return "strings";

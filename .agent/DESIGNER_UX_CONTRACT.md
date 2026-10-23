@@ -173,6 +173,13 @@ Examples:
   one numeric `Fillet` field in millimeters edits that node directly and redraws
   the center trace immediately. There is no separate activation mode, passive
   Fillet badge, Setup Fillet setting or Channel-specific `Round corner` command.
+- A selected closed Channel exposes `Generate lightbox Zone`. It creates a
+  normal independent Zone from the region inside the Channel's physical swept
+  footprint, using the smallest closed containing profile as its mother. The
+  operation never changes either source object and names the result
+  `<mother profile name> lightbox`, then `... 2`, `... 3` on collision. The
+  command is unavailable for an open Channel and reports a concise notice when
+  no enclosing profile or usable inner region exists.
 - Setup owns one Channel router-bit selector containing common metric and
   fractional-inch diameters; every option shows both units. The stored diameter
   is the live trace width and the width of subsequently created Channels.
@@ -283,9 +290,13 @@ Always-available tools:
 - Move. It moves the complete object without exposing node or resize-handle
   editing. Its contextual control fixes movement to X or Y; holding Ctrl (or
   Command on macOS) temporarily releases the constraint and permits movement
-  on both axes. Escape returns to Select. Select never starts whole-object
-  movement, and an initial object click cannot accidentally drag one of its
-  nodes or resize handles.
+  on both axes. Escape returns to Select. In Select, dragging an already
+  selected object moves the complete current selection freely; the first click
+  on an unselected object remains selection-only, and node, terminal and resize
+  handles retain edit priority. When objects overlap, the current selection has
+  hit priority so switching to Move cannot silently replace it with a neighbor.
+  Paste inserts the duplicate immediately above its source and preserves the
+  source user sublayer.
 - Pan.
 - A secondary/right-button drag pans the canvas from any active tool without
   changing that tool; the browser context menu is suppressed on the canvas.
@@ -315,11 +326,9 @@ Its Layers category header owns a transient black/white vinyl-preview toggle:
 opaque and uncovered face material render black, while clear and translucent
 regions render white. The mode remains local to Design, does not persist or
 affect Compile/export/Animate, and keeps selected geometry and nodes visible.
-When expanded, Face Graphic also exposes one compact visibility-preset row.
-`All on` and `All off` apply immediately; named presets can be created from the
-current object-eye state, reapplied, updated and deleted. Applying a preset only
-changes individual Face Graphic eyes (native objects, projections, derived
-profiles and compatible text). It does not run export or change geometry.
+Face Graphic does not expose a separate visibility-preset row. Its category,
+sublayer and object eyes follow the same visibility workflow as every other
+Layers category.
 
 Across the entire Layers panel, visibility and lock controls use one state
 language: visible is blue, hidden is neutral gray, locked is red and unlocked
@@ -422,6 +431,17 @@ native result in the same target layer. Its signed millimeter distance and
 Round, Miter or Bevel join are selected before executing the command. The last
 distance and join are persisted with the Designer document and reused by the
 next operation. It creates no live link and requires no `Break Link` step.
+For a selected Zone, the contextual bar exposes `Generate Channel` and
+`Generate LED string` with one shared `Alignment`: `Left edge`, `Center`,
+`Right edge`, `Inside offset` or `Outside offset`. The two offset modes reveal
+one shared non-negative distance. Edge alignment uses the generated object's
+physical width: router diameter for a Channel and PCB width for a string. The
+signed Offset and Join controls remain exclusive to `Offset Path`. Both
+generation commands materialize independent snapshots. A generated string is
+placed in Hardware / Strings and receives the selected Zone as its explicit
+Lighting host, while the source Zone remains selected and its active Layers
+destination remains unchanged so repeated letter-by-letter generation stays in
+context. Subsequent Zone edits never reshape either generated result.
 For native Reference, Zone and Face Graphic paths, the contextual `Fillet`
 pointer tool appears in the left rail and activates direct node editing: the contextual radius
 stays active while each corner click mutates that same native object, remains
@@ -488,13 +508,22 @@ view state from an active canvas tool without reading a tooltip.
 
 Category activation must be immediate and deterministic:
 
-- Clicking a category name, its disclosure arrow or one of its folders makes
-  that category the active canvas layer and returns the pointer to Select.
+- Clicking a category, fixed-folder, or user-sublayer name makes that exact
+  destination active and returns the pointer to Select. Once a plane is active,
+  disclosure arrows only expand or collapse and never change that destination.
+  On the initial `no plane` state, expanding the first top-level category also
+  activates it so a visible category cannot be expanded over a blank canvas.
+- Paste and route Cut leave the newly created object as the sole canvas and
+  Layers selection. No stale multi-selection state may keep the source object
+  highlighted or focused after the operation.
 - Once active, every visible object belonging to that category can be selected
   on the canvas. The Select marquee may activate another compatible category
   from visible touched profiles without a prior Layers-panel visit. Zooming or
   panning must never be required to "finish" activation.
 - Hidden layers and hidden objects are not selectable.
+- The Controller row eye reflects effective visibility through the Hardware
+  parent. Turning it on also reveals Hardware when that parent was hidden, so
+  the control never reports an enabled Controller that cannot be seen.
 - Locked layers remain selectable for identification and inspection, but no
   geometry, property or drawing mutation is allowed. Layers communicates the
   locked state; the contextual bar does not add a locked-status capsule. Lock
@@ -504,16 +533,42 @@ Category activation must be immediate and deterministic:
   object and wins selection when objects of the same kind overlap. Channels
   are foreground diffuser paths and therefore win over an overlapping Zone.
   Dragging a row changes this persisted drawing and hit-test order.
-- The Diffusors `Zones` and `Channels` folder headers each expose a master eye.
-  Switching it writes the same visibility state to every native object in that
-  folder in one transaction, so all child eyes immediately match. The
-  `Zones Groups` folder remains organizational because groups have no canvas
-  geometry or independent visibility state.
-- Diffusors exposes the same compact named-visibility manager as Face Graphic,
-  backed by its own independent preset collection. A preset captures Zones,
-  Channels, projected/derived geometry and controlled text belonging to
-  Diffusors. `All on`, `All off`, create, apply, update and delete affect only
-  those object eyes; Zones Groups remain excluded.
+- Fixed system sublayers (`Images`, `Reference`, `Zones`, `Channels`, `Strings`,
+  and `Data cables`) expose independent eye and lock
+  masks. A parent mask never overwrites any child's authored eye or lock; when
+  restored, every child returns to its previous state. `Effect targets` remains
+  organizational because target groups have no canvas geometry.
+- Compatible fixed sublayers may contain persistent, user-named sublayers.
+  Dragging one object or the current compatible multi-selection onto a sublayer
+  assigns it there. Dragging it onto the fixed parent header removes the
+  assignment; no synthetic `Base level` row interrupts the object list. Deleting
+  a user sublayer returns its objects to the fixed parent and never deletes
+  geometry. User sublayers are authoring-only and cannot affect compilation.
+  Every disclosure level starts collapsed and expands independently: opening a
+  parent must not open any child sublayer, target or fabrication part. Selection
+  navigation is the sole exception and expands only the ancestry needed to
+  reveal the selected object.
+- The exact active destination is also the creation destination. Creating an
+  object while a user sublayer is active inserts it into that sublayer; selecting
+  the fixed folder root returns creation to the root. No implicit last-used or
+  legacy folder state participates.
+- Diffusors presents `Effect targets` as a fixed sublayer alongside `Zones` and
+  `Channels`, with a distinct effects/grouping icon and the same header,
+  indentation, create, inline rename, expand and drag language as other
+  sublayers. Target membership is additive:
+  dropping Zones adds references and never removes them from their visual
+  layer or from another target. Expanded targets list only current members;
+  member click selects the Zone and `X` removes the reference. Targets have no
+  eye or lock and remain the compiled group choices consumed by Animate clips.
+- Layers does not expose or persist a separate visibility-preset manager.
+  Category, sublayer and object eyes are the single visibility workflow.
+- Tree rows contain navigation and organization only. Object properties belong
+  in the contextual bar or a dedicated editor; image-source and Fabrication
+  Part fields must never be embedded as form rows inside the tree.
+- Search temporarily reveals all disclosure ancestry, filters object rows and
+  restores the operator's exact expansion state when cleared. The panel is
+  horizontally resizable and persists its width and compact/comfortable row
+  density locally; neither preference enters the partitura JSON.
 
 Canvas selection and Layers navigation are one synchronized state:
 
@@ -583,12 +638,29 @@ Animate must not show mode enable checkboxes, Add/Remove, source naming, compile
 string mapping, material selection or receiver selection. If the selected
 target has no configured source, Animate directs the operator to Design.
 
+`+ Clip` opens a target chooser; canvas preselection is never required. The
+chooser has a simple Front/Rear switch, search, and the categories Effect
+targets, Zones, Channels and Global. It reuses the Layers icons and colors.
+Targets without compiled lighting on the selected side stay visible but
+disabled, with the reason shown as secondary text. Choosing a target creates
+the clip immediately; the clip inspector's Target control reopens the same
+chooser.
+
 Selecting a timeline clip must keep that clip selected and select/highlight its
-owning zone or channel on the Animate canvas. Modern clips normally target a
-Front, Halo-Lit or Wall Washer source ID; the UI must resolve that source's
-`targetType` and `targetId` instead of treating the non-geometric source record
-as the canvas selection. Direct legacy zone/channel targets remain supported.
-Changing a clip's Target field applies the same synchronization rule.
+owning zone or channel on the Animate canvas. Modern direct clips normally
+target a Front, Halo-Lit or Wall Washer source ID; the UI must resolve that
+source's `targetType` and `targetId` instead of treating the non-geometric
+source record as the canvas selection. Effect targets are side-neutral while
+authoring in Layers. Compile emits side-scoped targets with IDs
+`effect_target_<front|rear>_<groupId>` that resolve only the enabled mapped
+light sources on that side. Effect targets may contain Zones, Channels and
+nested Effect targets through the same Layers drag/drop flow. In Layers,
+Effect targets is a fixed sibling of Zones and Channels directly under
+Diffusors; it must never be nested or portal-owned by either object type.
+Selecting such a clip highlights the member
+geometry. Direct legacy zone/channel and neutral group targets remain
+supported. Changing a clip's Target field applies the same synchronization
+rule.
 
 Creating a clip always places it on the last completely empty track. If every
 existing track contains at least one clip, creation adds a new final track and

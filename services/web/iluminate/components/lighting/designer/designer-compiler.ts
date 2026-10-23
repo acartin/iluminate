@@ -1,6 +1,9 @@
-import { DESIGNER_GLOBAL_LIGHT_SOURCE_TARGETS, type DesignerCompileIssue, type DesignerCompileIssueTarget, type DesignerForm, type DesignerPoint, type DesignerRouteForm, type PartituraDocument } from "@/lib/lighting/partitura-model";
+import { DESIGNER_GLOBAL_LIGHT_SOURCE_TARGETS, designerGroupLightTargetId, designerOpticalModeSide, type DesignerCompileIssue, type DesignerCompileIssueTarget, type DesignerForm, type DesignerLightingSide, type DesignerPoint, type DesignerRouteForm, type PartituraDocument } from "@/lib/lighting/partitura-model";
 import { channelCenterPolyline, channelIsClosed, channelWidthCm, pointInsideDesignerShape, pointNearShapeStroke, validateDesignerGeometryTopology } from "./geometry/designer-geometry-engine";
 import { controllerPortPoint, sameRouteSurface, sameTerminalPoint, sampleRouteLedDots } from "./electrical/designer-electrical-engine";
+import { compiledStringIdsForSource, designerCompileSignature } from "./designer-compile-metadata";
+
+export { compiledStringIdsForSource, designerCompileSignature } from "./designer-compile-metadata";
 
 export type CompiledDesignerLayout = {
   outputs: Array<{ id: string; name: string; output: 1 | 2 | 3; pixelCount: number }>;
@@ -10,7 +13,6 @@ export type CompiledDesignerLayout = {
   validation: { errors: string[]; warnings: string[]; issues?: DesignerCompileIssue[] };
 };
 
-const DESIGNER_COMPILER_VERSION = 7;
 // Pixel centers are the physical source of truth. This fixed 0.5 mm allowance
 // only absorbs drawing/boundary imprecision; LED pitch must never enlarge a
 // pixel's targeting footprint.
@@ -18,23 +20,6 @@ const PIXEL_MEMBERSHIP_TOLERANCE_CM = 0.05;
 const CHANNEL_LED_MIN_COVERAGE = 0.9;
 const LED_FOOTPRINT_SAMPLE_GRID = 10;
 type ReportCompileIssue = (severity: DesignerCompileIssue["severity"], code: string, message: string, targets?: DesignerCompileIssueTarget[]) => void;
-
-/** Stable signature of the authored data that changes electrical or targeting semantics. */
-export function designerCompileSignature(designer: DesignerForm) {
-  return JSON.stringify({
-    compilerVersion: DESIGNER_COMPILER_VERSION,
-    stripConfiguration: designer.stripConfiguration,
-    controller: designer.controller,
-    routes: designer.routes.map(({ id, name, kind, designSurface, lightingHost, points }) => ({ id, name, kind, designSurface: designSurface === "front" ? "front" : "rear", lightingHost, points })),
-    zones: designer.zones.map(({ id, name, shape, x, y, width, height, points, contours, pathMode, fillRule }) => ({ id, name, shape, x, y, width, height, points, contours, pathMode, fillRule })),
-    channels: designer.channels.map(({ id, name, points, pathMode, widthMm, closed, cap, fabricationSurface }) => ({ id, name, points, pathMode, widthMm, closed, cap, fabricationSurface: fabricationSurface === "rear" ? "rear" : "front" })),
-    lightSources: designer.lightSources.map(({ id, name, targetType, targetId, mode, enabled }) => ({ id, name, targetType, targetId, mode, enabled })),
-    groups: designer.groups,
-    addressablePixelsPerMeter: designer.addressablePixelsPerMeter,
-    ledPackageSizeMm: designer.ledPackageSizeMm,
-    snapCm: designer.snapCm
-  });
-}
 
 /** Compiles the authored physical graph and geometric targets. No logical segments exist. */
 export function compileDesignerLayout(designer: DesignerForm): CompiledDesignerLayout {
@@ -174,11 +159,63 @@ export function compileDesignerLayout(designer: DesignerForm): CompiledDesignerL
       .map((source) => ({ type: "zone" as const, id: source.id }));
     return members.length ? [{ id: target.id, name: target.name, members }] : [];
   });
-  const groups = [...designer.groups, ...globalLightSourceGroups];
+  const sidedEffectTargetGroups = compileSidedEffectTargetGroups(designer, sourceZones);
+  const authoredGroups: CompiledDesignerLayout["groups"] = designer.groups.map((group) => ({
+    ...group,
+    members: group.members.map((member): { type: "zone" | "group"; id: string } => member.type === "group"
+      ? { type: "group", id: member.id }
+      : { type: "zone", id: member.id })
+  }));
+  const groups = [...authoredGroups, ...sidedEffectTargetGroups, ...globalLightSourceGroups];
   if (allZones.length) groups.push({ id: "full_sign", name: "Full sign", members: allZones.map((zone) => ({ type: "zone" as const, id: zone.id })) });
   validateGroups(designer, groups, reportIssue);
   const outputs: CompiledDesignerLayout["outputs"] = ([1, 2, 3] as const).map((output) => ({ id: `output_${output}`, name: `Output ${output}`, output, pixelCount: serialStarts[output] }));
   return { outputs, pixelMap, zones: allZones, groups, validation: { errors, warnings, issues } };
+}
+
+function compileSidedEffectTargetGroups(designer: DesignerForm, sourceZones: CompiledDesignerLayout["zones"]) {
+  const mappedSourceIds = new Set(sourceZones.filter((zone) => zone.pixelIds.length > 0).map((zone) => zone.id));
+  const groupById = new Map(designer.groups.map((group) => [group.id, group]));
+  const memo = new Map<string, boolean>();
+
+  function hasMappedSource(groupId: string, side: DesignerLightingSide, trail: string[] = []): boolean {
+    const key = `${side}:${groupId}`;
+    const cached = memo.get(key);
+    if (cached !== undefined) return cached;
+    if (trail.includes(groupId)) return false;
+    const group = groupById.get(groupId);
+    if (!group) return false;
+    const found = group.members.some((member) => member.type !== "group"
+      ? designer.lightSources.some((source) => source.enabled
+        && source.targetType === member.type
+        && source.targetId === member.id
+        && designerOpticalModeSide(source.mode) === side
+        && mappedSourceIds.has(source.id))
+      : hasMappedSource(member.id, side, [...trail, groupId]));
+    memo.set(key, found);
+    return found;
+  }
+
+  return designer.groups.flatMap((group) => (["front", "rear"] as const).flatMap((side) => {
+    if (!hasMappedSource(group.id, side)) return [];
+    const members = group.members.flatMap((member): Array<{ type: "zone" | "group"; id: string }> => {
+      if (member.type === "group") {
+        return hasMappedSource(member.id, side) ? [{ type: "group", id: designerGroupLightTargetId(member.id, side) }] : [];
+      }
+      return designer.lightSources
+        .filter((source) => source.enabled
+          && source.targetType === member.type
+          && source.targetId === member.id
+          && designerOpticalModeSide(source.mode) === side
+          && mappedSourceIds.has(source.id))
+        .map((source) => ({ type: "zone" as const, id: source.id }));
+    });
+    return [{
+      id: designerGroupLightTargetId(group.id, side),
+      name: `${group.name} · ${side === "front" ? "Front" : "Rear"}`,
+      members
+    }];
+  }));
 }
 
 function validateGroups(
@@ -286,14 +323,6 @@ export function buildDocumentFromDesigner(document: PartituraDocument): Partitur
     compiledDesignerSignature: designerCompileSignature(designer),
     compiledLayout
   };
-}
-
-export function compiledStringIdsForSource(layout: CompiledDesignerLayout | undefined, sourceId: string) {
-  if (!layout) return [];
-  const pixelsById = new Map(layout.pixelMap.map((pixel) => [pixel.id, pixel]));
-  return Array.from(new Set((layout.zones.find((zone) => zone.id === sourceId)?.pixelIds ?? [])
-    .map((pixelId) => pixelsById.get(pixelId)?.stringId)
-    .filter((stringId): stringId is string => Boolean(stringId))));
 }
 
 function orderedRoutesByOutput(designer: DesignerForm, reportIssue: ReportCompileIssue): Array<{ output: 1 | 2 | 3; route: DesignerRouteForm }> {

@@ -70,7 +70,7 @@ The Designer is intentionally fabrication-oriented. It is not a raw matrix edito
 
 ### Canonical geometry checkpoint
 
-Normalized documents now write `designerSchemaVersion: 19`. Version 2 introduced
+Normalized documents now write `designerSchemaVersion: 21`. Version 2 introduced
 the canonical `designer.geometries` collection and stable `geometryId`
 references; version 3 added the Designer-wide CNC cutter diameter/display unit,
 version 4 added the persisted Channel router-bit diameter, version 5 briefly
@@ -78,9 +78,8 @@ carried profile bend metadata, version 6 removed that duplicate input and
 derived the fabrication radius solely from half the router-bit diameter;
 version 8 replaces the temporary unit preference with one bilingual bit preset;
 version 9 introduced `filletRadiusMm`; the field now retains the last Custom
-direct-fillet radius across Save/reload. Version 12 added persisted Face Graphic visibility presets and
-native offset defaults; version 13 adds the independent Diffusors visibility
-preset collection; version 14 adds same-layer vector authoring groups, kept
+direct-fillet radius across Save/reload. Version 12 added native offset defaults;
+version 14 adds same-layer vector authoring groups, kept
 separate from electrical/effect Zone groups. Version 15 adds the Channel
 `fabricationSurface` (`front` or `rear`), defaulting legacy Channels to `front`;
 it is fabrication metadata and remains outside electrical and optical
@@ -88,8 +87,13 @@ compilation. Fillet radius is no longer exposed in Setup; live derived profiles 
 their own radius and Channel corner nodes persist `radiusMm` directly.
 Version 19 adds the optional `lightingHost` relation to LED strings. An unset
 host preserves geometric targeting; an explicit Zone or Channel owner narrows
-Compile membership when stacked construction makes geometric overlap ambiguous.
+compile membership when stacked construction makes geometric overlap ambiguous.
 Strings generated from a Channel inherit that Channel as their host.
+Version 20 adds authoring-only fixed-sublayer masks and persistent user
+sublayers; neither participates in compilation or fabrication output.
+Version 21 removes the obsolete Face Graphic and Diffusors visibility-preset
+collections and the fixed Face Graphic `Elements` mask; Layers eyes are the
+only visibility model.
 Legacy documents receive the 3.175 mm (1/8 in) cutter default during
 normalization. For compatibility with the current Paper renderer, semantic
 records still carry synchronized inline bounds/points; on load canonical
@@ -127,16 +131,8 @@ graphic is opaque; the topmost persisted object wins overlaps. Compound holes
 remain openings according to their enclosing region. Object visibility controls
 membership in both the vinyl preview and the optical transmission mask; layer
 visibility and opacity remain editor aids.
-Named `designer.faceGraphicVisibilityPresets` persist snapshots of individual
-Face Graphic eye states using typed stable object keys. The compact Layers row
-provides `All on`, `All off`, create, apply, update and delete; applying a preset
-only changes visibility and never exports automatically or affects electrical
-Compile.
-Diffusors has a parallel but independent
-`designer.diffusorVisibilityPresets` collection. Its snapshots include native
-Zones and Channels plus projections, derived profiles and controlled text whose
-target is Diffusors. Groups are excluded because they have no independent
-canvas visibility. Applying either category's preset never changes the other.
+Category, sublayer and object eyes are the only visibility model in Layers.
+There are no category visibility-preset collections in the normalized document.
 Direct-mounted Front pixels participate in this pass. `LED map` bypasses it and
 continues to show raw mapped output. Never replace this with a top-level
 multiply overlay: it would incorrectly affect Halo, Wall Wash and the workspace
@@ -547,7 +543,7 @@ contextual.
 
 Each layer has `visible`, `locked` and `opacity`. Hidden layers do not render or receive selection. Locked layers remain visible and selectable for inspection, but cannot be moved, resized, deleted or edited from the canvas/toolbox/contextual properties. The contextual bar does not repeat the selected object name, active category or locked state; Layers remains the source of that context. Each object row also exposes a per-object visibility eye (like the layer header): hidden objects do not render and are not hit-tested. Per-object lock and opacity remain layer-level only.
 
-Electrical/effect `Groups` are not a canvas layer and have no geometry. They are authored in the `Zones Groups` folder of the `Diffusors` category: a named, cycle-free composition of zones and/or other groups. A clip that targets a group applies its effect to the union of the member zones' pixels, respecting each zone's geometry, and behaves as one composition across the group's bounds. Whole-sign composition is achieved by grouping the desired zones (a group of all zones spans the sign). The clip `coordinateSpace` control was removed from the UI; clips are authored as `"local"` and the core still accepts/validates `serial`/`local`/`global`. Groups persist in `designer.groups` and compile into `compiledLayout.groups`; they are unrelated to non-compiling `designer.vectorGroups` used for authoring selection and movement.
+Electrical/effect `Groups` are not a canvas layer and have no geometry. They are authored in the fixed `Effect targets` collection directly under Diffusors, as a sibling of Zones and Channels: a named, cycle-free composition of Zones, Channels and/or other groups. The three siblings share one drag/drop context; Effect targets must not be implemented as a child or portal of Zones. Zones and Channels enter through the same multi-select drag/drop flow and retain their respective icons and colors. In Animate, `+ Clip` opens a searchable target chooser split first by Front/Rear and then by Effect targets, Zones, Channels and Global; creating a clip does not require canvas preselection. A group choice compiles to the validator-safe id `effect_target_<front|rear>_<groupId>` and includes only the enabled mapped light sources for that side, while the neutral authoring group remains persisted in `designer.groups`. A clip that targets a group applies its effect to the union of the resolved member pixels, respecting each member's geometry, and behaves as one composition across the group's bounds. Whole-sign composition is achieved by grouping the desired targets. The clip `coordinateSpace` control was removed from the UI; clips are authored as `"local"` and the core still accepts/validates `serial`/`local`/`global`. Groups compile into `compiledLayout.groups`; Channels are converted to the core's zone-compatible runtime member type without losing their authoring identity. Groups are unrelated to non-compiling `designer.vectorGroups` used for authoring selection and movement.
 
 ### Channel Tool
 
@@ -583,9 +579,9 @@ Channel`, and a Channel generated from one Zone inherits that Zone's name.
 - Removing the last Bezier handle must never change channel topology. Paper and
   the WebGL2 player must both respect the same explicit `closed` flag.
 - On compile, channels are emitted as zones in `compiledLayout.zones` (and join
-  the `full_sign` group), so clips target them like any zone. They appear in the
-  Animate and Scenes target lists, and are selectable on the Animate canvas
-  (clicking a channel selects it, so `Add clip` targets it).
+  the `full_sign` group), so their light sources are available as clip targets.
+  They appear under Channels in Animate's target chooser; canvas selection is
+  useful for inspection but is not required to create a clip.
 - Timeline selection is bidirectional: clicking a clip keeps it selected and
   selects/highlights its owning zone or channel on the Animate canvas. Because
   current clips target a Front/Halo-Lit/Wall Washer source ID, resolve the
@@ -638,6 +634,25 @@ Channel`, and a Channel generated from one Zone inherits that Zone's name.
   generated string has no live dependency on the Channel, so either object may
   subsequently be edited or deleted without changing the other. Designer warns
   when the configured strip PCB is wider than the Channel.
+- A selected Zone exposes one shared alignment configuration for Channel and
+  LED-string generation: `Left edge`, `Center`, `Right edge`, `Inside offset`
+  and `Outside offset`; the last two expose one shared non-negative distance.
+  Edge alignment uses each result's physical width (router diameter for a
+  Channel and PCB width for a string). The signed `Offset Path` distance and
+  join remain independent and affect only `Offset Path`. Zone-generated strings
+  are assigned explicitly to that Zone as their Lighting host and appear under
+  Hardware / Strings. String generation preserves the selected source Zone and
+  its active Layers destination. Channels and strings are materialized
+  snapshots; neither retains a live geometric dependency on the Zone.
+- A selected closed Channel can also `Generate lightbox Zone`. Designer finds
+  the smallest valid closed profile containing the complete swept Channel
+  footprint, materializes the region bounded by the Channel's physical inner
+  edge as an independent native Zone and selects it. The source profile and
+  Channel remain unchanged and no live dependency is stored. The generated
+  name is always `<containing profile name> lightbox`; collisions append the
+  first available numeric suffix beginning at `2`. Open Channels, collapsed
+  inner regions and Channels without a containing closed profile are rejected
+  without modifying the document.
 
 ### Artwork Tool
 
@@ -671,12 +686,11 @@ Channel`, and a Channel generated from one Zone inherits that Zone's name.
 
 Both object kinds are selectable, movable, resizable, insertable (double-click)
 and deletable on the canvas while `Artwork` is active, and panel selection
-mirrors on the canvas. Each object keeps its own visibility eye. Folders have no
-per-folder eye/lock/opacity: the `Artwork` category header owns the plane
-visibility/lock, and the `Reference` folder is standardized to per-object eyes
-only.
+mirrors on the canvas. Each object keeps its own visibility eye. Fixed folders
+have persisted eye/lock masks beneath the category master switch; those masks
+never overwrite their children's authored state. Opacity remains category-level.
 
-The right Layers panel is the active-plane selector. Exactly one layer is active at a time, and the active layer must have a clearly different background. **On open no plane is active** (all categories collapsed): the canvas must not select, drag or draw any object until the operator activates a category. Clicking a category label, disclosure arrow or folder activates it immediately and returns the pointer to Select; zoom/pan must never be needed to complete activation. Visibility and lock buttons are secondary controls, not the active selection state. Canvas editing only applies to the active plane: `Artwork` is the umbrella plane for image placement **and** build-area/reference editing; `Diffusors` (internal `zones`) edits zones, channels and groups; `Strings` edits routes (data cables/LED strings); `Hardware` selects the controller. Selecting an object on the canvas opens Layers, expands its category and exact folder, scrolls its row into view and keeps that layer active. Tools must not switch the active plane. The toolbox shows only pointer-interaction tools that apply to the active plane, plus Select, Move, Pan and Measure. Move acts on the complete object, fixes the drag to the contextual X or Y axis and uses Ctrl/Command as a temporary two-axis override; it never converts a node or resize-handle hit into a geometry edit. Select does not start whole-object movement, and node/resize hits on an unselected object are promoted to an object-selection click. Commands such as Delete, Fit, Copy/Paste, Save and Compile never belong in the toolbox. See `.agent/DESIGNER_UX_CONTRACT.md`.
+The right Layers panel is the active-plane selector. Exactly one editing destination is active at a time, and it has a subtle blue rail/background rather than a second selected-object treatment. **On open no plane is active** (all categories collapsed): the canvas must not select, drag or draw any object until the operator activates a category. Category, fixed-folder and user-sublayer names activate their exact destination and return the pointer to Select; disclosure arrows only expand or collapse. Creating an object while a user sublayer is active assigns it there, while activating the fixed root creates at root. Visibility and lock buttons are secondary controls, not the active selection state. Canvas editing only applies to the active plane: `Artwork` is the umbrella plane for image placement **and** build-area/reference editing; `Diffusors` (internal `zones`) edits zones, channels and groups; `Strings` edits routes (data cables/LED strings); `Hardware` selects the controller. Selecting an object on the canvas opens Layers, expands its category and exact folder, scrolls its row into view and keeps that destination active. Tools must not switch the active plane. The toolbox shows only pointer-interaction tools that apply to the active plane, plus Select, Move, Pan and Measure. Move acts on the complete object, fixes the drag to the contextual X or Y axis and uses Ctrl/Command as a temporary two-axis override; it never converts a node or resize-handle hit into a geometry edit. Select freely drags an already selected complete object or compatible multi-selection while the first click remains selection-only and node, terminal and resize hits retain edit priority. The current selection wins hit testing when objects overlap. A pasted copy is inserted immediately above its source and inherits the same user sublayer. Commands such as Delete, Fit, Copy/Paste, Save and Compile never belong in the toolbox. See `.agent/DESIGNER_UX_CONTRACT.md`.
 
 Every Layers category uses the same contextual grammar: scrollable properties
 and visible contextual actions, then a fixed action group at the right edge. A
@@ -835,6 +849,8 @@ Left toolbox:
   and the controller retain click selection.
 - Move: whole-object movement constrained to contextual X or Y; Ctrl/Command
   temporarily permits both axes.
+- Select: dragging the already selected object moves it freely; object-edit
+  handles retain priority and the initial selection click does not move it.
 - Pan.
 - Secondary/right-button drag always pans without changing the active tool or
   opening the browser context menu on the canvas.
@@ -934,35 +950,62 @@ The mandatory placement rules live in `.agent/DESIGNER_UX_CONTRACT.md`.
 Layer panel:
 
 - Uses `@dnd-kit/core` and `@dnd-kit/sortable` for drag/reorder.
-- Main categories, in order, are `Artwork`, `Diffusors`, `Strings`, and
-  `Hardware`. `Artwork` contains the collapsible folders `Images` (placed image
+- Main categories are `Artwork`, `Hardware`, `Diffusors`, `Face Graphic`, and
+  `Fabrication Plans`. `Artwork` contains the fixed sublayers `Images` (placed image
   assets, with an upload action; each selected container configures its image
   from a source dropdown) and `Reference`
   (build areas); `Reference` is no longer a top-level category. `Diffusors` is
   the visual-target plane (internally the `zones` layer); it groups three
-  collapsible folders, `Zones` (blue dot), `Channels` (orange Waves icon) and
-  `Zones Groups`. `Hardware` holds the controller and is last. Do not add "new
-  category" actions there. Creation tools operate inside the currently active
-  category/layer.
-- On open, every category (`Artwork`, `Diffusors`, `Strings`, `Hardware`) and
-  every subfolder (`Artwork`'s `Images`/`Reference`, `Diffusors`' `Zones`/
-  `Channels`/`Zones Groups`) start collapsed. The panel auto-expands a category
-  (and the matching subfolder) only when a selected object belongs to it.
-- Visibility is hierarchical (Inkscape/Corel style). A category header eye is the
+  fixed sublayers `Zones` (blue dot), `Channels` (orange Waves icon), and
+  `Effect targets`. `Hardware` contains the fixed `Strings`, `Data cables`, and
+  `Controller` sublayers. Face Graphic objects live directly at the category
+  root unless the user assigns them to a custom sublayer. Fabrication Plans
+  uses each physical part as a semantic sublayer. Do not add
+  new top-level-category actions. Creation tools operate inside the currently
+  active category/layer.
+- On open, every category and fixed sublayer starts collapsed. The panel
+  auto-expands a category and the matching fixed sublayer only when a selected
+  object belongs to it. Every deeper disclosure level also starts collapsed:
+  opening a category or sublayer never cascades into its descendants. Selection
+  navigation may expand only the exact ancestry required to reveal the selected
+  object.
+- Visibility and lock are hierarchical (Inkscape/Corel style). A category header eye is the
   **master switch** for its whole plane: `Artwork` covers both `Images` and the
-  `Reference` build areas, `Diffusors` covers `Zones`/`Channels`/`Zones Groups`,
-  `Strings` covers routes, and `Hardware` covers the controller. A hidden
+  `Reference` build areas, `Diffusors` covers `Zones`/`Channels`/`Effect targets`,
+  and `Hardware` covers routes plus the controller. A hidden
   category hides all of its objects regardless of their own eye; when the
   category is visible, only objects whose own row eye is on are drawn and
-  hit-tested. Lock and opacity stay category-level. As a Diffusors-specific
-  convenience, the `Zones` and `Channels` folder headers have master eyes that
-  atomically set every child object's persisted eye to the same state. `Zones
-  Groups` remains organizational and has no visibility eye because groups have
-  no canvas geometry.
+  hit-tested. The Controller row displays this effective Hardware-plus-object
+  state and revealing it also reveals its Hardware parent. Fixed sublayers have
+  their own persisted eye and lock masks. These
+  masks never rewrite individual child eyes or locks, so restoring a parent
+  reveals the exact prior child state. `Effect targets` remains organizational
+  and has no visibility eye because target groups have no canvas geometry.
+- Category opacity is a compact header action beside eye and lock. Activating
+  its Blend icon opens a small live slider; opacity never consumes a permanent
+  row in the expanded tree. Empty fixed folders remain visually empty instead
+  of inserting instructional or `No ...` placeholder rows.
+- The tree is navigation, ordering and organization—not a property form.
+  Selecting an Image exposes its source in the contextual bar; selecting a
+  Fabrication Part exposes name, side, material and thickness there. Search
+  opens the necessary ancestry temporarily and restores the previous expansion
+  state when cleared. The panel width and compact/comfortable density are local
+  UI preferences and never pollute the partitura JSON.
 - Lock is consistent with the toolbox: a locked category grays out (disables)
   its toolbox tools. The `Artwork` category lock gates all of its tools (Images
-  and Reference). Folders have no lock of their own. A hidden layer does not
-  disable tools; using a tool re-shows the layer.
+  and Reference). A fixed or user sublayer lock prevents geometry mutation and
+  reordering for its contents while preserving selection for inspection. A
+  hidden layer does not disable tools; using a tool re-shows the layer.
+- Compatible fixed sublayers expose `+` to create persistent user sublayers.
+  Dragging an object, or an existing multi-selection, onto one assigns it there;
+  dragging it onto the fixed parent header removes that assignment. The panel
+  does not insert a synthetic `Base level` row among the objects. A user sublayer has rename,
+  eye, lock, and delete controls. Deleting it never deletes its objects: they
+  return to the fixed parent. Sublayers are authoring-only and cannot alter
+  pixel mapping, route order, optical ownership, effects, or fabrication.
+- Dragging shows a count-aware overlay, a distinct insertion marker, delayed
+  hover expansion and an accessible completion announcement. Arrow Left/Right
+  on a focused category or sublayer label collapses/expands it.
 - Object rows should prioritize the complete object name. Keep inline row
   actions minimal: reorder grip, visibility eye, rename, and open details. The
   details action opens a modal/popup where large object metadata can live
@@ -973,19 +1016,22 @@ Layer panel:
   visually in front and receive hit-testing first. Items at the bottom are in
   the background. Reordering a zone is the intended way to place broad shapes
   such as "Rotulo completo" behind smaller letter/logo zones.
-- The controller is fixed in the Strings layer; only data cables and LED strings
+- The controller is fixed in Hardware; only data cables and LED strings
   are sortable.
-- `Zones Groups` is a collapsible folder inside `Diffusors`, alongside `Zones` and
-  `Channels`. It is not a work plane: creating groups never changes the active
-  layer. A new group starts with every current zone as a member; its expanded
-  list shows all available zones/channels as checkboxes (checked = member),
-  so membership is a simple checklist. Checking a zone, or clicking its name,
-  selects that zone on the canvas (and activates the Diffusors plane) so it can
-  be located. The list also offers nested groups; options that would create a
-  cycle are disabled, and the compiler also rejects cycles, unknown members and
-  duplicate members.
-- The `Strings` layer may show visual subfolders such as `Data cables` and
-  `LED strings` for clarity. These folders are not separate work planes and do
+- `Effect targets` is a fixed Diffusors sublayer alongside `Zones` and
+  `Channels`, using a distinct effects/grouping icon and the same header,
+  indentation, expansion and direct-manipulation language as other sublayers.
+  `+` creates an empty target,
+  or includes the currently selected Zones; double-click renames it. Dragging a
+  Zone or compatible multi-selection onto a target adds references without
+  moving or duplicating the source geometry, so one Zone may belong to several
+  targets. Expanding a target lists only its members; clicking a Zone locates it
+  on the canvas and `X` removes only that membership. Existing nested target
+  references remain visible and removable. Target rows have no eye, lock or
+  drawing order because they have no geometry. The compiler still rejects
+  cycles, unknown members and duplicates.
+- The `Hardware` layer has fixed `Data cables` and `Strings` sublayers. These
+  are not separate work planes and do
   not change the active layer. Reordering is allowed only within the same route
   kind; do not drag data cables into LED strings or vice versa.
 - Layer ordering is an authoring/selection concern. It must not change the
@@ -1005,6 +1051,9 @@ Required behavior:
 
 - `Save` persists the current `document_json` only. It must not silently compile.
 - `Compile` regenerates `compiledLayout`, clears stale animation preview/generated artifacts, and saves the compiled document.
+- Physical compilation runs once in a dedicated browser Worker. Save must not
+  call the compiler again. The compiled result returned by that Worker is the
+  exact document persisted by the Compile command.
 - Compile validation retains the legacy `errors[]` and `warnings[]` strings for
   runtime compatibility and also emits structured `issues[]` with selectable
   route/zone/channel/controller targets. The Designer modal renders names rather
@@ -1014,6 +1063,9 @@ Required behavior:
 - Designer physical edits invalidate `compiledLayout`, animation preview and generated firmware artifact.
 - Scene/clip/effect edits do not invalidate the physical compile when the Designer signature is unchanged, but they do invalidate animation preview and generated firmware artifact.
 - `generated_json` is for firmware download only. Designer must never reload or edit from `generated_json`.
+- Partitura PATCH accepts gzip for large authoring documents and returns only
+  save metadata. Persistent Generate reads the saved document by partitura ID;
+  list endpoints expose summaries and never transfer every `document_json`.
 
 ## Animate Rendering Architecture
 
@@ -1043,6 +1095,12 @@ Current renderer module:
 - The core runtime is prepared once, keeps flattened dense pixel membership and
   renders into a recycled typed array. Only one transferred frame may be in
   flight. React receives throttled status only.
+- Timeline edits remain local while a clip is dragged. Animate regenerates the
+  temporary runtime once on pointer release, or after a short debounce for
+  inspector edits, and cancels superseded requests. Clip-only changes reload
+  the evaluation Worker without rebuilding WebGL geometry, optical masks or
+  outline buffers; those renderer resources change only with the physical or
+  optical visual scene.
 - `Webgl2PlayerRenderer` composes Front, Halo-Lit and directional Wall Washer
   mounts. A target may have more than one mount at the same time.
 - `visual-scene.v1` carries resolved physical Channel contours. The WebGL2
