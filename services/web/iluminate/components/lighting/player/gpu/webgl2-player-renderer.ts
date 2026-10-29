@@ -20,7 +20,8 @@ type OutlineBatch = {
   count: number;
 };
 
-type PlayerOutlineSelection = { type: "zone" | "channel"; id: string } | null;
+export type PlayerOutlineTarget = { type: "zone" | "channel"; id: string };
+type PlayerOutlineSelection = PlayerOutlineTarget | null;
 type TargetMaskMode = -1 | 0 | 1;
 
 type PreparedTreatment = {
@@ -35,7 +36,7 @@ type PreparedTreatment = {
 
 type MaskBounds = { x: number; y: number; width: number; height: number };
 
-type PlayerUniforms = Record<"colors" | "faceMask" | "targetMask" | "colorCount" | "viewport" | "canvasPx" | "worldSize" | "targetMaskBounds" | "radiusPx" | "intensity" | "mode" | "useFaceMask" | "targetMaskMode", WebGLUniformLocation | null>;
+type PlayerUniforms = Record<"colors" | "faceMask" | "targetMask" | "colorCount" | "viewport" | "canvasPx" | "worldSize" | "targetMaskBounds" | "radiusPx" | "intensity" | "mode" | "softness" | "useFaceMask" | "targetMaskMode", WebGLUniformLocation | null>;
 type OutlineUniforms = Record<"viewport" | "canvasPx" | "color" | "widthPx", WebGLUniformLocation | null>;
 
 const QUAD_VERTICES = new Float32Array([
@@ -58,6 +59,9 @@ export class Webgl2PlayerRenderer {
   private channelOutlines: OutlineBatch | null = null;
   private activeZoneOutlines: OutlineBatch | null = null;
   private activeChannelOutlines: OutlineBatch | null = null;
+  private targetZoneOutlines: OutlineBatch | null = null;
+  private targetChannelOutlines: OutlineBatch | null = null;
+  private outlineTargets: PlayerOutlineTarget[] | null = null;
   private selectedOutline: OutlineBatch | null = null;
   private outlineSelection: PlayerOutlineSelection = null;
   private treatments: PreparedTreatment[] = [];
@@ -105,6 +109,7 @@ export class Webgl2PlayerRenderer {
       radiusPx: gl.getUniformLocation(this.program, "uRadiusPx"),
       intensity: gl.getUniformLocation(this.program, "uIntensity"),
       mode: gl.getUniformLocation(this.program, "uMode"),
+      softness: gl.getUniformLocation(this.program, "uSoftness"),
       useFaceMask: gl.getUniformLocation(this.program, "uUseFaceMask"),
       targetMaskMode: gl.getUniformLocation(this.program, "uTargetMaskMode")
     };
@@ -170,6 +175,7 @@ export class Webgl2PlayerRenderer {
     this.channelOutlines = this.createOutlineBatch(buildOutlineSegments(scene.visualScene.shapes.filter((shape) => shape.kind === "channel")));
     this.activeZoneOutlines = this.createOutlineBatch(buildOutlineSegments(outlineShapesForMode(scene.visualScene.shapes, scene.visualScene.treatments, "active", "zone")));
     this.activeChannelOutlines = this.createOutlineBatch(buildOutlineSegments(outlineShapesForMode(scene.visualScene.shapes, scene.visualScene.treatments, "active", "channel")));
+    this.prepareTargetOutlines();
     this.prepareSelectedOutline();
   }
 
@@ -212,6 +218,15 @@ export class Webgl2PlayerRenderer {
     this.prepareSelectedOutline();
   }
 
+  updateOutlineTargets(targets: PlayerOutlineTarget[]) {
+    this.outlineTargets = targets;
+    this.releaseOutlineBatch(this.targetZoneOutlines);
+    this.releaseOutlineBatch(this.targetChannelOutlines);
+    this.targetZoneOutlines = null;
+    this.targetChannelOutlines = null;
+    this.prepareTargetOutlines();
+  }
+
   resize(width: number, height: number, pixelRatio: number) {
     const gl = this.requireGl();
     const canvas = this.canvas!;
@@ -248,7 +263,7 @@ export class Webgl2PlayerRenderer {
     if (this.presentation === "led_map") {
       gl.enable(gl.BLEND);
       gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
-      this.drawBatch(this.allPixels, this.directPixelRadius(), 1, 0, false);
+      this.drawBatch(this.allPixels, this.directPixelRadius(), 1, 0, 0, false);
       this.drawOutlines();
       gl.disable(gl.BLEND);
       return;
@@ -258,13 +273,15 @@ export class Webgl2PlayerRenderer {
     gl.blendFunc(gl.ONE, gl.ONE);
     for (const treatment of this.treatments) {
       if (treatment.direct) continue;
+      const field = opticalTreatmentField(treatment.source, this.scene.visualScene.addressablePixelsPerMeter);
       gl.activeTexture(gl.TEXTURE2);
       gl.bindTexture(gl.TEXTURE_2D, treatment.targetMaskTexture);
       this.drawBatch(
         treatment.batch,
-        this.treatmentRadiusPx(treatment.source),
-        Math.max(0, treatment.source.intensity * this.settings.intensity),
+        Math.max(2, this.worldLengthToPixels(field.radiusCm)),
+        Math.max(0, treatment.source.intensity * this.settings.intensity * field.energyScale),
         1,
+        field.softnessRatio,
         treatment.useFaceMask,
         treatment.targetMaskMode,
         treatment.targetMaskBounds
@@ -275,7 +292,16 @@ export class Webgl2PlayerRenderer {
       if (!treatment.direct) continue;
       gl.activeTexture(gl.TEXTURE2);
       gl.bindTexture(gl.TEXTURE_2D, treatment.targetMaskTexture);
-      this.drawBatch(treatment.batch, this.directPixelRadius(), 1, 0, treatment.useFaceMask, treatment.targetMaskMode, treatment.targetMaskBounds);
+      this.drawBatch(
+        treatment.batch,
+        this.directPixelRadius(),
+        Math.max(0, treatment.source.intensity * this.settings.intensity),
+        0,
+        0,
+        treatment.useFaceMask,
+        treatment.targetMaskMode,
+        treatment.targetMaskBounds
+      );
     }
     this.drawOutlines();
     gl.disable(gl.BLEND);
@@ -350,12 +376,13 @@ export class Webgl2PlayerRenderer {
     return { vao, instanceBuffer, count: segments.length / 4 };
   }
 
-  private drawBatch(batch: DrawBatch | null, radiusPx: number, intensity: number, mode: number, useFaceMask: boolean, targetMaskMode: TargetMaskMode = 0, targetMaskBounds: MaskBounds | null = null) {
+  private drawBatch(batch: DrawBatch | null, radiusPx: number, intensity: number, mode: number, softness: number, useFaceMask: boolean, targetMaskMode: TargetMaskMode = 0, targetMaskBounds: MaskBounds | null = null) {
     if (!batch?.count || !this.program || !this.uniforms) return;
     const gl = this.requireGl();
     gl.uniform1f(this.uniforms.radiusPx, Math.max(1, radiusPx) * this.pixelRatio);
     gl.uniform1f(this.uniforms.intensity, intensity);
     gl.uniform1f(this.uniforms.mode, mode);
+    gl.uniform1f(this.uniforms.softness, Math.max(0, Math.min(1, softness)));
     gl.uniform1f(this.uniforms.useFaceMask, useFaceMask && this.hasFaceMask && this.faceMaskEnabled ? 1 : 0);
     gl.uniform1f(this.uniforms.targetMaskMode, targetMaskMode);
     gl.uniform4f(
@@ -376,17 +403,26 @@ export class Webgl2PlayerRenderer {
     gl.useProgram(this.outlineProgram);
     gl.uniform4f(this.outlineUniforms.viewport, this.viewport.x, this.viewport.y, Math.max(0.0001, this.viewport.width), Math.max(0.0001, this.viewport.height));
     gl.uniform2f(this.outlineUniforms.canvasPx, this.width * this.pixelRatio, this.height * this.pixelRatio);
-    if (this.settings.outlineMode !== "none") {
+    if (this.outlineTargets !== null || this.settings.outlineMode !== "none") {
       gl.uniform1f(this.outlineUniforms.widthPx, 1.35 * this.pixelRatio);
       const zoneColor = this.colorMode === "night" ? [0.38, 0.72, 1, 0.72] : [0.04, 0.31, 0.72, 0.78];
       const channelColor = this.colorMode === "night" ? [1, 0.65, 0.12, 0.82] : [0.72, 0.31, 0.02, 0.82];
-      if (this.settings.outlineMode === "all" || this.settings.outlineMode === "zones") this.drawOutlineBatch(this.zoneOutlines, zoneColor);
-      if (this.settings.outlineMode === "all" || this.settings.outlineMode === "channels") this.drawOutlineBatch(this.channelOutlines, channelColor);
-      if (this.settings.outlineMode === "active") {
-        this.drawOutlineBatch(this.activeZoneOutlines, zoneColor);
-        this.drawOutlineBatch(this.activeChannelOutlines, channelColor);
+      if (this.outlineTargets !== null) {
+        this.drawOutlineBatch(this.targetZoneOutlines, zoneColor);
+        this.drawOutlineBatch(this.targetChannelOutlines, channelColor);
+      } else {
+        const outlinePlan = outlinePresentationPlan(this.settings.outlineMode, this.outlineSelection, this.scene?.visualScene.treatments ?? []);
+        if (outlinePlan.allZones) this.drawOutlineBatch(this.zoneOutlines, zoneColor);
+        if (outlinePlan.allChannels) this.drawOutlineBatch(this.channelOutlines, channelColor);
+        if (outlinePlan.activeSources) {
+          this.drawOutlineBatch(this.activeZoneOutlines, zoneColor);
+          this.drawOutlineBatch(this.activeChannelOutlines, channelColor);
+        }
       }
-      if (this.selectedOutline && outlineSelectionVisible(this.settings.outlineMode, this.outlineSelection, this.scene?.visualScene.treatments ?? [])) {
+      const showSelection = this.outlineTargets !== null
+        ? outlineTargetIncludesSelection(this.outlineTargets, this.outlineSelection)
+        : outlineSelectionVisible(this.settings.outlineMode, this.outlineSelection, this.scene?.visualScene.treatments ?? []);
+      if (this.selectedOutline && showSelection) {
         gl.uniform1f(this.outlineUniforms.widthPx, 7 * this.pixelRatio);
         this.drawOutlineBatch(this.selectedOutline, this.colorMode === "night" ? [0.25, 0.72, 1, 0.2] : [0.02, 0.35, 0.9, 0.2]);
         gl.uniform1f(this.outlineUniforms.widthPx, 2.8 * this.pixelRatio);
@@ -407,17 +443,6 @@ export class Webgl2PlayerRenderer {
   private directPixelRadius() {
     const pitchCm = 100 / Math.max(1, this.scene?.visualScene.addressablePixelsPerMeter ?? 60);
     return Math.max(2, this.worldLengthToPixels(pitchCm * 0.22));
-  }
-
-  private treatmentRadiusPx(source: VisualOpticalTreatment) {
-    const pitchCm = 100 / Math.max(1, this.scene?.visualScene.addressablePixelsPerMeter ?? 60);
-    const beamRadius = source.sourceDistanceCm * Math.tan(Math.max(5, Math.min(170, source.beamAngleDeg)) * Math.PI / 360);
-    const radiusCm = source.mode === "wall_wash"
-      ? Math.max(source.spreadCm, source.throwCm * 0.2)
-      : source.mode === "halo"
-        ? Math.max(pitchCm * 0.4, source.spreadCm + beamRadius)
-        : Math.max(pitchCm * 0.32, beamRadius * 0.35 + source.softnessCm);
-    return Math.max(2, this.worldLengthToPixels(radiusCm));
   }
 
   private worldLengthToPixels(lengthCm: number) {
@@ -475,12 +500,22 @@ export class Webgl2PlayerRenderer {
     }
     this.allPixels = null;
     this.treatments = [];
-    for (const outline of [this.zoneOutlines, this.channelOutlines, this.activeZoneOutlines, this.activeChannelOutlines, this.selectedOutline]) this.releaseOutlineBatch(outline);
+    for (const outline of [this.zoneOutlines, this.channelOutlines, this.activeZoneOutlines, this.activeChannelOutlines, this.targetZoneOutlines, this.targetChannelOutlines, this.selectedOutline]) this.releaseOutlineBatch(outline);
     this.zoneOutlines = null;
     this.channelOutlines = null;
     this.activeZoneOutlines = null;
     this.activeChannelOutlines = null;
+    this.targetZoneOutlines = null;
+    this.targetChannelOutlines = null;
     this.selectedOutline = null;
+  }
+
+  private prepareTargetOutlines() {
+    if (!this.scene || this.outlineTargets === null) return;
+    const keys = new Set(this.outlineTargets.map((target) => `${target.type}:${target.id}`));
+    const shapes = this.scene.visualScene.shapes.filter((shape) => keys.has(`${shape.kind}:${shape.id}`));
+    this.targetZoneOutlines = this.createOutlineBatch(buildOutlineSegments(shapes.filter((shape) => shape.kind === "zone")));
+    this.targetChannelOutlines = this.createOutlineBatch(buildOutlineSegments(shapes.filter((shape) => shape.kind === "channel")));
   }
 
   private prepareSelectedOutline() {
@@ -569,6 +604,7 @@ uniform sampler2D uFaceMask;
 uniform sampler2D uTargetMask;
 uniform float uIntensity;
 uniform float uMode;
+uniform float uSoftness;
 uniform float uUseFaceMask;
 uniform float uTargetMaskMode;
 uniform vec2 uWorldSize;
@@ -584,7 +620,8 @@ void main() {
   if (distanceFromCenter > 1.0) discard;
   vec3 color = texelFetch(uColors, ivec2(vColorIndex, 0), 0).rgb;
   float directAlpha = 1.0 - smoothstep(0.58, 1.0, distanceFromCenter);
-  float opticalAlpha = exp(-distanceFromCenter * distanceFromCenter * 3.2);
+  float opticalFeather = max(uSoftness, fwidth(distanceFromCenter) * 1.5);
+  float opticalAlpha = 1.0 - smoothstep(1.0 - opticalFeather, 1.0, distanceFromCenter);
   float alpha = mix(directAlpha, opticalAlpha, step(0.5, uMode));
   vec2 targetUv = (vWorld - uTargetMaskBounds.xy) / uTargetMaskBounds.zw;
   vec2 targetInsideMin = step(vec2(0.0), targetUv);
@@ -612,6 +649,9 @@ uniform vec4 uViewport;
 uniform vec2 uCanvasPx;
 uniform float uWidthPx;
 
+out float vAcrossPx;
+flat out float vHalfWidthPx;
+
 void main() {
   vec2 startNormalized = (aSegment.xy - uViewport.xy) / uViewport.zw;
   vec2 endNormalized = (aSegment.zw - uViewport.xy) / uViewport.zw;
@@ -622,10 +662,15 @@ void main() {
   if (segmentLength < 0.0001) direction = vec2(1.0, 0.0);
   else direction /= segmentLength;
   vec2 normal = vec2(-direction.y, direction.x);
+  float halfWidthPx = max(0.5, uWidthPx * 0.5);
+  float featherPx = 1.0;
   float along = aQuad.x * 0.5 + 0.5;
-  vec2 positionPx = mix(startPx, endPx, along) + normal * aQuad.y * uWidthPx * 0.5;
+  float acrossPx = aQuad.y * (halfWidthPx + featherPx);
+  vec2 positionPx = mix(startPx, endPx, along) + normal * acrossPx;
   vec2 clip = positionPx / uCanvasPx * 2.0 - 1.0;
   gl_Position = vec4(clip, 0.0, 1.0);
+  vAcrossPx = acrossPx;
+  vHalfWidthPx = halfWidthPx;
 }
 `;
 
@@ -633,10 +678,16 @@ const OUTLINE_FRAGMENT_SHADER = `#version 300 es
 precision highp float;
 
 uniform vec4 uColor;
+in float vAcrossPx;
+flat in float vHalfWidthPx;
 out vec4 finalColor;
 
 void main() {
-  finalColor = uColor;
+  float distancePx = abs(vAcrossPx);
+  float featherPx = max(fwidth(vAcrossPx), 0.75);
+  float coverage = 1.0 - smoothstep(vHalfWidthPx - featherPx, vHalfWidthPx + featherPx, distancePx);
+  if (coverage <= 0.0) discard;
+  finalColor = vec4(uColor.rgb, uColor.a * coverage);
 }
 `;
 
@@ -659,6 +710,11 @@ export function buildOutlineSegments(shapes: VisualShape[]) {
 export function selectedOutlineShapes(shapes: VisualShape[], selection: PlayerOutlineSelection) {
   if (!selection) return [];
   return shapes.filter((shape) => shape.kind === selection.type && shape.id === selection.id).slice(0, 1);
+}
+
+/** Keeps the Outlines checklist authoritative over selection feedback. */
+export function outlineTargetIncludesSelection(targets: PlayerOutlineTarget[], selection: PlayerOutlineSelection) {
+  return Boolean(selection && targets.some((target) => target.type === selection.type && target.id === selection.id));
 }
 
 function shapeOutlinePolylines(shape: VisualShape): VisualPoint[][] {
@@ -740,6 +796,49 @@ export function outlineSelectionVisible(
   if (!selection || mode === "none") return false;
   if (mode === "all" || mode === `${selection.type}s`) return true;
   return mode === "active" && treatments.some((source) => source.targetType === selection.type && source.targetId === selection.id);
+}
+
+/** Keeps category filters focused on the current canvas/navigator selection. */
+export function outlinePresentationPlan(
+  mode: PlayerOutlineMode,
+  selection: PlayerOutlineSelection,
+  treatments: Pick<VisualOpticalTreatment, "targetType" | "targetId">[]
+) {
+  return {
+    allZones: mode === "all",
+    allChannels: mode === "all",
+    activeSources: mode === "active",
+    selection: outlineSelectionVisible(mode, selection, treatments)
+  };
+}
+
+/**
+ * Keeps field size and edge softness independent. Spread/distance define how
+ * far the light reaches; softness only defines how much of that radius is used
+ * to feather the edge.
+ */
+export function opticalTreatmentField(
+  source: Pick<VisualOpticalTreatment, "mode" | "sourceDistanceCm" | "beamAngleDeg" | "spreadCm" | "throwCm" | "softnessCm">,
+  addressablePixelsPerMeter: number
+) {
+  const pitchCm = 100 / Math.max(1, addressablePixelsPerMeter || 60);
+  const beamRadius = source.sourceDistanceCm * Math.tan(Math.max(5, Math.min(170, source.beamAngleDeg)) * Math.PI / 360);
+  const minimumRadiusCm = source.mode === "front" ? pitchCm * 0.32 : pitchCm * 0.4;
+  const radiusCm = source.mode === "wall_wash"
+    ? Math.max(source.spreadCm, source.throwCm * 0.2)
+    : source.mode === "halo"
+      ? Math.max(minimumRadiusCm, source.spreadCm + beamRadius)
+      : Math.max(minimumRadiusCm, beamRadius * 0.35);
+  return {
+    radiusCm,
+    softnessRatio: Math.max(0, Math.min(1, source.softnessCm / Math.max(radiusCm, 0.0001))),
+    // Rear LEDs are laid out predominantly along paths. Their overlap grows
+    // approximately with field radius, so compensate linearly to keep Spread
+    // from creating energy while preserving the operator's Intensity control.
+    energyScale: source.mode === "front" || source.mode === "halo"
+      ? Math.min(1, minimumRadiusCm / Math.max(radiusCm, 0.0001))
+      : 1
+  };
 }
 
 /** Front light stays on its face; reflected/rear light stays off every physical face. */

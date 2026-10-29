@@ -22,7 +22,7 @@ assert(
   "invalid references fixture should report target.missing"
 );
 
-const frame = renderSceneFrame(valid, "normal", 1000);
+const frame = renderSceneFrame(valid, "normal", 999);
 assert(frame.pixels.length > 0, "rendered frame should contain pixels");
 assert(
   frame.pixels.some((pixel) => pixel.color.r > 0 || pixel.color.g > 0 || pixel.color.b > 0),
@@ -39,8 +39,38 @@ chase.scenes[0].tracks[0].clips[0] = {
 };
 const chaseFrame = renderSceneFrame(chase, "normal", 0);
 assert(
-  chaseFrame.pixels.some((pixel) => pixel.color.r === 0x12 && pixel.color.g === 0x34 && pixel.color.b === 0x56),
+  chaseFrame.pixels.every((pixel) => pixel.color.r === 0 && pixel.color.g === 0 && pixel.color.b === 0),
+  "timeline origin should remain black even when a clip starts at zero"
+);
+const startedChaseFrame = renderSceneFrame(chase, "normal", 1);
+assert(
+  startedChaseFrame.pixels.some((pixel) => pixel.color.r === 0x12 && pixel.color.g === 0x34 && pixel.color.b === 0x56),
   "linear effect background color should reach inactive pixels unchanged"
+);
+
+const spatialFill = structuredClone(valid);
+spatialFill.scenes[0].tracks[0].clips[0] = {
+  ...spatialFill.scenes[0].tracks[0].clips[0],
+  effect: "spatial_fill",
+  coordinateSpace: "local",
+  startMs: 0,
+  durationMs: 1000,
+  params: { color: "#FF0000", backgroundColor: "#000000", axis: "x", direction: "forward", softness: 0.12 }
+};
+const earlySpatialFill = renderSceneFrame(spatialFill, "normal", 3);
+assert(
+  earlySpatialFill.pixels[0].color.r <= 7 && earlySpatialFill.pixels.slice(1).every((pixel) => pixel.color.r === 0),
+  "spatial fill softness must not reveal a full leading slice ahead of early clip progress"
+);
+const halfSpatialFill = renderSceneFrame(spatialFill, "normal", 500);
+assert(
+  halfSpatialFill.pixels[0].color.r === 255 && halfSpatialFill.pixels[1].color.r === 128 && halfSpatialFill.pixels[2].color.r === 0,
+  "spatial fill must center its soft edge on the proportional half-duration boundary"
+);
+const lateSpatialFill = renderSceneFrame(spatialFill, "normal", 999);
+assert(
+  lateSpatialFill.pixels.every((pixel) => pixel.color.r >= 253),
+  "spatial fill must distribute the complete softened transition across the clip duration"
 );
 
 const wsFrame = simulateWs2812bFrame(valid, "normal", 1000);

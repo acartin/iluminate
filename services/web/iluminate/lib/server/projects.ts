@@ -120,6 +120,18 @@ export async function getProject(id: string) {
   return result.rows[0] ? mapProject(result.rows[0]) : null;
 }
 
+export async function getProjectForClient(id: string, trustedClientId: string) {
+  const result = await getPool().query<ProjectRow>(
+    `${projectSelect}
+      where project.id = $1
+        and project.deleted_at is null
+        and (client.id::text = $2 or client.client_key = $2)
+      limit 1`,
+    [id, trustedClientId]
+  );
+  return result.rows[0] ? mapProject(result.rows[0]) : null;
+}
+
 export async function createProject({ name, description }: { name: string; description?: string }) {
   const client = await getPool().connect();
   try {

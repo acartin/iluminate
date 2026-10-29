@@ -1,25 +1,31 @@
 # Lighting Storage
 
-Persistence adapters and repositories for lighting-owned tables.
+Schema and migration ownership for lighting-domain persistence. Existing
+migrations define projects, controllers, partituras, deployments, device state,
+assets, render artifacts/jobs and scene shares.
 
-Expected future tables include projects, controllers, partituras, deployments, device commands, device status and assets metadata.
+PostgreSQL is the persistent database. Business records are tenant-scoped by a
+trusted `client_id`. The authenticated Next.js server repositories currently
+implement application access with `pg` and parameterized SQL; browser code and
+the public site never access PostgreSQL directly.
 
-A project has one current partitura. Persistence should not create partitura revision tables or revision-numbered JSON artifacts; when a user wants a variant, the application should duplicate the partitura as a separate record.
+A project may contain multiple independent partituras. The
+`projects.active_partitura_id` field selects the active one. There are no
+partitura revision tables: a requested variant is another partitura record in
+the same project.
 
-PostgreSQL is the target database. All persistent lighting business records must include `client_id` from the first schema design, matching the copied auth model.
-
-The current editable partitura is stored as JSON:
+The editable and generated values are stored in:
 
 ```text
 iluminate.partituras.document_json
-```
-
-The current firmware-facing generated artifact is stored as JSON:
-
-```text
 iluminate.partituras.generated_json
 ```
 
-`document_json` is the only editable source of truth. `document_json.compiledLayout` is derived by the Designer `Compile` action, and `generated_json` is derived later for firmware download. Neither derived value should be edited directly or treated as the source for UI authoring.
+`document_json` is the only editable source of truth.
+`document_json.compiledLayout` is derived by Designer `Compile`, and
+`generated_json` is derived later for publication/device consumption. Neither
+derived value is edited directly or used as the authoring source.
 
-Designer objects, zones, groups, scenes and clips remain nested inside the partitura document at this stage. See `docs/partitura-lifecycle.md`.
+Designer objects, zones, groups, scenes and clips remain nested in the
+partitura document. See `docs/partitura-lifecycle.md` for the lifecycle contract
+and `services/lighting-core/migrations/` for executable storage truth.

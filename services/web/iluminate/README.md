@@ -1,47 +1,49 @@
 # Iluminate Web
 
-Basic web console for Iluminate, cloned from the Voxalia Next.js web architecture and theme.
+Authenticated Next.js operator application for projects, assets, Designer,
+Animate, compilation/generation, scene sharing and the protected render harness.
 
 ## Responsibility
 
-- Provide the first Iluminate web shell with the same Next.js App Router, API route and Tailwind component structure.
-- Keep the authentication architecture in place: login/logout routes, httpOnly session cookie, role simulation and server-side menu contracts.
-- Run without a real auth/backend service for now through placeholder auth.
-- Expose starter menus and placeholder pages for workspaces, knowledge, automation, channels, insights and settings.
+- Provide the authenticated portal shell and project/partitura workflows.
+- Host the fabrication-oriented Designer and Animate/player surfaces.
+- Expose HTTP adapters for project, asset, partitura, render and share flows.
+- Reuse the canonical schemas and validation behavior from `lighting-core`.
+- Provide the protected browser render harness consumed by `render-worker`.
 
-## Current Mode
+The browser never connects to PostgreSQL. Server-only modules in `lib/server`
+currently use `pg` and parameterized SQL with trusted `client_id` context. This
+is the established persistence approach; adding an ORM or query builder is an
+explicit architecture decision, not an incidental implementation change.
 
-The app is intentionally UI/API-contract first. With `ILUMINATE_API_BASE_URL` empty and `ILUMINATE_PLACEHOLDER_AUTH=true`, any non-empty username/password opens the console.
+`lighting-core` remains the canonical owner of partitura and effect semantics.
 
-When the backend is ready, set:
+## Authentication mode
 
-```text
-ILUMINATE_API_BASE_URL=http://iluminate-api:8000/api/v1
-ILUMINATE_PLACEHOLDER_AUTH=false
-ILUMINATE_SECURE_COOKIES=true
-```
+With `ILUMINATE_API_BASE_URL` empty and `ILUMINATE_PLACEHOLDER_AUTH=true`, any
+non-empty username/password opens the development console. Real auth can be
+enabled through the external auth API configuration without changing browser
+database access.
 
-Expected backend endpoints keep the same shape as Voxalia:
+## Development and validation
 
-```text
-POST /auth/login
-POST /auth/logout
-POST /auth/forgot-password
-POST /auth/reset-password
-POST /auth/simulate-role
-GET  /menu
-GET  /{module-path}
-```
-
-## Local Development
+From this directory with Node installed:
 
 ```bash
-npm install
+npm ci
 npm run dev
+npm test
+npm run typecheck
+npm run lint
+npm run build
 ```
 
-From `/srv/iluminate`, the container placeholder can be built with:
+From the repository root, the Docker build installs dependencies, builds
+`lighting-core`, runs the web tests and builds Next.js:
 
 ```bash
-docker compose up --build iluminate-web
+docker compose build iluminate-web
 ```
+
+The app listens on container port `3000` and defaults to host port `8420` in
+Compose.

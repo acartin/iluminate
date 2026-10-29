@@ -2,6 +2,7 @@
 
 **Authority:** mandatory operating instructions for AI work in this repository.
 **Human entry point:** `.agent/ILUMINATE_BOOTSTRAP.md`.
+**Last reviewed:** 2026-10-26.
 **Goal:** load the smallest reliable context, preserve architectural decisions,
 make scoped changes and validate them without turning generated context into a
 second source of truth.
@@ -48,7 +49,7 @@ spanning several areas may combine rows, but duplicated documents are read once.
 | Area or affected path | Required context | Read additionally only when relevant |
 |---|---|---|
 | Any task | `.agent/RULES.md` | `.agent/BRAIN_MAP.md` only for unfamiliar structure or ownership. |
-| Product scope, architecture or roadmap | `.agent/AI_CONTEXT_LED_ORCHESTRATION_PLATFORM.md` | `.agent/IMPLEMENTATION_PLAN.md` for phases/priorities; relevant current code before accepting the document as current behavior. |
+| Product scope, architecture or roadmap | `.agent/AI_CONTEXT_LED_ORCHESTRATION_PLATFORM.md` | Relevant current code and area-specific contracts before accepting direction documents as current behavior. |
 | Service ownership, new folders, moves or cross-service dependencies | `.agent/FILESYSTEM_GUARDRAILS.md` | Service README files; `BRAIN_MAP.md` for the current high-level topology. |
 | Designer canvas interaction, tools, bars, Layers or selection UX | Relevant headings in `.agent/DESIGNER_UX_CONTRACT.md` and `.agent/DESIGNER_HANDOFF.md` | `.agent/ILUMINATE_UI_STANDARDS.md` for shared UI conventions. |
 | Designer geometry engine, projections, booleans, text or fabrication export | Relevant implementation headings in `.agent/DESIGNER_HANDOFF.md` | UX contract only when controls/interactions change; `docs/upgrade.doc` only for regression history or unfinished acceptance checks. |
@@ -111,7 +112,7 @@ Use this precedence for statements about current behavior:
 2. `.agent/RULES.md` for AI procedure, safety and context routing.
 3. The area-specific contract named in section 3.
 4. Current operational documentation in `docs/`.
-5. Current handoff and implementation plan.
+5. Current handoff and area-specific direction.
 6. Product/background direction.
 7. Generated maps and manifests.
 
@@ -157,7 +158,13 @@ and a concise list of affected code paths.
   to the ESP32.
 - `services/lighting-core` owns the canonical LED/partitura domain.
 - `services/web/iluminate` presents and edits contracts; it is not the canonical
-  domain and must not connect directly to PostgreSQL.
+  domain. Browser code never connects to PostgreSQL. Server-only repositories
+  in the authenticated Next.js runtime may use `pg` with parameterized SQL,
+  trusted `client_id` context and versioned migrations.
+- Preserve the current direct-SQL approach for normal persistence work. Adding
+  an ORM or query builder is an architectural dependency decision that requires
+  a concrete need and explicit user authorization; it is not categorically
+  forbidden.
 - `services/auth` owns identity and permissions without absorbing LED-domain
   internals.
 - Organized ESP32 firmware lives outside this monorepo. This repository
@@ -194,6 +201,11 @@ For DB, Docker, deployment or environment work:
 - Inspect local instructions and current tests near the target path.
 - Preserve unrelated user changes in a dirty worktree.
 - Prefer the smallest coherent patch; avoid opportunistic rewrites.
+- The current Design and Animate interfaces, authenticated shell, themes and
+  shared UI patterns are an approved baseline. Preserve their appearance,
+  structure, control positions and interactions unless the user explicitly
+  authorizes a visual change; a functional request does not imply permission
+  to redesign or reorganize unaffected UI.
 - Reuse existing contracts, primitives and domain vocabulary.
 - Put APIs and persistent rules in the service that owns the domain.
 - Keep Next API routes as UI adapters; move canonical domain logic to its owner.

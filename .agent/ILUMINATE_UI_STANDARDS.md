@@ -1,5 +1,8 @@
 # Iluminate UI Standards
 
+**Status:** canonical authenticated UI conventions
+**Last reviewed:** 2026-10-26
+
 Documento obligatorio para cualquier trabajo en `services/web/iluminate`.
 
 Este archivo existe para mantener la interfaz consistente mientras el producto evoluciona desde shell placeholder hacia editor tecnico de instalaciones LED.
@@ -25,16 +28,18 @@ Estructura esperada:
 - `app`: rutas, layouts de Next y composicion de paginas.
 - `components/ui`: primitivos reutilizables sin conocimiento de dominio.
 - `components/portal`: shell, navegacion, topbar, sidebar y composicion general.
-- `components/lighting`: componentes especificos del dominio LED, cuando se creen.
+- `components/lighting`: componentes especificos del dominio LED.
 - `components/lighting/designer`: editor grafico de partituras; debe mantenerse modular por tipos, canvas, renderer, geometria/wiring, compiler y UI.
-- `components/editor`: canvas, herramientas de rutas fisicas, zonas y grupos, cuando se creen.
-- `components/timeline`: escenas, pistas y clips, cuando se creen.
+- `components/lighting/player`: player reutilizable, Worker controller y renderer WebGL2.
 - `lib`: clientes API, helpers, tipos de UI y mocks temporales explicitamente marcados.
 
 Reglas:
 
-- El frontend no debe conectarse directo a Postgres.
-- Todo dato real debe venir de APIs/contratos del servicio propietario.
+- El navegador y los componentes cliente no deben conectarse directo a Postgres.
+- Los route handlers y repositorios server-only bajo `lib/server` pueden usar
+  `pg` con SQL parametrizado y contexto `client_id` confiable. Introducir un ORM
+  o query builder requiere una necesidad concreta y autorizacion explicita.
+- Todo dato real del navegador debe venir de APIs/contratos del servicio propietario.
 - Los mocks deben estar marcados como temporales.
 - El web no debe ser la fuente de verdad de la partitura; debe consumir `lighting-core`.
 
@@ -215,8 +220,10 @@ No permitido:
 
 ## 12. Checklist antes de implementar UI
 
-1. Leer `.agent/RULES.md`, `.agent/EXECUTION_MAP.md`, `.agent/FILESYSTEM_GUARDRAILS.md` y este documento.
-   Si el cambio afecta Designer o Animate, leer y cumplir además
+1. Seguir el router de `.agent/RULES.md` y leer este documento. Leer
+   `.agent/FILESYSTEM_GUARDRAILS.md` solo si cambia ownership o una frontera de
+   servicio, y `.agent/EXECUTION_MAP.md` cerca de la validacion. Si el cambio
+   afecta Designer o Animate, leer las secciones relevantes de
    `.agent/DESIGNER_UX_CONTRACT.md` y `.agent/DESIGNER_HANDOFF.md`.
 2. Revisar componentes existentes.
 3. Confirmar si la pantalla es editor, simulator, CRUD, dashboard, detalle o configuracion.
@@ -232,7 +239,7 @@ Detenerse antes de implementar si el cambio propone:
 
 - Reescribir el portal completo.
 - Reemplazar AppShell/Sidebar/Topbar o UI primitives sin justificacion.
-- Conectar frontend directo a Postgres.
+- Conectar el navegador o el sitio publico directo a Postgres.
 - Hacer del web la fuente de verdad de la partitura.
 - Usar un documento privado de Paper.js/Konva/timeline como formato canonico.
 - Hardcodear colores fuera del sistema de tokens.

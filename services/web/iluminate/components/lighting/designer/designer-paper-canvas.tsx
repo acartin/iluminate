@@ -921,12 +921,17 @@ export function DesignerStudioCanvas({
       return;
     }
     if (drag.type === "route-move") {
-      const routeMovementSnapCm = drag.original.points.some((routePoint) => routePoint.joint)
-        ? designer.snapCm
-        : interactionSnapCm;
       onChange({
         ...designer,
-        routes: moveRouteWithSolderedTerminals(designer, drag.routeId, drag.original, movement.x, movement.y, routeMovementSnapCm)
+        routes: moveRouteWithSolderedTerminals(
+          designer,
+          drag.routeId,
+          drag.original,
+          movement.x,
+          movement.y,
+          interactionSnapCm,
+          designer.snapCm
+        )
       });
       return;
     }

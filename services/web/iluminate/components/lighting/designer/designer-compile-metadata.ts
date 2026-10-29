@@ -1,7 +1,7 @@
 import type { DesignerForm } from "@/lib/lighting/partitura-model";
 import type { CompiledDesignerLayout } from "./designer-compiler";
 
-const DESIGNER_COMPILER_VERSION = 9;
+const DESIGNER_COMPILER_VERSION = 10;
 
 /** Stable signature of the authored data that changes electrical or targeting semantics. */
 export function designerCompileSignature(designer: DesignerForm) {
@@ -9,7 +9,7 @@ export function designerCompileSignature(designer: DesignerForm) {
     compilerVersion: DESIGNER_COMPILER_VERSION,
     stripConfiguration: designer.stripConfiguration,
     controller: designer.controller,
-    routes: designer.routes.map(({ id, name, kind, designSurface, lightingHost, points }) => ({ id, name, kind, designSurface: designSurface === "front" ? "front" : "rear", lightingHost, points })),
+    routes: designer.routes.map(({ id, name, kind, designSurface, diffuserMapping, points }) => ({ id, name, kind, designSurface: designSurface === "front" ? "front" : "rear", diffuserMapping, points })),
     zones: designer.zones.map(({ id, name, shape, x, y, width, height, points, contours, pathMode, fillRule }) => ({ id, name, shape, x, y, width, height, points, contours, pathMode, fillRule })),
     channels: designer.channels.map(({ id, name, points, pathMode, widthMm, closed, cap, fabricationSurface }) => ({ id, name, points, pathMode, widthMm, closed, cap, fabricationSurface: fabricationSurface === "rear" ? "rear" : "front" })),
     lightSources: designer.lightSources.map(({ id, name, targetType, targetId, mode, enabled }) => ({ id, name, targetType, targetId, mode, enabled })),

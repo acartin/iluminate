@@ -122,6 +122,10 @@ primary entity, UI workflow, or required partitura target type.
 5. Make simulator and firmware-facing artifacts consume the same resolved pixel
    targets. Do not maintain a separate manual `zone -> segment` assignment.
 
+The scene origin (`0 ms`) is always the unanimated, all-black frame. Clips that
+start at zero begin contributing only after the playhead advances beyond the
+origin; this rule is enforced by the player rather than by individual effects.
+
 ## Effect Implementation Structure
 
 Effects are modular in `services/lighting-core/domain/effects/`. Each effect is

@@ -1,6 +1,7 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { MenuItem, MenuPayload, MenuSection, ModulePayload, Role, WorkspacePayload } from "@/lib/types";
+import { listGlobalLedStripProfiles } from "@/lib/server/led-strip-profiles";
 
 export const API_BASE_URL = process.env.ILUMINATE_API_BASE_URL ?? "";
 export const placeholderAuthEnabled = process.env.ILUMINATE_PLACEHOLDER_AUTH !== "false" && !API_BASE_URL;
@@ -80,6 +81,13 @@ export const menuCatalog: MenuSection[] = [
         required_permission: "auth:roles:manage"
       },
       {
+        id: "led-strips",
+        label: "LED Strip Profiles",
+        href: "/settings/led-strips",
+        description: "Global electrical and physical strip specifications used by Designer projects.",
+        required_permission: "lighting:strip-profiles:manage"
+      },
+      {
         id: "audit",
         label: "Audit Log",
         href: "/settings/audit",
@@ -144,7 +152,7 @@ function placeholderMenuForRole(role: Role): MenuPayload {
 export const placeholderMenu: MenuPayload = placeholderMenuForRole(defaultPlaceholderRole);
 
 function withoutLegacyGenerator(menu: MenuPayload): MenuPayload {
-  return {
+  const normalized = {
     ...menu,
     sections: menu.sections
       .map((section) => ({
@@ -153,6 +161,19 @@ function withoutLegacyGenerator(menu: MenuPayload): MenuPayload {
       }))
       .filter((section) => section.items.length > 0)
   };
+  if (normalized.user.role !== "system-admin" || normalized.sections.some((section) => section.items.some((item) => item.href === "/settings/led-strips"))) {
+    return normalized;
+  }
+  const item = menuCatalog.flatMap((section) => section.items).find((entry) => entry.href === "/settings/led-strips");
+  if (!item) return normalized;
+  const settings = normalized.sections.find((section) => section.id === "settings");
+  if (settings) {
+    return {
+      ...normalized,
+      sections: normalized.sections.map((section) => section.id === "settings" ? { ...section, items: [...section.items, item] } : section)
+    };
+  }
+  return { ...normalized, sections: [...normalized.sections, { id: "settings", label: "Settings", items: [item] }] };
 }
 
 async function authHeaders(): Promise<HeadersInit> {
@@ -198,6 +219,23 @@ export async function getMenu(): Promise<MenuPayload> {
 }
 
 export async function getModule(path: string): Promise<ModulePayload> {
+  if (path === "/settings/led-strips") {
+    const menu = await getMenu();
+    if (menu.user.role !== "system-admin") redirect(defaultPathForRole(menu.user.role));
+    const records = await listGlobalLedStripProfiles();
+    return {
+      module: {
+        id: "settings.led-strips",
+        title: "LED Strip Profiles",
+        description: "Manage the global strip catalog copied into project partituras as independent snapshots.",
+        status: "Active"
+      },
+      context: { client_id: menu.tenant.client_id, role: menu.user.role },
+      links: {},
+      actions: [{ id: "create", label: "Create profile", enabled: true }],
+      records
+    };
+  }
   if (placeholderAuthEnabled) {
     const menu = await getMenu();
     const item = menu.sections.flatMap((section) => section.items).find((entry) => entry.href === path);

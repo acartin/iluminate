@@ -10,7 +10,7 @@ import type { DiffuserRenderSettings } from "./optical-model";
 import type { DesignerSelection, DesignerViewport } from "../designer/types";
 import { buildVisualScene } from "@/lib/lighting/visual-scene-builder";
 import { PlayerController, type PlayerStatus } from "./player-controller";
-import { Webgl2PlayerRenderer } from "./gpu/webgl2-player-renderer";
+import { Webgl2PlayerRenderer, type PlayerOutlineTarget } from "./gpu/webgl2-player-renderer";
 import { normalizePlayerViewport } from "./player-viewport";
 import { synchronizePlayerPlayback, synchronizePlayerScene } from "./player-control-sync";
 
@@ -25,10 +25,12 @@ type PlayerSurfaceProps = {
   layout: CompiledDesignerLayout;
   viewport: DesignerViewport;
   activeSceneId: string;
+  previewTimeMs: number;
   playing: boolean;
   presentation: DesignerAnimationDiffuser;
   faceMaskEnabled?: boolean;
   settings: DiffuserRenderSettings;
+  outlineTargets?: PlayerOutlineTarget[];
   selection?: DesignerSelection;
   onViewportChange: (viewport: DesignerViewport) => void;
   onSelect: (selection: DesignerSelection, additive?: boolean) => void;
@@ -42,10 +44,12 @@ export const PlayerSurface = forwardRef<PlayerSurfaceHandle, PlayerSurfaceProps>
   layout,
   viewport,
   activeSceneId,
+  previewTimeMs,
   playing,
   presentation,
   faceMaskEnabled = true,
   settings,
+  outlineTargets = [],
   selection = null,
   onViewportChange,
   onSelect,
@@ -65,6 +69,7 @@ export const PlayerSurface = forwardRef<PlayerSurfaceHandle, PlayerSurfaceProps>
   const presentationRef = useRef(presentation);
   const faceMaskEnabledRef = useRef(faceMaskEnabled);
   const settingsRef = useRef(settings);
+  const outlineTargetsRef = useRef(outlineTargets);
   const selectionRef = useRef(selection);
   const colorModeRef = useRef<"day" | "night">("night");
   const onStatusRef = useRef(onStatus);
@@ -72,6 +77,7 @@ export const PlayerSurface = forwardRef<PlayerSurfaceHandle, PlayerSurfaceProps>
   const requestedViewportRef = useRef(viewport);
   const viewportRef = useRef(normalizePlayerViewport(viewport, { width: 1, height: 1 }));
   const desiredPlayingRef = useRef(playing);
+  const previewTimeMsRef = useRef(previewTimeMs);
   const sizeRef = useRef({ width: 1, height: 1, pixelRatio: 1 });
   const panRef = useRef<{ clientX: number; clientY: number; viewport: DesignerViewport } | null>(null);
   const [status, setStatus] = useState<PlayerStatus>({ state: "empty", sceneId: activeSceneId, timeMs: 0, durationMs: 0, pixelCount: 0 });
@@ -81,9 +87,11 @@ export const PlayerSurface = forwardRef<PlayerSurfaceHandle, PlayerSurfaceProps>
   requestedViewportRef.current = viewport;
   viewportRef.current = normalizePlayerViewport(viewport, sizeRef.current);
   desiredPlayingRef.current = playing;
+  previewTimeMsRef.current = previewTimeMs;
   presentationRef.current = presentation;
   faceMaskEnabledRef.current = faceMaskEnabled;
   settingsRef.current = settings;
+  outlineTargetsRef.current = outlineTargets;
   selectionRef.current = selection;
   colorModeRef.current = colorMode;
   onStatusRef.current = onStatus;
@@ -124,6 +132,7 @@ export const PlayerSurface = forwardRef<PlayerSurfaceHandle, PlayerSurfaceProps>
       renderer.updatePresentation(presentationRef.current);
       renderer.updateFaceMaskEnabled(faceMaskEnabledRef.current);
       renderer.updateOpticalSettings(settingsRef.current);
+      renderer.updateOutlineTargets(outlineTargetsRef.current);
       renderer.updateSelection(playerOutlineSelection(selectionRef.current));
       renderer.updateColorMode(colorModeRef.current);
       const size = sizeRef.current;
@@ -193,9 +202,12 @@ export const PlayerSurface = forwardRef<PlayerSurfaceHandle, PlayerSurfaceProps>
     const controller = controllerRef.current;
     if (!controller) return;
     let cancelled = false;
-    void controller.load(partitura).then(() => {
+    const loading = controller.load(partitura);
+    controller.seek(previewTimeMsRef.current);
+    void loading.then(() => {
       if (cancelled) return;
-      if (activeSceneId !== partitura.defaultScene) controller.setScene(activeSceneId);
+      synchronizePlayerScene(controller, activeSceneId, partitura.scenes);
+      controller.seek(previewTimeMsRef.current);
       if (desiredPlayingRef.current) controller.play();
     }).catch(() => undefined);
     return () => { cancelled = true; };
@@ -213,6 +225,7 @@ export const PlayerSurface = forwardRef<PlayerSurfaceHandle, PlayerSurfaceProps>
     renderer.updatePresentation(presentation);
     renderer.updateFaceMaskEnabled(faceMaskEnabled);
     renderer.updateOpticalSettings(settings);
+    renderer.updateOutlineTargets(outlineTargets);
     renderer.updateSelection(playerOutlineSelection(selection));
     renderer.updateColorMode(colorMode);
     renderer.render();
@@ -249,10 +262,17 @@ export const PlayerSurface = forwardRef<PlayerSurfaceHandle, PlayerSurfaceProps>
   }, [selection]);
 
   useEffect(() => {
+    const renderer = rendererRef.current;
+    if (!renderer) return;
+    renderer.updateOutlineTargets(outlineTargets);
+    renderer.render();
+  }, [outlineTargets]);
+
+  useEffect(() => {
     const controller = controllerRef.current;
     if (!controller) return;
-    synchronizePlayerScene(controller, activeSceneId);
-  }, [activeSceneId, status.state]);
+    synchronizePlayerScene(controller, activeSceneId, partitura.scenes);
+  }, [activeSceneId, partitura.scenes, status.state]);
 
   useEffect(() => {
     const controller = controllerRef.current;
@@ -272,7 +292,7 @@ export const PlayerSurface = forwardRef<PlayerSurfaceHandle, PlayerSurfaceProps>
 
   function handlePointerDown(event: React.PointerEvent<HTMLDivElement>) {
     const point = screenToWorld(event.clientX, event.clientY);
-    const target = pickAnimationTarget(designer, point, worldHitTolerance(viewportRef.current, sizeRef.current) * 2.25);
+    const target = pickAnimationTarget(designer, point, worldHitTolerance(viewportRef.current, sizeRef.current) * 2.25, outlineTargetsRef.current);
     if (target) {
       onSelect(target);
       return;

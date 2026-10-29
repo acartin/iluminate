@@ -1,5 +1,5 @@
 import { DESIGNER_GLOBAL_LIGHT_SOURCE_TARGETS, designerGlobalLightSourceMode, designerGlobalLightSourceTarget, designerGroupLightTargetId, designerOpticalModeSide, parseDesignerGroupLightTargetId, type ClipForm, type DesignerForm, type DesignerLightingSide, type DesignerOpticalMode, type PartituraDocument } from "@/lib/lighting/partitura-model";
-import type { DesignerSelection } from "./types";
+import type { DesignerRouteSurfaceView, DesignerSelection } from "./types";
 
 /** Returns every clip target represented by the current canvas selection. */
 export function designerClipTargetIdsForSelection(designer: DesignerForm, selection: DesignerSelection) {
@@ -58,6 +58,24 @@ export type AnimationClipTargetOption = {
   available: boolean;
 };
 
+export type AnimationEffectTargetOutlineOption = AnimationClipTargetOption & {
+  groupId: string;
+  targets: Array<{ type: "zone" | "channel"; id: string }>;
+};
+
+/** Filters the Animate object navigator by configured optical side, not fabrication side. */
+export function animationTargetMatchesSurfaceView(
+  designer: DesignerForm,
+  target: { type: "zone" | "channel"; id: string },
+  view: DesignerRouteSurfaceView
+) {
+  if (view === "both") return true;
+  return designer.lightSources.some((source) => source.enabled
+    && source.targetType === target.type
+    && source.targetId === target.id
+    && designerOpticalModeSide(source.mode) === view);
+}
+
 export function animationClipTargetSide(designer: DesignerForm, targetId: string): DesignerLightingSide {
   const groupTarget = parseDesignerGroupLightTargetId(targetId);
   if (groupTarget) return groupTarget.side;
@@ -104,6 +122,36 @@ export function animationClipTargetOptions(designer: DesignerForm, compiledLayou
     available: true
   }] : []);
   return [...groups, ...sources, ...global];
+}
+
+/** Resolves available, side-scoped Effect targets to the component geometry they outline. */
+export function animationEffectTargetOutlineOptions(
+  designer: DesignerForm,
+  compiledLayout?: PartituraDocument["compiledLayout"]
+): AnimationEffectTargetOutlineOption[] {
+  if (!compiledLayout) return [];
+  const compiledGroups = new Map(compiledLayout.groups.map((group) => [group.id, group]));
+  const sources = new Map(designer.lightSources.map((source) => [source.id, source]));
+
+  function targetsForGroup(groupId: string, trail: string[] = []) {
+    if (trail.includes(groupId)) return [];
+    const group = compiledGroups.get(groupId);
+    if (!group) return [];
+    return group.members.flatMap((member): Array<{ type: "zone" | "channel"; id: string }> => {
+      if (member.type === "group") return targetsForGroup(member.id, [...trail, groupId]);
+      const source = sources.get(member.id);
+      return source ? [{ type: source.targetType, id: source.targetId }] : [];
+    });
+  }
+
+  return animationClipTargetOptions(designer, compiledLayout).flatMap((option) => {
+    const parsed = option.category === "effectTargets" ? parseDesignerGroupLightTargetId(option.id) : null;
+    if (!parsed) return [];
+    const targets = targetsForGroup(option.id).filter((target, index, entries) =>
+      entries.findIndex((entry) => entry.type === target.type && entry.id === target.id) === index
+    );
+    return [{ ...option, groupId: parsed.groupId, targets }];
+  });
 }
 
 /** Keeps each independently addressable source available when creating a clip for one canvas target. */

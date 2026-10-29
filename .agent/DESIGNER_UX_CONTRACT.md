@@ -3,6 +3,7 @@
 **Status:** mandatory. This document is the canonical layout contract for the
 Designer studio. Read it before changing `partitura-workspace.tsx`, the Designer
 tool rail, either top bar, Layers navigation, or Animate workspace controls.
+**Last reviewed:** 2026-10-26.
 
 The purpose of this contract is to keep controls organized by scope. New
 features must fit this structure; they must not gradually turn the first bar or
@@ -16,7 +17,8 @@ The Designer has exactly these primary UI regions:
 Global command bar
 Contextual properties bar (Design only)
 Tool rail | Canvas | Layers/properties panel
-Animate timeline when Animate mode is active
+Animate: Canvas | unified calibration/clip inspector
+         Timeline | same uninterrupted inspector
 ```
 
 Do not add a third horizontal command/properties bar. Recover horizontal space
@@ -24,6 +26,22 @@ with compact labels, icons or responsive hiding before adding another row.
 Grouped menus are valid only where this contract explicitly assigns a coherent
 group, such as global `Setup`; they are not an overflow mechanism for contextual
 object actions. Vertical canvas space has priority.
+
+In Animate, the timeline occupies only the canvas column. The right inspector
+spans the combined canvas and timeline height as one square-cornered dock; the
+timeline bar must never split that column. The dock exposes mutually exclusive
+`Objects`, `Target` and `Clip` tabs so each workflow receives the full available
+height instead of sharing three stacked cards. `Objects` is the target navigator
+and is limited to Zones and Channels. Those two groups start collapsed, expand
+and collapse independently, and expand temporarily while search is active. The
+navigator preserves Layers order, icons and selection colors,
+supports search, and reuses the exact Front/Rear/Both construction-side toggle.
+In this Animate navigator the side filters by enabled optical-source side; Both
+also keeps unconfigured targets visible. Canvas, timeline and navigator
+selection remain synchronized. Object rows do not expose an eye for outline
+state; the global `Outlines` selector owns that feedback, and its state never
+removes a navigator row. `Target` owns calibration-only controls and
+`Clip` hosts the existing clip inspector without changing either workflow.
 
 ## 1. Global Command Bar
 
@@ -44,7 +62,7 @@ Canonical contents:
 - Layers panel toggle and active-layer identification.
 - Compile state, issue count and global fabrication status.
 - Theme, Undo, Redo, Compile and Save.
-- In Animate mode: preview type, an always-labeled `Outlines` selector and fullscreen Viewer. Outlines is a transient presentation filter with `All`, `Active sources`, `Zones`, `Channels` and `None`; it does not change the document or optical emulation.
+- In Animate mode: preview type, an always-labeled `Outlines` selector and fullscreen Viewer. Outlines is a transient, explicitly closable checklist of the compiled Front/Rear variants under `Effect targets`; its panel must be wide enough to show target names without ellipsis and identify the groups containing the current object selection. Enabling a variant shows the outlines of all resolved Zone and Channel members, preserving their established Layers colors; `All` and `None` are bulk actions. The checklist is authoritative over canvas outline drawing: selecting an object outside the enabled set must not inject another outline, although that object remains selectable and visible in Targets. At overlapping geometry, an enabled outlined target receives hit-test priority before the normal Channel-first ordering. Outlines does not change the document or optical emulation.
 
 Save remains gray and disabled when the current persistent document matches the
 last server-confirmed version. It turns amber and becomes actionable when
@@ -64,10 +82,15 @@ construction face when applicable, select it in Layers and center it on the
 canvas. A target that represents a Lighting Setup opens that owner's setup so
 the assignment can be inspected directly. String, Zone and Channel chips reuse
 their object-type icons and Layers colors. For overlapping Lighting Setups, the
-issue card exposes a `Lighting host` selector limited to the conflicting Zone and
-Channel owners; the string chip also reveals the same field first in the
-contextual bar. Legacy string-only issues remain
-readable but cannot invent a target.
+issue card opens the same visual `Diffuser mapping` manager as the string
+contextual bar. The contextual bar only contains its compact summary/launcher;
+the manager is a viewport-level modal and must never be constrained or clipped
+by the bar. It lists all Zones and Channels in Layers order, with their
+Layers icons/colors and Front/Rear setup state, and supports search plus
+multi-selection. The compact launcher identifies one mapped owner by name and
+icon; for multiple owners it shows the first name plus the remaining count.
+Missing references remain visible until removed. The string chip reveals this
+field first in the contextual bar.
 
 Selection-dependent actions or fields do not belong here. In particular, do
 not place object coordinates, shape/path fields, node controls, Lighting,
@@ -80,11 +103,10 @@ Its contents must change with the active tool or selected object. Animate must
 not reserve an empty contextual row: its calibration lives in the right panel
 and its scene/track/clip controls live in the timeline toolbar.
 
-With no object selected it shows:
-
-- active tool name;
-- a short instruction for using that tool;
-- active layer or a prompt to choose one.
+The contextual bar never repeats the active tool name, usage instructions,
+active layer or a prompt to choose one. Tool identity and hover guidance belong
+to the left rail. With no object selected, the bar shows only functional
+controls required by the active tool; it may otherwise remain empty.
 
 When a geometric node/path tool is active, this tool context takes precedence
 over the previous object selection and immediately exposes the shared `New
@@ -175,8 +197,11 @@ Examples:
   Fillet badge, Setup Fillet setting or Channel-specific `Round corner` command.
 - A selected closed Channel exposes `Generate lightbox Zone`. It creates a
   normal independent Zone from the region inside the Channel's physical swept
-  footprint, using the smallest closed containing profile as its mother. The
-  operation never changes either source object and names the result
+  footprint, using the smallest closed containing profile as its mother. Every
+  closed Channel fully contained by that region on the same fabrication face
+  is auto-detected as a counter-shape and its complete swept footprint is
+  subtracted from the generated Zone. The operation never changes any source
+  object and names the result
   `<mother profile name> lightbox`, then `... 2`, `... 3` on collision. The
   command is unavailable for an open Channel and reports a concise notice when
   no enclosing profile or usable inner region exists.
@@ -438,8 +463,8 @@ one shared non-negative distance. Edge alignment uses the generated object's
 physical width: router diameter for a Channel and PCB width for a string. The
 signed Offset and Join controls remain exclusive to `Offset Path`. Both
 generation commands materialize independent snapshots. A generated string is
-placed in Hardware / Strings and receives the selected Zone as its explicit
-Lighting host, while the source Zone remains selected and its active Layers
+placed in Hardware / Strings and receives a restricted Diffuser mapping to the
+selected Zone, while the source Zone remains selected and its active Layers
 destination remains unchanged so repeated letter-by-letter generation stays in
 context. Subsequent Zone edits never reshape either generated result.
 For native Reference, Zone and Face Graphic paths, the contextual `Fillet`
@@ -618,10 +643,15 @@ Lighting construction belongs to Design. Only Design may create, enable,
 disable or remove Front, Halo-Lit and Wall Washer sources, rename a source,
 choose the installed front material/diffuser or choose the physical receiver.
 LED strings are not manually assigned: Compile maps Front sources to intersecting
-Front strings and Halo/Wall Washer sources to intersecting Rear strings. A selected
-LED string may optionally choose a Lighting host (Zone or Channel) to narrow that
-geometric mapping; Auto keeps the current geometric behavior. Strings generated
-from a Channel inherit that Channel as their host. The Lighting Setup modal
+Front strings and Halo/Wall Washer sources to intersecting Rear strings. Each
+LED string has a `Diffuser mapping`. `Auto · geometry` keeps every geometric
+intersection on the string's construction side. Restricted mode selects one or
+more allowed Zones/Channels while geometry remains the final boundary, so one
+physical string may legitimately feed several diffuser Zones. The visual manager
+opens outside the contextual bar, shows the selected string's construction-side
+context, and is organized like `Diffusors` in Layers, reusing its icons, colors
+and order. Strings generated
+from a Channel begin restricted to that Channel. The Lighting Setup modal
 presents the compiled result read-only.
 New Zones default to Front; new Channels
 default to Front or Halo according to their creation surface. Wall Washer stays
@@ -629,8 +659,9 @@ explicit. These are installation attributes, not animation controls.
 
 Animate may tune only calibration parameters of sources that already exist:
 
-- Front: intensity and the applicable distance, softness, transmission and
-  beam calibration for its installed material.
+- Front: intensity for direct LED Pixels; intensity, distance, beam and
+  softness for any installed diffuser material. Persisted legacy transmission
+  metadata is not exposed because it does not participate in rendering.
 - Halo-Lit: intensity, spread, softness, wall gap and face color.
 - Wall Washer: intensity, spread, softness, direction, throw, beam and falloff.
 
@@ -638,9 +669,13 @@ Animate must not show mode enable checkboxes, Add/Remove, source naming, compile
 string mapping, material selection or receiver selection. If the selected
 target has no configured source, Animate directs the operator to Design.
 
-`+ Clip` opens a target chooser; canvas preselection is never required. The
-chooser has a simple Front/Rear switch, search, and the categories Effect
-targets, Zones, Channels and Global. It reuses the Layers icons and colors.
+`+ Clip` applies canvas context when an object is selected: one available
+lighting destination creates the clip directly, while multiple destinations
+open the chooser scoped to that object. Without canvas preselection it opens
+the complete target chooser. The chooser is a viewport-level work modal and
+must never be constrained by the narrow clip inspector. It has a simple
+Front/Rear switch, search, and stable cards for the categories Effect targets,
+Zones, Channels and Global. It reuses the Layers icons and colors.
 Targets without compiled lighting on the selected side stay visible but
 disabled, with the reason shown as secondary text. Choosing a target creates
 the clip immediately; the clip inspector's Target control reopens the same

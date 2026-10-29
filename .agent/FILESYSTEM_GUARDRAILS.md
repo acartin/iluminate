@@ -2,6 +2,7 @@
 
 **Status:** project organization guardrails  
 **Applies to:** `/srv/iluminate`  
+**Last reviewed:** 2026-10-26
 **Purpose:** keep the monorepo understandable as services, APIs, partitura contracts, editor and simulator evolve.
 
 ---
@@ -47,6 +48,7 @@ Owns:
 - Canvas and timeline presentation.
 - User-facing screens.
 - Calls to auth and lighting APIs.
+- Server-only persistence/repository adapters for the current integrated Next.js runtime.
 - The reusable browser player surface, Worker controller and WebGL2 renderer.
 - The protected render harness consumed by the offline render worker.
 
@@ -54,7 +56,7 @@ Does not own:
 
 - authoritative partitura schema,
 - authorization rules,
-- project revision validation,
+- canonical partitura validation,
 - controller protocol rules,
 - firmware-specific LED drivers.
 
@@ -106,7 +108,6 @@ Owns:
 - clips,
 - effect contracts,
 - partitura validation,
-- project revisions,
 - deployment payload rules,
 - LED-domain API handlers if needed.
 
@@ -168,7 +169,7 @@ Owns communication contracts between cloud services and controllers:
 - provisioning payloads,
 - desired state,
 - reported state,
-- command revisions,
+- command sequencing,
 - firmware/core version checks,
 - polling or transport contracts.
 
@@ -189,6 +190,7 @@ web/iluminate
   -> auth/contracts
   -> lighting-core/contracts
   -> lighting-core/schemas
+  -> PostgreSQL through server-only repositories using pg
 
 web/iluminate-public
   -> lighting-core/contracts
@@ -217,6 +219,7 @@ Avoid:
 - `lighting-core` importing React or Next.js.
 - `auth` importing lighting domain internals.
 - `web/iluminate` becoming the source of truth for partituras.
+- browser code in `web/iluminate` connecting directly to PostgreSQL.
 - `web/iluminate-public` connecting directly to PostgreSQL or receiving private service credentials.
 - API handlers duplicating validation rules that belong in `validators/`.
 - render-worker implementing its own effect, clock, optical or partitura semantics.
@@ -270,8 +273,10 @@ APIs live inside the service that owns the domain.
 Examples:
 
 - auth API belongs under `services/auth/api`.
-- lighting/project/revision/deployment API belongs under `services/lighting-core/api`.
-- UI-only Next route handlers may live under `services/web/iluminate/app/api` only when they are presentation adapters or temporary placeholders.
+- canonical lighting and partitura rules belong in `services/lighting-core`.
+- Next route handlers may live under `services/web/iluminate/app/api` as HTTP
+  adapters and may call server-only repositories, but must reuse canonical
+  schemas and validators instead of owning a second domain model.
 
 If a Next API route starts owning domain rules, move the rule to the owning service and let the route call it.
 
@@ -279,9 +284,14 @@ If a Next API route starts owning domain rules, move the rule to the owning serv
 
 ## 7. Storage Placement
 
-Each service owns its storage adapters and migrations.
+Schema and migration ownership remains with the bounded domain. In the current
+integrated runtime, authenticated Next.js server repositories and the private
+render worker may read or write their authorized PostgreSQL tables directly.
+Browser code and the public site may not.
 
-No service should directly read or write another service's tables. Cross-service communication should happen through contracts, APIs, or explicit repository boundaries.
+Direct access must use parameterized SQL through `pg`, trusted tenant context
+and versioned migrations. Preserve this approach for normal changes. Adding an
+ORM or query builder requires a concrete need and explicit user authorization.
 
 PostgreSQL is the target database for persistent platform state.
 
@@ -290,7 +300,9 @@ The system is multitenant by design. The canonical PostgreSQL/backend tenant fie
 Expected ownership:
 
 - `auth/storage`: users, organizations, memberships, roles, sessions.
-- `lighting-core/storage`: projects, controllers, revisions, deployments, device commands, device status, assets metadata.
+- `lighting-core/storage`: projects, controllers, partituras, deployments,
+  device commands, device status, assets metadata, render artifacts/jobs and
+  scene shares.
 
 ---
 

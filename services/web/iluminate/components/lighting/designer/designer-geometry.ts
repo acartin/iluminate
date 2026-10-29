@@ -2,7 +2,10 @@ import type { DesignerBuildAreaForm, DesignerChannelForm, DesignerContour, Desig
 import { designerGeometryAsShape, resolveDesignerDerivedGeometry, resolveDesignerProjectionGeometry } from "@/lib/lighting/partitura-model";
 import { filletDesignerGeometry } from "@/lib/lighting/designer-derived-geometry";
 import { estimateDesignerTextBounds } from "@/lib/lighting/designer-text-geometry";
+import { sampleRouteLedDots } from "@/lib/lighting/led-route-sampling";
 import type { DesignerActiveLayer, DesignerCanvasHit, DesignerFilletCornerTarget, DesignerRouteTerminal, DesignerViewport, ResizeHandle } from "./types";
+
+export { sampleRouteLedDots } from "@/lib/lighting/led-route-sampling";
 
 export function designerProjectionName(sourceName: string) {
   return sourceName;
@@ -486,6 +489,7 @@ export function createRouteFromDraft(kind: DesignerRouteKind, start: DesignerPoi
     name: kind === "data_cable" ? `Data cable ${next}` : `LED string ${next}`,
     kind,
     designSurface,
+    ...(kind === "led_string" ? { diffuserMapping: { mode: "auto" } as const } : {}),
     points: [start, end]
   };
 }
@@ -504,7 +508,7 @@ export function createLedStringFromChannel(channel: DesignerChannelForm, designe
   }
   if (reverse) points.reverse();
   const route = createRouteFromDraft("led_string", points[0], points[points.length - 1], designer, channel.fabricationSurface ?? "front");
-  return { ...route, name: `${channel.name} string`, lightingHost: { type: "channel", id: channel.id }, points };
+  return { ...route, name: `${channel.name} string`, diffuserMapping: { mode: "restricted", targets: [{ type: "channel", id: channel.id }] }, points };
 }
 
 export function createLedStringsFromZonePaths(
@@ -533,7 +537,7 @@ export function createLedStringsFromZonePaths(
     created.push({
       ...route,
       name: `${zone.name} string${index ? ` ${index + 1}` : ""}`,
-      lightingHost: { type: "zone", id: zone.id }
+      diffuserMapping: { mode: "restricted", targets: [{ type: "zone", id: zone.id }] }
     });
   });
   return created;
@@ -710,20 +714,25 @@ export function designerFilletCornerForHit(designer: DesignerForm, hit: Designer
   return { type, id: hit.id, cornerIndex: cornerIndex[hit.handle] };
 }
 
-export function pickAnimationTarget(designer: DesignerForm, point: DesignerPoint, tolerance: number): { type: "zone" | "channel"; id: string } | null {
+export function pickAnimationTarget(
+  designer: DesignerForm,
+  point: DesignerPoint,
+  tolerance: number,
+  preferredTargets: Array<{ type: "zone" | "channel"; id: string }> = []
+): { type: "zone" | "channel"; id: string } | null {
   // Channels are narrow foreground targets. Pick them before an overlapping filled
   // zone so clicking a visible strip selects the clip assigned to that channel.
-  for (const channel of designer.channels) {
-    if (channel.visible !== false && channelContainsPoint(channel, point, tolerance)) {
-      return { type: "channel", id: channel.id };
-    }
-  }
-  for (const zone of designer.zones) {
-    if (zone.visible !== false && (pointInsideDesignerShape(zone, point) || pointNearShapeStroke(zone, point, tolerance))) {
-      return { type: "zone", id: zone.id };
-    }
-  }
-  return null;
+  // Within that order, currently outlined targets win over overlapping geometry.
+  const hits = [
+    ...designer.channels.flatMap((channel) => channel.visible !== false && channelContainsPoint(channel, point, tolerance)
+      ? [{ type: "channel" as const, id: channel.id }]
+      : []),
+    ...designer.zones.flatMap((zone) => zone.visible !== false && (pointInsideDesignerShape(zone, point) || pointNearShapeStroke(zone, point, tolerance))
+      ? [{ type: "zone" as const, id: zone.id }]
+      : [])
+  ];
+  const preferred = new Set(preferredTargets.map((target) => `${target.type}:${target.id}`));
+  return hits.find((target) => preferred.has(`${target.type}:${target.id}`)) ?? hits[0] ?? null;
 }
 
 export function pickRouteSegmentHit(routes: DesignerRouteForm[], point: DesignerPoint, viewport: DesignerViewport, canvasSize: { width: number; height: number }) {
@@ -1381,23 +1390,31 @@ export function moveRouteTerminals(routes: DesignerRouteForm[], terminals: Desig
   }));
 }
 
-export function moveRouteWithSolderedTerminals(designer: DesignerForm, routeId: string, originalRoute: DesignerRouteForm, deltaX: number, deltaY: number, snapCm: number) {
+export function moveRouteWithSolderedTerminals(
+  designer: DesignerForm,
+  routeId: string,
+  originalRoute: DesignerRouteForm,
+  deltaX: number,
+  deltaY: number,
+  movementSnapCm: number,
+  connectionSnapCm: number
+) {
   const routes = designer.routes;
   const controllerPortIndex = originalRoute.kind === "data_cable" && originalRoute.points[0]?.joint
-    ? findControllerPortAtPoint(designer.controller, originalRoute.points[0], snapCm)
+    ? findControllerPortAtPoint(designer.controller, originalRoute.points[0], connectionSnapCm)
     : null;
-  const controllerAnchor = controllerPortIndex !== null ? controllerPortPoint(designer.controller, controllerPortIndex, snapCm) : null;
+  const controllerAnchor = controllerPortIndex !== null ? controllerPortPoint(designer.controller, controllerPortIndex, connectionSnapCm) : null;
   const movedPoints = originalRoute.points.map((routePoint) => ({
     ...routePoint,
-    x: snapValue(routePoint.x + deltaX, snapCm),
-    y: snapValue(routePoint.y + deltaY, snapCm)
+    x: snapValue(routePoint.x + deltaX, movementSnapCm),
+    y: snapValue(routePoint.y + deltaY, movementSnapCm)
   }));
   if (controllerAnchor) {
     movedPoints[0] = { ...movedPoints[0], ...controllerAnchor, joint: true };
   }
   const solderedTerminals = [0, originalRoute.points.length - 1].flatMap((pointIndex) => {
     if (!originalRoute.points[pointIndex]?.joint) return [];
-    return findJointGroup(routes, routeId, pointIndex, snapCm)
+    return findJointGroup(routes, routeId, pointIndex, connectionSnapCm)
       .filter((terminal) => terminal.routeId !== routeId || terminal.pointIndex !== pointIndex)
       .map((terminal) => ({ ...terminal, point: movedPoints[pointIndex] }));
   });
@@ -1872,43 +1889,6 @@ export function nextDesignerItemNumber(items: Array<{ id: string }>, prefix: str
     if (!/^\d+$/.test(suffix)) return highest;
     return Math.max(highest, Number(suffix));
   }, 0) + 1;
-}
-
-export function sampleRouteLedDots(route: DesignerRouteForm, ledsPerMeter: number, addressablePixelsPerMeter: number) {
-  const pitchCm = 100 / Math.max(1, ledsPerMeter);
-  const addressablePitchCm = 100 / Math.max(1, addressablePixelsPerMeter);
-  const dots: Array<DesignerPoint & { angle: number; addressableIndex: number }> = [];
-  const segments = route.points.slice(1).map((end, index) => {
-    const start = route.points[index];
-    const lengthCm = Math.hypot(end.x - start.x, end.y - start.y);
-    return {
-      start,
-      end,
-      lengthCm,
-      angle: lengthCm > 0.001 ? Math.atan2(end.y - start.y, end.x - start.x) * 180 / Math.PI : 0
-    };
-  }).filter((segment) => segment.lengthCm > 0.001);
-  const totalLengthCm = segments.reduce((total, segment) => total + segment.lengthCm, 0);
-
-  // A physical strip does not re-space LEDs at bends or solder points. Sample
-  // one continuous center-to-center pitch across the entire polyline.
-  for (let distanceCm = pitchCm / 2; distanceCm < totalLengthCm; distanceCm += pitchCm) {
-    let remainingDistance = distanceCm;
-    const segment = segments.find((entry) => {
-      if (remainingDistance <= entry.lengthCm) return true;
-      remainingDistance -= entry.lengthCm;
-      return false;
-    });
-    if (!segment) continue;
-    const ratio = remainingDistance / segment.lengthCm;
-    dots.push({
-      x: segment.start.x + (segment.end.x - segment.start.x) * ratio,
-      y: segment.start.y + (segment.end.y - segment.start.y) * ratio,
-      angle: segment.angle,
-      addressableIndex: Math.floor(distanceCm / addressablePitchCm)
-    });
-  }
-  return dots;
 }
 
 /** Resolves drawing geometry without rewriting any authored strip parameter. */

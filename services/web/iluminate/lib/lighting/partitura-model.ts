@@ -20,7 +20,7 @@ export type DesignerContour = {
   closed: true;
 };
 
-export const DESIGNER_SCHEMA_VERSION = 21 as const;
+export const DESIGNER_SCHEMA_VERSION = 22 as const;
 export const DEFAULT_CHANNEL_ROUTER_DIAMETER_MM = 10;
 
 /**
@@ -289,7 +289,10 @@ export type DesignerOpticalTreatment = DesignerLightSource;
 
 export type DesignerRouteKind = "led_string" | "data_cable";
 export type DesignerRouteSurface = DesignerSurface;
-export type DesignerLightingHost = { type: "zone" | "channel"; id: string };
+export type DesignerDiffuserTargetRef = { type: "zone" | "channel"; id: string };
+export type DesignerDiffuserMapping =
+  | { mode: "auto" }
+  | { mode: "restricted"; targets: DesignerDiffuserTargetRef[] };
 
 export type DesignerLedStripConstruction = "discrete" | "continuous";
 export type DesignerLedStripColorModel = "rgb" | "rgbw";
@@ -314,6 +317,7 @@ export type DesignerLedStripConfiguration = {
   pcbWidthMm: number;
   pcbThicknessMm?: number;
   ledPackageSizeMm?: number;
+  ratedCurrentMaPerLed?: number;
   ratedPowerWPerMeter?: number;
   minimumBendRadiusMm?: number;
   backupDataLine?: boolean;
@@ -333,8 +337,8 @@ export type DesignerRouteForm = {
   kind: DesignerRouteKind;
   /** Designer-only mounting face used to isolate dense wiring while authoring. */
   designSurface?: DesignerRouteSurface;
-  /** Optional physical owner used to disambiguate overlapping optical targets. */
-  lightingHost?: DesignerLightingHost;
+  /** Geometric diffuser targets allowed to receive pixels from this LED string. */
+  diffuserMapping?: DesignerDiffuserMapping;
   points: DesignerPoint[];
   visible?: boolean;
   /** Authoring-only effective lock; normally inherited from a layer or sublayer. */
@@ -898,9 +902,9 @@ export function createDefaultDesigner(): DesignerForm {
     fabricationParts: [],
     fabricationPaths: [],
     routes: [
-      { id: "route_fondo", name: "Fondo LED string", kind: "led_string", designSurface: "rear", points: [{ x: 44, y: 4, joint: true }, { x: 100, y: 4 }, { x: 100, y: 8 }, { x: 44, y: 8 }, { x: 44, y: 12 }, { x: 100, y: 12 }] },
-      { id: "route_estrella", name: "Estrella LED string", kind: "led_string", designSurface: "rear", points: [{ x: 110, y: 12 }, { x: 124, y: 12 }] },
-      { id: "route_letras", name: "Letras LED string", kind: "led_string", designSurface: "rear", points: [{ x: 44, y: 30 }, { x: 64, y: 30 }, { x: 70, y: 30 }, { x: 90, y: 30 }, { x: 96, y: 30 }, { x: 116, y: 30 }, { x: 122, y: 30 }, { x: 142, y: 30 }] },
+      { id: "route_fondo", name: "Fondo LED string", kind: "led_string", designSurface: "rear", diffuserMapping: { mode: "auto" }, points: [{ x: 44, y: 4, joint: true }, { x: 100, y: 4 }, { x: 100, y: 8 }, { x: 44, y: 8 }, { x: 44, y: 12 }, { x: 100, y: 12 }] },
+      { id: "route_estrella", name: "Estrella LED string", kind: "led_string", designSurface: "rear", diffuserMapping: { mode: "auto" }, points: [{ x: 110, y: 12 }, { x: 124, y: 12 }] },
+      { id: "route_letras", name: "Letras LED string", kind: "led_string", designSurface: "rear", diffuserMapping: { mode: "auto" }, points: [{ x: 44, y: 30 }, { x: 64, y: 30 }, { x: 70, y: 30 }, { x: 90, y: 30 }, { x: 96, y: 30 }, { x: 116, y: 30 }, { x: 122, y: 30 }, { x: 142, y: 30 }] },
       { id: "data_feed_1", name: "Data cable", kind: "data_cable", designSurface: "rear", points: [{ x: 16, y: 8, joint: true }, { x: 32, y: 8 }, { x: 32, y: 4 }, { x: 44, y: 4, joint: true }] }
     ]
   };
@@ -948,17 +952,21 @@ function normalizeDesigner(designer?: DesignerForm, compiledLayout?: PartituraDo
   // document. Only documents that predate a field receive its fallback.
   const routes = Array.isArray(designer.routes) ? designer.routes.map((route, index): DesignerRouteForm => {
     const kind = route.kind === "data_cable" ? "data_cable" : "led_string";
-    const lightingHost = kind === "led_string" && route.lightingHost
-      && (route.lightingHost.type === "zone" || route.lightingHost.type === "channel")
-      && typeof route.lightingHost.id === "string" && route.lightingHost.id
-      ? { type: route.lightingHost.type, id: route.lightingHost.id }
+    const restrictedTargets = route.diffuserMapping?.mode === "restricted" && Array.isArray(route.diffuserMapping.targets)
+      ? route.diffuserMapping.targets.filter((target, targetIndex, targets): target is DesignerDiffuserTargetRef => Boolean(target)
+        && (target.type === "zone" || target.type === "channel")
+        && typeof target.id === "string" && Boolean(target.id)
+        && targets.findIndex((candidate) => candidate?.type === target.type && candidate?.id === target.id) === targetIndex)
+      : null;
+    const diffuserMapping: DesignerDiffuserMapping | undefined = kind === "led_string"
+      ? restrictedTargets ? { mode: "restricted", targets: restrictedTargets } : { mode: "auto" }
       : undefined;
     return {
       id: typeof route.id === "string" && route.id ? route.id : `route_${index + 1}`,
       name: typeof route.name === "string" && route.name ? route.name : `Route ${index + 1}`,
       kind,
       designSurface: route.designSurface === "front" ? "front" : "rear",
-      ...(lightingHost ? { lightingHost } : {}),
+      ...(diffuserMapping ? { diffuserMapping } : {}),
       visible: route.visible !== false,
       ...(route.locked === true ? { locked: true } : {}),
       points: Array.isArray(route.points) ? route.points.filter((point) => Number.isFinite(point.x) && Number.isFinite(point.y)).map((point) => ({ x: point.x, y: point.y, ...(point.joint ? { joint: true } : {}) })) : []
@@ -988,6 +996,7 @@ function normalizeDesigner(designer?: DesignerForm, compiledLayout?: PartituraDo
     pcbWidthMm: Math.max(0.1, Math.min(100, positiveNumber(designer.ledPcbWidthMm, rawStrip.pcbWidthMm ?? fallback.ledPcbWidthMm))),
     ...(rawStrip.pcbThicknessMm === undefined ? {} : { pcbThicknessMm: positiveNumber(rawStrip.pcbThicknessMm, 1) }),
     ...(rawStrip.construction === "continuous" && rawStrip.ledPackageSizeMm === undefined ? {} : { ledPackageSizeMm: Math.max(0.1, Math.min(50, positiveNumber(designer.ledPackageSizeMm, rawStrip.ledPackageSizeMm ?? fallback.ledPackageSizeMm))) }),
+    ...(rawStrip.ratedCurrentMaPerLed === undefined ? {} : { ratedCurrentMaPerLed: positiveNumber(rawStrip.ratedCurrentMaPerLed, 1) }),
     ...(rawStrip.ratedPowerWPerMeter === undefined ? {} : { ratedPowerWPerMeter: positiveNumber(rawStrip.ratedPowerWPerMeter, 1) }),
     ...(rawStrip.minimumBendRadiusMm === undefined ? {} : { minimumBendRadiusMm: positiveNumber(rawStrip.minimumBendRadiusMm, 1) }),
     ...(rawStrip.backupDataLine === true ? { backupDataLine: true } : {})

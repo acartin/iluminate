@@ -5,13 +5,13 @@
 
 ## Snapshot
 
-- Generated UTC: `2026-10-17T20:57:55Z`
+- Generated UTC: `2026-10-26T17:12:31Z`
 - Repository root: `/srv/iluminate`
-- Git branch: `HETZNER-DEV-2026-Octubre-17B`
-- Git commit: `6890d15`
-- Worktree: `dirty` (5 changed paths, excluding generated context files)
-- Status fingerprint: `287c781a6f5942745e56eb7ba3bb7d4c246e0df538d185256c524443f5068404`
-- Tracked diff fingerprint: `7006d5e3edf44688e5f41558d7eabf10d6dd0140bc431fd9bf0dde4490c78fb9`
+- Git branch: `HETZNER-DEV-2026-Octubre-23`
+- Git commit: `7e67794`
+- Worktree: `dirty` (24 changed paths, excluding generated context files)
+- Status fingerprint: `d6dde32e3117e40ef51b4d5415167dbd13d1f048869c3127e6e635381767ef35`
+- Tracked diff fingerprint: `169be92ed1de487623509de05614e3f559dc4c68390c6f5d2f2fb60e36df60d8`
 
 The commit identifies the base revision. When the worktree is dirty, the two
 fingerprints distinguish the local state without copying diffs or secrets into
@@ -35,8 +35,8 @@ this file. Untracked file contents are never read for fingerprinting.
 ## Compose Services
 
 ```text
-postgres
 iluminate-web
+postgres
 render-worker
 iluminate-public-web
 ```
@@ -57,7 +57,6 @@ iluminate-public-web
 | `.agent/ILUMINATE_UI_STANDARDS.md` | Authenticated web UI standards. |
 | `.agent/PUBLIC_SITE_DIRECTION.md` | Public-site product and visual direction. |
 | `.agent/DATABASE_MODEL.md` | Persistence and tenant model. |
-| `.agent/IMPLEMENTATION_PLAN.md` | Roadmap and phase status. |
 | `.agent/EXECUTION_MAP.md` | Validation routes and commands. |
 | `services/web/iluminate-prompt-builder/README.md` | Internal prompt-builder usage and ownership. |
 | `docs/partitura-lifecycle.md` | Partitura source/compile/generate/device lifecycle. |
@@ -101,3 +100,10 @@ services/web/iluminate-public
 Use `rg --files <affected-path>` for file-level discovery. A complete file
 inventory is intentionally omitted because it is expensive, noisy and quickly
 stale.
+
+## Maintenance Tools
+
+| Tool | Purpose |
+|---|---|
+| `.agent/regenerar_contexto.sh` | Regenerate this snapshot and the compact integrity manifest. |
+| `.agent/validar_documentacion.sh` | Check routed paths, local links and manifest integrity without modifying files. |

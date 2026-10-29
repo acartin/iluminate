@@ -10,7 +10,8 @@ export function Modal({
   description,
   children,
   onClose,
-  className
+  className,
+  closeOnBackdrop = false
 }: {
   open: boolean;
   title: string;
@@ -18,11 +19,17 @@ export function Modal({
   children: React.ReactNode;
   onClose: () => void;
   className?: string;
+  closeOnBackdrop?: boolean;
 }) {
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay)] px-4 py-6 backdrop-blur-sm">
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--overlay)] px-4 py-6 backdrop-blur-sm"
+      onPointerDown={(event) => {
+        if (closeOnBackdrop && event.target === event.currentTarget) onClose();
+      }}
+    >
       <div className={cn("flex max-h-[calc(100vh-3rem)] w-full max-w-3xl flex-col rounded-md border border-border-2 bg-surface text-card-foreground shadow-[0_20px_60px_var(--shadow-color)]", className)}>
         <div className="flex items-start justify-between gap-4 border-b bg-surface-2 px-5 py-4">
           <div>

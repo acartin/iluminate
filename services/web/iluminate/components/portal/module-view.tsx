@@ -4,13 +4,14 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { FeedbackAlert } from "@/components/ui/feedback-alert";
 import { ClientsCrud } from "@/components/crud/clients-crud";
+import { LedStripProfilesCrud } from "@/components/crud/led-strip-profiles-crud";
 import { RolesCrud } from "@/components/crud/roles-crud";
 import { UsersCrud } from "@/components/crud/users-crud";
 import { ModulePayload } from "@/lib/types";
 import { Feedback } from "@/lib/feedback";
 
 export function ModuleView({ payload, feedback }: { payload: ModulePayload; feedback?: Feedback | null }) {
-  const usesCustomBody = ["settings.clients", "settings.users", "settings.roles"].includes(payload.module.id);
+  const usesCustomBody = ["settings.clients", "settings.users", "settings.roles", "settings.led-strips"].includes(payload.module.id);
 
   return (
     <div className="space-y-6">
@@ -44,6 +45,8 @@ export function ModuleView({ payload, feedback }: { payload: ModulePayload; feed
         <UsersCrud payload={payload} />
       ) : payload.module.id === "settings.roles" ? (
         <RolesCrud payload={payload} />
+      ) : payload.module.id === "settings.led-strips" ? (
+        <LedStripProfilesCrud payload={payload} />
       ) : (
         <>
           <div className="grid gap-4 md:grid-cols-3">

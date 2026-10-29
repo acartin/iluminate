@@ -40,8 +40,13 @@ export const spatialFillEffect: EffectModule = {
     const softness = typeof params.softness === "number" ? clamp(params.softness, 0, 1) : 0.12;
     const coordinate = axis === "x" ? pixel.normalizedX : pixel.normalizedY;
     const directedCoordinate = direction === "reverse" ? 1 - coordinate : coordinate;
-    const edge = progress;
-    const intensity = softness <= 0 ? (directedCoordinate <= edge ? 1 : 0) : clamp((edge - directedCoordinate) / softness + 1, 0, 1);
+    // Move the complete feathered front through the target over the clip's
+    // normalized duration: fully outside before 0, centered at 0.5, and fully
+    // outside after 1. Softness changes only the front width, not its schedule.
+    const leadingEdge = progress * (1 + softness);
+    const intensity = softness <= 0
+      ? (directedCoordinate <= progress ? 1 : 0)
+      : clamp((leadingEdge - directedCoordinate) / softness, 0, 1);
     return mixColors(background, color, intensity, output);
   }
 };

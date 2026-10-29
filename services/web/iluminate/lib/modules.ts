@@ -16,6 +16,7 @@ export const moduleEndpointByPath: Record<string, string> = {
   "/settings/workspaces": "/settings/workspaces",
   "/settings/users": "/settings/users",
   "/settings/roles": "/settings/roles",
+  "/settings/led-strips": "/settings/led-strips",
   "/settings/audit": "/settings/audit"
 };
 

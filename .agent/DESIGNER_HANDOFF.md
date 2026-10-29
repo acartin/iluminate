@@ -1,6 +1,6 @@
 # Iluminate Designer Handoff
 
-**Last updated:** 2026-10-07
+**Last updated:** 2026-10-26
 **Purpose:** detailed current implementation handoff. Use the context router in
 `.agent/RULES.md` and read only the headings relevant to the task instead of
 loading this complete file by default.
@@ -70,7 +70,7 @@ The Designer is intentionally fabrication-oriented. It is not a raw matrix edito
 
 ### Canonical geometry checkpoint
 
-Normalized documents now write `designerSchemaVersion: 21`. Version 2 introduced
+Normalized documents now write `designerSchemaVersion: 22`. Version 2 introduced
 the canonical `designer.geometries` collection and stable `geometryId`
 references; version 3 added the Designer-wide CNC cutter diameter/display unit,
 version 4 added the persisted Channel router-bit diameter, version 5 briefly
@@ -85,15 +85,16 @@ separate from electrical/effect Zone groups. Version 15 adds the Channel
 it is fabrication metadata and remains outside electrical and optical
 compilation. Fillet radius is no longer exposed in Setup; live derived profiles persist
 their own radius and Channel corner nodes persist `radiusMm` directly.
-Version 19 adds the optional `lightingHost` relation to LED strings. An unset
-host preserves geometric targeting; an explicit Zone or Channel owner narrows
-compile membership when stacked construction makes geometric overlap ambiguous.
-Strings generated from a Channel inherit that Channel as their host.
 Version 20 adds authoring-only fixed-sublayer masks and persistent user
 sublayers; neither participates in compilation or fabrication output.
 Version 21 removes the obsolete Face Graphic and Diffusors visibility-preset
 collections and the fixed Face Graphic `Elements` mask; Layers eyes are the
 only visibility model.
+Version 22 replaces the single-owner string relation with `diffuserMapping`.
+`auto` admits every geometrically intersecting Zone or Channel on the string's
+construction side; `restricted` admits only intersections whose target appears
+in its ordered target list. One physical string may therefore illuminate any
+number of independent diffuser Zones without bypassing their geometry.
 Legacy documents receive the 3.175 mm (1/8 in) cutter default during
 normalization. For compatibility with the current Paper renderer, semantic
 records still carry synchronized inline bounds/points; on load canonical
@@ -521,7 +522,7 @@ The Designer separates five persisted visual layers:
 `designer.lightSources` collection currently stores what the product calls
 Lighting Setups: Front, Halo-Lit or Wall Washer configuration owned by a zone
 or channel. Compile derives their physical LED strings from orthogonal pixel
-membership, construction surface and the string's optional Lighting host;
+membership, construction surface and the string's Diffuser mapping;
 persisted `stringIds` is a compiled
 compatibility cache, never an operator-authored assignment. These records have no
 independent canvas geometry or drawing tool, so they are not an activatable
@@ -543,7 +544,7 @@ contextual.
 
 Each layer has `visible`, `locked` and `opacity`. Hidden layers do not render or receive selection. Locked layers remain visible and selectable for inspection, but cannot be moved, resized, deleted or edited from the canvas/toolbox/contextual properties. The contextual bar does not repeat the selected object name, active category or locked state; Layers remains the source of that context. Each object row also exposes a per-object visibility eye (like the layer header): hidden objects do not render and are not hit-tested. Per-object lock and opacity remain layer-level only.
 
-Electrical/effect `Groups` are not a canvas layer and have no geometry. They are authored in the fixed `Effect targets` collection directly under Diffusors, as a sibling of Zones and Channels: a named, cycle-free composition of Zones, Channels and/or other groups. The three siblings share one drag/drop context; Effect targets must not be implemented as a child or portal of Zones. Zones and Channels enter through the same multi-select drag/drop flow and retain their respective icons and colors. In Animate, `+ Clip` opens a searchable target chooser split first by Front/Rear and then by Effect targets, Zones, Channels and Global; creating a clip does not require canvas preselection. A group choice compiles to the validator-safe id `effect_target_<front|rear>_<groupId>` and includes only the enabled mapped light sources for that side, while the neutral authoring group remains persisted in `designer.groups`. A clip that targets a group applies its effect to the union of the resolved member pixels, respecting each member's geometry, and behaves as one composition across the group's bounds. Whole-sign composition is achieved by grouping the desired targets. The clip `coordinateSpace` control was removed from the UI; clips are authored as `"local"` and the core still accepts/validates `serial`/`local`/`global`. Groups compile into `compiledLayout.groups`; Channels are converted to the core's zone-compatible runtime member type without losing their authoring identity. Groups are unrelated to non-compiling `designer.vectorGroups` used for authoring selection and movement.
+Electrical/effect `Groups` are not a canvas layer and have no geometry. They are authored in the fixed `Effect targets` collection directly under Diffusors, as a sibling of Zones and Channels: a named, cycle-free composition of Zones, Channels and/or other groups. The three siblings share one drag/drop context; Effect targets must not be implemented as a child or portal of Zones. Zones and Channels enter through the same multi-select drag/drop flow and retain their respective icons and colors. In Animate, `+ Clip` uses the selected canvas object's only available destination directly, scopes the searchable chooser to that object when it has multiple destinations, and opens the complete chooser when there is no canvas selection. The chooser remains split first by Front/Rear and then by Effect targets, Zones, Channels and Global. A group choice compiles to the validator-safe id `effect_target_<front|rear>_<groupId>` and includes only the enabled mapped light sources for that side, while the neutral authoring group remains persisted in `designer.groups`. A clip that targets a group applies its effect to the union of the resolved member pixels, respecting each member's geometry, and behaves as one composition across the group's bounds. Whole-sign composition is achieved by grouping the desired targets. The clip `coordinateSpace` control was removed from the UI; clips are authored as `"local"` and the core still accepts/validates `serial`/`local`/`global`. Groups compile into `compiledLayout.groups`; Channels are converted to the core's zone-compatible runtime member type without losing their authoring identity. Groups are unrelated to non-compiling `designer.vectorGroups` used for authoring selection and movement.
 
 ### Channel Tool
 
@@ -640,15 +641,19 @@ Channel`, and a Channel generated from one Zone inherits that Zone's name.
   Edge alignment uses each result's physical width (router diameter for a
   Channel and PCB width for a string). The signed `Offset Path` distance and
   join remain independent and affect only `Offset Path`. Zone-generated strings
-  are assigned explicitly to that Zone as their Lighting host and appear under
+  receive a restricted Diffuser mapping to that Zone and appear under
   Hardware / Strings. String generation preserves the selected source Zone and
   its active Layers destination. Channels and strings are materialized
   snapshots; neither retains a live geometric dependency on the Zone.
 - A selected closed Channel can also `Generate lightbox Zone`. Designer finds
   the smallest valid closed profile containing the complete swept Channel
   footprint, materializes the region bounded by the Channel's physical inner
-  edge as an independent native Zone and selects it. The source profile and
-  Channel remain unchanged and no live dependency is stored. The generated
+  edge as an independent native Zone and selects it. Closed Channels fully
+  contained by that region on the same fabrication surface are auto-detected
+  and their complete physical outer footprints become even-odd holes. This
+  prevents the lightbox fill from overlapping internal front-light channels.
+  The source profile and Channels remain unchanged and no live dependency is
+  stored. The generated
   name is always `<containing profile name> lightbox`; collisions append the
   first available numeric suffix beginning at `2`. Open Channels, collapsed
   inner regions and Channels without a containing closed profile are rejected
@@ -918,10 +923,12 @@ The mandatory placement rules live in `.agent/DESIGNER_UX_CONTRACT.md`.
   Design/Animate, grouped Setup, Ruler, Fit, Layers, compile state/issues,
   Theme, Undo/Redo, Compile and Save. Animate adds Preview, Outlines and Viewer
   as mode-wide controls.
-- In Design, the second bar is contextual: active-tool guidance when nothing is
-  selected, or the selected object's properties and actions. Lighting, node
-  controls, Copy/Paste and Delete belong here. Animate omits this row because
-  calibration is in the right panel and timeline controls are below the canvas.
+- In Design, the second bar is contextual: functional controls required by the
+  active tool when nothing is selected, or the selected object's properties
+  and actions. It does not repeat tool names, usage instructions or the active
+  layer; those cues belong to the left rail. Lighting, node controls,
+  Copy/Paste and Delete belong here. Animate omits this row because calibration
+  is in the right panel and timeline controls are below the canvas.
 - A selected Face Graphic keeps its pass, translucent filter, selected-node
   controls and native-primitive dimensions in this row. Rectangles expose
   `W/H`; ellipses expose `ØW/ØH`. Locking remains exclusively in Layers; the
@@ -935,11 +942,17 @@ The mandatory placement rules live in `.agent/DESIGNER_UX_CONTRACT.md`.
 - `Add clip` uses the last empty timeline track. If none is empty, it appends a
   track first. It never inherits the selected clip's track or creates an
   automatic overlap.
+- `Ctrl/Cmd+C` copies the selected Timeline clip and `Ctrl/Cmd+V` pastes that
+  snapshot after the last clip in the same track. Every pasted clip receives a
+  new internal ID while preserving the source target, effect, enabled state,
+  blend and parameters. Repeated paste appends again; the scene duration
+  expands when required so the copy is not truncated.
 - Editing clips/tracks during playback temporarily suspends the frame loop and
-  resumes after regeneration. Playhead movement must not affect timeline
-  measurements or scrollbar visibility. It renders as one pixel-aligned DOM
-  element; horizontal scrolling is absent at zoom 1 and permanently reserved
-  while zoomed.
+  resumes after regeneration. Runtime reload preserves the requested playhead
+  time and scrubbing remains accepted while that reload is pending. Playhead
+  movement must not affect timeline measurements or scrollbar visibility. It
+  renders as one pixel-aligned DOM element; horizontal scrolling is absent at
+  zoom 1 and permanently reserved while zoomed.
 - Compile derives and persists the physical pixelMap from controller ports,
   data cables, LED strings, zones and groups.
 - Compile shows a real busy state from before layout derivation begins until
@@ -1110,17 +1123,23 @@ Current renderer module:
   zone or channel. They consume compiled pixel colors but do not change wiring,
   pixelMap membership, effect targeting or the firmware artifact.
 - Front chooses the face material: visible `LED Pixels`, `Silicone Strip`,
-  `Milky White` or `Day/Night`. Its distance controls whether individual LEDs
-  remain visible or blend into a continuous face. Silicone Strip additionally
-  persists physical light transmission and beam angle; channel width is not an
-  optical control.
+  `Milky White` or `Day/Night`. Direct LED Pixels use intensity only. Every
+  diffuser material uses the same explicit distance, beam and softness
+  calibration to determine whether individual LEDs remain visible or blend
+  into a continuous face; channel width is not an optical control. The legacy
+  persisted transmission value remains document-compatible but is not exposed
+  as a calibration control because the renderer does not consume it.
 - A treatment can target the canvas, a Build Area or another zone as its light
   receiver. Halo-Lit supports an opaque face over the emitted field; Wall Washer
   supports direction, throw, beam angle, softness and falloff.
 - `DiffuserRenderSettings` remains a temporary global preview calibration for
-  intensity and the outline presentation filter (`All`, active source targets,
-  zones, channels or none). The filter never changes optical evaluation,
-  document visibility or persisted construction. Animate exposes only `As built` (all persisted mounts)
+  intensity. Animate's transient Outlines checklist independently resolves the
+  compiled Front/Rear variants of `Effect targets` into Zone and Channel GPU
+  outline batches. That resolved set also prioritizes overlapping canvas hits
+  and gates the thick selection outline; selecting a different object still
+  updates Targets and calibration without adding geometry outside the enabled
+  outline set. It never changes optical evaluation, document visibility or
+  persisted construction. Animate exposes only `As built` (all persisted mounts)
   and `LED map` (raw addressable pixels); physical configuration belongs to the
   selected zone or channel in Designer.
 - Animate exposes the same persisted mounts in a calibration-only side panel.
@@ -1128,7 +1147,7 @@ Current renderer module:
   but it must not create/remove/enable modes, rename sources, assign strings,
   choose materials or change receivers. Those are construction decisions owned
   by Design. Front calibration includes intensity and applicable diffuser
-  distance/softness/transmission/beam; Halo includes intensity/spread/softness/
+  distance/beam/softness; Halo includes intensity/spread/softness/
   wall gap/face color; Wall Washer includes intensity/spread/softness/direction/
   throw/beam/falloff. If no source exists, Animate sends the operator to Design.
 - Halo-Lit remains a physical sum of fields emitted by each mapped LED. Wall
@@ -1216,14 +1235,11 @@ docker compose up -d --build iluminate-web
 Optional API check:
 
 ```bash
-curl -s http://localhost:8420/api/lighting/partituras | jq -r '.records[] | "\(.id) \(.partituraKey) \(.name) \(.status) \(.document.designer.canvasWidthCm)cm routes=\(.document.designer.routes|length)"'
+curl -s http://localhost:8420/api/lighting/partituras | jq -r '.records[] | "\(.id) \(.partituraKey) \(.name) \(.status) \(.canvasWidthCm)cm routes=\(.routes)"'
 ```
 
-Expected local active record after reset:
-
-```text
-1 default_installation Default Installation draft 170cm routes=4
-```
+The list response is a summary. Do not assume a fixed local record or route
+count; use the item endpoint when the complete document must be inspected.
 
 ## Agent Guidance
 

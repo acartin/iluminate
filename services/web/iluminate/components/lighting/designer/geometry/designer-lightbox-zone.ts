@@ -18,19 +18,23 @@ export type DesignerLightboxZoneIssue = "open-channel" | "collapsed-channel" | "
 export type DesignerLightboxZoneResult = {
   zone: DesignerZoneForm | null;
   profileName?: string;
+  internalChannelIds?: string[];
   issue?: DesignerLightboxZoneIssue;
 };
 
 /**
  * Materializes the optical region enclosed by a closed Channel. The smallest
  * closed profile containing the complete physical Channel footprint supplies
- * the stable operator-facing name; no live dependency is retained.
+ * the stable operator-facing name. Closed Channels fully contained by that
+ * region on the same fabrication surface are materialized as holes using their
+ * complete physical footprint; no live dependency is retained.
  */
 export function generateDesignerLightboxZone(
   channel: DesignerChannelForm,
   profiles: DesignerLightboxProfile[],
   zoneId: string,
-  existingZoneNames: string[]
+  existingZoneNames: string[],
+  candidateChannels: DesignerChannelForm[] = []
 ): DesignerLightboxZoneResult {
   if (!channel.closed) return { zone: null, issue: "open-channel" };
   const contours = resolveChannelOutlineContours(channel);
@@ -49,10 +53,22 @@ export function generateDesignerLightboxZone(
     .sort((left, right) => geometryArea(left.geometry) - geometryArea(right.geometry))[0];
   if (!profile) return { zone: null, issue: "missing-profile" };
 
+  const internalChannels = candidateChannels.flatMap((candidate) => {
+    if (candidate.id === channel.id || !candidate.closed || candidate.fabricationSurface !== channel.fabricationSurface) return [];
+    const candidateContours = resolveChannelOutlineContours(candidate)
+      .map((contour) => ({ contour, area: contourArea(contour) }))
+      .sort((left, right) => right.area - left.area);
+    if (candidateContours.length !== 2 || candidateContours[1].area <= 1e-6) return [];
+    return contourStrictlyInsideContour(candidateContours[0].contour, innerContour)
+      ? [{ id: candidate.id, contour: candidateContours[0].contour }]
+      : [];
+  });
+  const zoneContours = [innerContour, ...internalChannels.map(({ contour }) => contour)].map(cloneContour);
   const bounds = contourBounds(innerContour);
   const name = uniqueLightboxZoneName(profile.name, existingZoneNames);
   return {
     profileName: profile.name,
+    internalChannelIds: internalChannels.map(({ id }) => id),
     zone: {
       id: zoneId,
       geometryId: `geometry_zone_${zoneId}`,
@@ -63,8 +79,9 @@ export function generateDesignerLightboxZone(
       width: bounds.width,
       height: bounds.height,
       points: innerContour.points.map(clonePoint),
+      contours: zoneContours,
       pathMode: innerContour.pathMode,
-      fillRule: "nonzero",
+      fillRule: "evenodd",
       visible: true,
       locked: false,
       opacity: 1
@@ -84,6 +101,18 @@ export function uniqueLightboxZoneName(profileName: string, existingZoneNames: s
 function contourInsideGeometry(contour: DesignerContour, geometry: DesignerGeometry) {
   const shape = designerGeometryAsShape(geometry);
   return flattenContour(contour).every((point) => pointInsideDesignerShape(shape, point));
+}
+
+function contourStrictlyInsideContour(contour: DesignerContour, container: DesignerContour) {
+  const candidatePath = paperPath(contour);
+  const containerPath = paperPath(container);
+  const intersects = containerPath.getIntersections(candidatePath).length > 0;
+  const contained = !intersects && flattenContour(contour).every((point) => (
+    containerPath.contains(new lightboxPaperScope.Point(point.x, point.y))
+  ));
+  candidatePath.remove();
+  containerPath.remove();
+  return contained;
 }
 
 function contourArea(contour: DesignerContour) {
@@ -151,6 +180,13 @@ function clonePoint(point: DesignerPoint): DesignerPoint {
     ...point,
     ...(point.handleIn ? { handleIn: { ...point.handleIn } } : {}),
     ...(point.handleOut ? { handleOut: { ...point.handleOut } } : {})
+  };
+}
+
+function cloneContour(contour: DesignerContour): DesignerContour {
+  return {
+    ...contour,
+    points: contour.points.map(clonePoint)
   };
 }
 

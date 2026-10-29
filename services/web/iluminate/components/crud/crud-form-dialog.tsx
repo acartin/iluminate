@@ -104,6 +104,7 @@ function Field({
           type={field.type ?? "text"}
           required={readOnly ? false : field.required ?? true}
           minLength={field.minLength}
+          step={field.type === "number" ? field.step ?? "any" : undefined}
           defaultValue={value}
           readOnly={readOnly}
           placeholder={field.placeholder}

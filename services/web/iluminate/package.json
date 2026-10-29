@@ -5,9 +5,10 @@
   "scripts": {
     "dev": "next dev --hostname 0.0.0.0 --port 3000",
     "build": "next build",
-    "test": "tsx --test components/lighting/designer/designer-geometry.test.ts lib/server/compressed-json.test.ts",
+    "test": "tsx --test components/lighting/designer/designer-geometry.test.ts components/lighting/player/*.test.ts lib/server/*.test.ts",
+    "typecheck": "tsc --noEmit --incremental false",
     "start": "next start --hostname 0.0.0.0 --port 3000",
-    "lint": "next lint"
+    "lint": "eslint ."
   },
   "dependencies": {
     "@iluminate/lighting-core": "file:../../lighting-core",

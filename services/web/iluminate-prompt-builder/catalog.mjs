@@ -258,7 +258,7 @@ export const DOMAINS = [
     summary: "AGENTS, router, contratos .agent, runbooks, mapas y manifiestos generados.",
     paths: ["AGENTS.md", ".agent", "docs"],
     context: [".agent/RULES.md"],
-    validations: ["bash -n .agent/regenerar_contexto.sh", "git diff --check", "Regenerar mapas solo si cambió estructura/inventario"],
+    validations: ["bash -n .agent/regenerar_contexto.sh .agent/validar_documentacion.sh", "bash .agent/validar_documentacion.sh", "git diff --check", "Regenerar mapas solo si cambió estructura/inventario"],
     keywords: ["agent", "prompt", "contexto", "documentación", "reglas", "guardrail"]
   }
 ];

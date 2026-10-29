@@ -135,7 +135,6 @@ $(compose_services compose.yml)
 | \`.agent/ILUMINATE_UI_STANDARDS.md\` | Authenticated web UI standards. |
 | \`.agent/PUBLIC_SITE_DIRECTION.md\` | Public-site product and visual direction. |
 | \`.agent/DATABASE_MODEL.md\` | Persistence and tenant model. |
-| \`.agent/IMPLEMENTATION_PLAN.md\` | Roadmap and phase status. |
 | \`.agent/EXECUTION_MAP.md\` | Validation routes and commands. |
 | \`services/web/iluminate-prompt-builder/README.md\` | Internal prompt-builder usage and ownership. |
 | \`docs/partitura-lifecycle.md\` | Partitura source/compile/generate/device lifecycle. |
@@ -152,6 +151,13 @@ $(service_topology)
 Use \`rg --files <affected-path>\` for file-level discovery. A complete file
 inventory is intentionally omitted because it is expensive, noisy and quickly
 stale.
+
+## Maintenance Tools
+
+| Tool | Purpose |
+|---|---|
+| \`.agent/regenerar_contexto.sh\` | Regenerate this snapshot and the compact integrity manifest. |
+| \`.agent/validar_documentacion.sh\` | Check routed paths, local links and manifest integrity without modifying files. |
 EOF
 
 mv "$brain_tmp" "$brain_file"
@@ -216,8 +222,9 @@ manifest_row ".agent/EFFECT_TARGETING_MODEL.md" "Effect targeting"
 manifest_row ".agent/ILUMINATE_UI_STANDARDS.md" "Authenticated UI standards"
 manifest_row ".agent/PUBLIC_SITE_DIRECTION.md" "Public site direction"
 manifest_row ".agent/DATABASE_MODEL.md" "Persistence model"
-manifest_row ".agent/IMPLEMENTATION_PLAN.md" "Roadmap"
 manifest_row ".agent/EXECUTION_MAP.md" "Validation map"
+manifest_row ".agent/regenerar_contexto.sh" "Context generator"
+manifest_row ".agent/validar_documentacion.sh" "Documentation consistency check"
 manifest_row "services/web/iluminate-prompt-builder/README.md" "Internal prompt builder"
 manifest_row "docs/partitura-lifecycle.md" "Partitura lifecycle"
 manifest_row "docs/public-showroom-viewer-architecture.md" "Showroom and Viewer architecture"

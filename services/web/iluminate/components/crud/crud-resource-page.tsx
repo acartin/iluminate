@@ -156,6 +156,14 @@ export function CrudResourcePage<TRecord extends Record<string, unknown>>({
                 </Link>
               </Button>
             ) : null}
+            {config.allowedActions.includes("duplicate") ? (
+              <form action={`${config.rowActionBasePath}/${encodeURIComponent(rowId)}`} method="post">
+                <input type="hidden" name="_action" value="duplicate" />
+                <Button type="submit" variant="ghost" className="h-8 w-8 px-0" title="Duplicate">
+                  <Copy className="h-4 w-4" />
+                </Button>
+              </form>
+            ) : null}
             {config.allowedActions.includes("edit") ? (
               <Button
                 type="button"

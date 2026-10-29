@@ -102,9 +102,9 @@ export function compileDesignerLayout(designer: DesignerForm): CompiledDesignerL
       pixelIds: (base?.pixelIds ?? []).filter((pixelId) => {
         const pixel = pixelsById.get(pixelId);
         const route = pixel ? routesById.get(pixel.stringId) : null;
-        const hostMatches = !route?.lightingHost
-          || route.lightingHost.type === source.targetType && route.lightingHost.id === source.targetId;
-        return Boolean(route && (route.designSurface === "front" ? "front" : "rear") === expectedSurface && hostMatches);
+        const diffuserMatches = route?.diffuserMapping?.mode !== "restricted"
+          || route.diffuserMapping.targets.some((target) => target.type === source.targetType && target.id === source.targetId);
+        return Boolean(route && (route.designSurface === "front" ? "front" : "rear") === expectedSurface && diffuserMatches);
       })
     };
   });

@@ -12,6 +12,7 @@ export type CrudField = {
   type?: "email" | "hidden" | "number" | "password" | "tel" | "text";
   required?: boolean;
   minLength?: number;
+  step?: string;
   placeholder?: string;
   helperText?: string;
   defaultValue?: string;
@@ -39,7 +40,7 @@ export type CrudColumn<TRecord extends Record<string, unknown>> = {
   headerClassName?: string;
 };
 
-export type CrudAction = "view" | "edit" | "delete" | "deactivate" | "workspace";
+export type CrudAction = "view" | "edit" | "delete" | "deactivate" | "duplicate" | "workspace";
 
 export type CrudResourceConfig<TRecord extends Record<string, unknown>> = {
   id: string;

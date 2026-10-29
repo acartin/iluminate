@@ -21,12 +21,14 @@ import { channelPathsFromGeometries, generatedChannelName } from "./geometry/des
 import { generateDesignerLightboxZone, uniqueLightboxZoneName } from "./geometry/designer-lightbox-zone";
 import { resolveDesignerProjectionGeometry as resolveProjectedGeometry } from "./geometry/designer-projected-geometry";
 import { applyFaceGraphicToOpticalMode, applyFaceGraphicTransmission, faceGraphicMaskUv, faceGraphicTransmissionAtPoint, frontMaterialOffStyle, orderOpticalTreatmentsForRendering, resolvePhysicalFaceGraphics } from "../player/optical-model";
-import { buildOutlineSegments, faceMaskTextureSize, opticalOccluderShapes, opticalTargetMaskBounds, opticalTargetMaskMode, opticalTargetShape, outlineSelectionVisible, outlineShapesForMode, selectedOutlineShapes, targetMaskTextureSize } from "../player/gpu/webgl2-player-renderer";
+import { buildOutlineSegments, faceMaskTextureSize, opticalOccluderShapes, opticalTargetMaskBounds, opticalTargetMaskMode, opticalTargetShape, outlinePresentationPlan, outlineSelectionVisible, outlineShapesForMode, outlineTargetIncludesSelection, selectedOutlineShapes, targetMaskTextureSize } from "../player/gpu/webgl2-player-renderer";
 import { resolveChannelOutlineContours, sweptChannelOutlineContours } from "./rendering/channel-swept-outline";
 import { generateDesignerFabricationExport, sha256Hex } from "./fabrication/designer-fabrication-export";
 import { assignDesignerObjectsToSublayer, designerWithSublayerMasks, inheritDesignerSublayerForCopy, insertDesignerCopyAbove, nextDesignerSublayer, removeDesignerSublayer, restoreDesignerSublayerAuthoredState } from "./designer-sublayers";
 import { channelMatchesSurfaceView, designerAdditiveSelectionRequested, designerConstrainedMoveDelta, designerInitialSelectHit, designerLayerForSelection, designerSelectionForClipTarget, designerWholeObjectHit, routeMatchesSurfaceView } from "./types";
-import { animationClipTargetOptions, clipIdForSelectedTargets, clipLightSourcesForTarget, clipScopeTargets, clipTargetsForSelection, designerClipTargetIdsForSelection, designerOpticalTargetsForClipTarget, explicitClipTargetSelectionSettled } from "./designer-animation-selection";
+import { animationClipTargetOptions, animationEffectTargetOutlineOptions, animationTargetMatchesSurfaceView, clipIdForSelectedTargets, clipLightSourcesForTarget, clipScopeTargets, clipTargetsForSelection, designerClipTargetIdsForSelection, designerOpticalTargetsForClipTarget, explicitClipTargetSelectionSettled } from "./designer-animation-selection";
+import { animationDocumentState, duplicateClipAtTrackEnd, mergeAnimationDocumentState } from "./designer-animation-clips";
+import { createDesignerObjectClipboard, designerObjectClipboardCompatible, pasteDesignerObject } from "./designer-object-clipboard";
 import {
   channelBorderPolylines,
   channelCenterPolyline,
@@ -58,7 +60,9 @@ import {
   pointInsideDesignerShape,
   primitiveShapeBounds,
   moveControllerWithSolderedCables,
+  movedChannel,
   moveRoutePointWithRetraction,
+  moveRouteWithSolderedTerminals,
   movedWorkLine,
   resolveRouteOutputs,
   resolvedLedStripCutSegmentLengthMm,
@@ -936,6 +940,37 @@ describe("Designer snap-to-grid control", () => {
     assert.equal(canvasInteractionSnapCm(2.5, false), 0);
   });
 
+  it("keeps every whole-object movement path free while Snap is disabled", async () => {
+    const freeSnapCm = canvasInteractionSnapCm(2.5, false);
+    const delta = { x: 0.137, y: -0.263 };
+    const shape = { id: "shape", name: "Shape", shape: "rect" as const, x: 1.111, y: 2.222, width: 4, height: 3, visible: true, locked: false, opacity: 1 };
+    const line = { id: "line", name: "Line", points: [{ x: 1.111, y: 2.222 }, { x: 3.333, y: 4.444 }] };
+    const channel: DesignerChannelForm = { id: "channel", name: "Channel", points: [{ x: 1.111, y: 2.222 }, { x: 3.333, y: 4.444 }], pathMode: "straight", widthMm: 10, closed: false, cap: "round", visible: true, locked: false, opacity: 1 };
+
+    assert.deepEqual({ x: movedShape(shape, delta.x, delta.y, freeSnapCm).x, y: movedShape(shape, delta.x, delta.y, freeSnapCm).y }, { x: 1.248, y: 1.959 });
+    assert.deepEqual(movedWorkLine(line, delta.x, delta.y, freeSnapCm).points[0], { x: 1.248, y: 1.959 });
+    assert.deepEqual(movedChannel(channel, delta.x, delta.y, freeSnapCm).points[0], { x: 1.248, y: 1.959 });
+
+    const designer = createDefaultPartituraDocument("free_route_movement").designer;
+    const route = designer.routes.find((entry) => entry.points.some((point) => point.joint));
+    assert.ok(route);
+    const originalPoint = route.points[1];
+    const movedRoutes = moveRouteWithSolderedTerminals(designer, route.id, route, delta.x, delta.y, freeSnapCm, designer.snapCm);
+    const movedRoute = movedRoutes.find((entry) => entry.id === route.id);
+    assert.ok(movedRoute);
+    assert.deepEqual(movedRoute.points[1], { ...originalPoint, x: Math.round((originalPoint.x + delta.x) * 1000) / 1000, y: Math.round((originalPoint.y + delta.y) * 1000) / 1000 });
+
+    const canvasSource = await readFile("components/lighting/designer/designer-paper-canvas.tsx", "utf8");
+    const movementStart = canvasSource.indexOf('if (drag.type === "alignment-guide-move")');
+    const movementEnd = canvasSource.indexOf("function flushChannelDragPreview", movementStart);
+    const movementSource = canvasSource.slice(movementStart, movementEnd);
+    for (const movementType of ["alignment-guide", "diffusor-selection", "artwork", "build-area", "work-line", "controller", "zone", "face-graphic", "fabrication-path", "text", "channel", "route"]) {
+      assert.match(movementSource, new RegExp(`drag\\.type === "${movementType}-move"`));
+    }
+    assert.doesNotMatch(movementSource, /routeMovementSnapCm|\? designer\.snapCm\s*:\s*interactionSnapCm/);
+    assert.match(movementSource, /moveRouteWithSolderedTerminals\([\s\S]*?interactionSnapCm,\s*designer\.snapCm\s*\)/);
+  });
+
   it("keeps the magnet toggle and Setup close action in the global bar", async () => {
     const source = await readFile("components/lighting/partitura-workspace.tsx", "utf8");
 
@@ -953,6 +988,36 @@ describe("Designer snap-to-grid control", () => {
     assert.match(setup, /grid-cols-\[minmax\(0,1\.2fr\)_minmax\(0,0\.8fr\)\][\s\S]*label="Router bit preset"[\s\S]*label="Router bit unit"/);
     assert.match(setup, /label="Router bit diameter"[\s\S]*label="Hole diameter"/);
     assert.match(setup, /grid grid-cols-2 items-center gap-3[\s\S]*label="LED package"[\s\S]*label="PCB width"/);
+  });
+
+  it("lets Setup number fields keep an incomplete decimal draft until commit", async () => {
+    const source = await readFile("components/lighting/partitura-workspace.tsx", "utf8");
+    const numberStart = source.indexOf("function SetupNumber(");
+    const numberEnd = source.indexOf("const FABRICATION_CUTTER_PRESETS_MM", numberStart);
+    const setupNumber = source.slice(numberStart, numberEnd);
+    const setupStart = source.indexOf('<details ref={setupDetailsRef}');
+    const setup = source.slice(setupStart, source.indexOf("</details>", setupStart));
+
+    assert.match(setupNumber, /const \[draft, setDraft\] = useState/);
+    assert.match(setupNumber, /type="number"[\s\S]*inputMode="decimal"[\s\S]*step=\{step\}/);
+    assert.match(setupNumber, /onChange=\{\(event\) => setDraft\(event\.target\.value\)\}[\s\S]*onBlur=\{commit\}/);
+    assert.match(setupNumber, /if \(!normalized \|\| !Number\.isFinite\(parsed\)\)[\s\S]*setDraft\(String\(value\)\)/);
+    assert.match(setup, /<SetupNumber label="Snap"/);
+    assert.match(setup, /<SetupNumber label="Pixels\/m"[^>]*step=\{1\}/);
+    assert.match(setup, /<SetupNumber label="Current \/ LED"[^>]*step=\{0\.01\}/);
+    assert.doesNotMatch(setup, /<ToolbarNumber/);
+  });
+
+  it("omits active-tool usage legends while preserving functional tool controls", async () => {
+    const source = await readFile("components/lighting/partitura-workspace.tsx", "utf8");
+    const contextualStart = source.indexOf('{editorMode === "design" ? <div className="flex h-10');
+    const contextualEnd = source.indexOf('className={`grid min-h-0 flex-1', contextualStart);
+    const contextualBar = source.slice(contextualStart, contextualEnd);
+
+    assert.doesNotMatch(source, /designerToolInstruction|DESIGNER_TOOL_LABELS/);
+    assert.doesNotMatch(contextualBar, /Choose a layer to begin|ACTIVE_LAYER_LABELS\[activeLayer\]/);
+    assert.match(contextualBar, /tool === "move"[\s\S]*?ToolbarField label="Fixed axis"/);
+    assert.match(contextualBar, /nodeCreationToolActive[\s\S]*?ToolbarField label="New node"/);
   });
 
   it("keeps global alignment marks configurable in Setup and movable across layers", async () => {
@@ -1002,6 +1067,34 @@ describe("Channel lightbox Zone generation", () => {
     assert.ok((result.zone?.width ?? 0) < 14);
     assert.ok((result.zone?.height ?? 0) < 14);
     assert.ok((result.zone?.points?.length ?? 0) >= 4);
+    assert.equal(result.zone?.fillRule, "evenodd");
+    assert.equal(result.zone?.contours?.length, 1);
+  });
+
+  it("subtracts the complete footprint of contained same-surface internal Channels", () => {
+    const internalChannel: DesignerChannelForm = {
+      ...channel,
+      id: "channel_i_internal",
+      name: "i counter",
+      points: [{ x: 7, y: 7 }, { x: 13, y: 7 }, { x: 13, y: 13 }, { x: 7, y: 13 }],
+      widthMm: 6
+    };
+    const rearChannel: DesignerChannelForm = { ...internalChannel, id: "channel_i_rear", fabricationSurface: "rear" };
+    const result = generateDesignerLightboxZone(
+      channel,
+      [{ name: "i", geometry: parent }],
+      "zone_12",
+      [],
+      [channel, internalChannel, rearChannel]
+    );
+
+    assert.deepEqual(result.internalChannelIds, ["channel_i_internal"]);
+    assert.equal(result.zone?.contours?.length, 2);
+    assert.equal(result.zone?.fillRule, "evenodd");
+    const hole = result.zone?.contours?.[1];
+    assert.ok(hole);
+    assert.ok(Math.min(...hole.points.map((point) => point.x)) < 7);
+    assert.ok(Math.max(...hole.points.map((point) => point.x)) > 13);
   });
 
   it("uses deterministic suffixes and rejects invalid physical inputs", () => {
@@ -1047,6 +1140,18 @@ describe("Animate WebGL outlines", () => {
 
     assert.deepEqual(Array.from(buildOutlineSegments([zone])), [2, 3, 12, 3, 12, 3, 12, 9, 12, 9, 2, 9, 2, 9, 2, 3]);
     assert.deepEqual(Array.from(buildOutlineSegments([channel])), [0, 1, 10, 1, 10, 1, 10, -1, 10, -1, 0, -1, 0, -1, 0, 1]);
+  });
+
+  it("antialiases outline edges without exposing the endpoints of flattened curve segments", async () => {
+    const renderer = await readFile("components/lighting/player/gpu/webgl2-player-renderer.ts", "utf8");
+
+    assert.match(renderer, /float acrossPx = aQuad\.y \* \(halfWidthPx \+ featherPx\)/);
+    assert.match(renderer, /float distancePx = abs\(vAcrossPx\)/);
+    assert.match(renderer, /featherPx = max\(fwidth\(vAcrossPx\), 0\.75\)/);
+    assert.match(renderer, /uColor\.a \* coverage/);
+    assert.doesNotMatch(renderer, /nearestAlongPx|vSegmentLengthPx|segmentLength \+ extentPx/);
+    const outlineDraw = renderer.slice(renderer.indexOf("private drawOutlineBatch"), renderer.indexOf("private directPixelRadius"));
+    assert.equal(outlineDraw.match(/gl\.drawArraysInstanced/g)?.length, 1);
   });
 
   it("uses the same resolved Channel contours as Designer instead of reconstructing its center line", async () => {
@@ -1109,6 +1214,49 @@ describe("Animate WebGL outlines", () => {
     assert.deepEqual(outlineShapesForMode(shapes, treatments, "none"), []);
     assert.equal(outlineSelectionVisible("zones", { type: "channel", id: "channel_active" }, treatments), false);
     assert.equal(outlineSelectionVisible("active", { type: "channel", id: "channel_active" }, treatments), true);
+    assert.deepEqual(outlinePresentationPlan("zones", { type: "zone", id: "zone_idle" }, treatments), {
+      allZones: false,
+      allChannels: false,
+      activeSources: false,
+      selection: true
+    });
+    assert.deepEqual(outlinePresentationPlan("channels", { type: "channel", id: "channel_active" }, treatments), {
+      allZones: false,
+      allChannels: false,
+      activeSources: false,
+      selection: true
+    });
+    assert.deepEqual(outlinePresentationPlan("channels", { type: "zone", id: "zone_active" }, treatments), {
+      allZones: false,
+      allChannels: false,
+      activeSources: false,
+      selection: false
+    });
+    assert.equal(outlineTargetIncludesSelection([{ type: "zone", id: "zone_active" }], { type: "zone", id: "zone_active" }), true);
+    assert.equal(outlineTargetIncludesSelection([{ type: "zone", id: "zone_active" }], { type: "channel", id: "channel_active" }), false);
+  });
+
+  it("drives grouped outlines from compiled Effect targets without changing established target colors", async () => {
+    const [workspace, timeline] = await Promise.all([
+      readFile("components/lighting/partitura-workspace.tsx", "utf8"),
+      readFile("components/lighting/designer/designer-animate-timeline.tsx", "utf8")
+    ]);
+
+    assert.match(workspace, /function AnimateOutlineTargetPicker/);
+    assert.match(workspace, /animationEffectTargetOutlineOptions/);
+    assert.match(workspace, /outlineTargets=\{animationOutlineTargets\}/);
+    assert.match(workspace, /w-\[480px\] max-w-\[calc\(100vw-2rem\)\]/);
+    assert.match(workspace, /aria-label="Close Outlines"/);
+    assert.match(workspace, /detailsRef\.current\.open = false/);
+    assert.match(workspace, /globalThis\.document\.addEventListener\("pointerdown", closeOutlinesOnOutsidePointer\)/);
+    assert.match(workspace, /details\.contains\(event\.target as Node\)/);
+    assert.match(workspace, /break-words/);
+    assert.match(workspace, /contains the selected object/);
+    assert.doesNotMatch(workspace, /outlineVisibility|Outline visible through some Effect targets/);
+    assert.match(workspace, /text-violet-600/);
+    assert.doesNotMatch(workspace, /<option value="active">Active sources<\/option>/);
+    assert.match(timeline, /effectTargets" \? "text-violet-600"/);
+    assert.match(timeline, /global" \? "text-emerald-600"/);
   });
 
   it("can bypass the Face Graphic mask only for the interactive preview", async () => {
@@ -1119,6 +1267,9 @@ describe("Animate WebGL outlines", () => {
     ]);
 
     assert.match(workspace, /<span>Face mask<\/span>/);
+    assert.match(workspace, /const \[animationFaceMaskEnabled, setAnimationFaceMaskEnabled\] = useState\(false\)/);
+    assert.match(workspace, /const hasFaceGraphicElements = designer\.faceGraphics\.length > 0[\s\S]*?designer\.texts\.some[\s\S]*?designer\.projections\.some[\s\S]*?designer\.derivedGeometries\.some/);
+    assert.match(workspace, /\{hasFaceGraphicElements \? <label[\s\S]*?<span>Face mask<\/span>[\s\S]*?<\/label> : null\}/);
     assert.match(workspace, /faceMaskEnabled=\{animationFaceMaskEnabled\}/);
     assert.match(surface, /renderer\.updateFaceMaskEnabled\(faceMaskEnabled\)/);
     assert.match(renderer, /useFaceMask && this\.hasFaceMask && this\.faceMaskEnabled/);
@@ -2273,6 +2424,25 @@ describe("shared node authoring context", () => {
 });
 
 describe("Designer global command bar", () => {
+  it("keeps Animate Save synchronized while moving Share into the Viewer", async () => {
+    const workspaceSource = await readFile("components/lighting/partitura-workspace.tsx", "utf8");
+    const commandBar = workspaceSource.slice(
+      workspaceSource.indexOf('<header className="relative z-30'),
+      workspaceSource.indexOf('{editorMode === "design" ? <div className="flex h-10')
+    );
+    const viewerHeader = workspaceSource.slice(
+      workspaceSource.indexOf('{editorMode === "animate" && animationViewerOpen ? ('),
+      workspaceSource.indexOf('<div className={editorMode === "animate" ? "min-h-0 flex-1"')
+    );
+
+    assert.doesNotMatch(commandBar, /\{partitura\.name\}/);
+    assert.doesNotMatch(commandBar, />Share<\/span>/);
+    assert.match(viewerHeader, /setShareOpen\(true\)[\s\S]*?Share/);
+    assert.match(commandBar, /editorMode === "design"[\s\S]*?void compileLayout\(\)/);
+    assert.match(commandBar, /onClick=\{\(\) => void save\(\)\}[\s\S]*?disabled=\{compiling \|\| saving \|\| !hasUnsavedChanges\}/);
+    assert.equal(commandBar.match(/void save\(\)/g)?.length, 1);
+  });
+
   it("keeps compile state and issue review visible at compact viewport widths", async () => {
     const workspaceSource = await readFile("components/lighting/partitura-workspace.tsx", "utf8");
     const commandBar = workspaceSource.slice(
@@ -2337,9 +2507,12 @@ describe("Designer contextual properties", () => {
   });
 
   it("reuses one fixed Copy, Paste and Delete action group across copyable Layers objects", async () => {
-    const workspaceSource = await readFile("components/lighting/partitura-workspace.tsx", "utf8");
+    const [workspaceSource, clipboardSource] = await Promise.all([
+      readFile("components/lighting/partitura-workspace.tsx", "utf8"),
+      readFile("components/lighting/designer/designer-object-clipboard.ts", "utf8")
+    ]);
     assert.match(workspaceSource, /selection\.type === "artwork" \|\| selection\.type === "zone" \|\| selection\.type === "channel" \|\| selection\.type === "face_graphic" \|\| selection\.type === "route"/);
-    assert.match(workspaceSource, /if \(clipboard\.type === "channel"\)[\s\S]*?channels: insertDesignerCopyAbove\(designer\.channels, source\.id, copy\)/);
+    assert.match(clipboardSource, /if \(clipboard\.type === "channel"\)[\s\S]*?channels: insertDesignerCopyAbove\(designer\.channels, clipboard\.sourceId, copy\)/);
 
     const deleteStart = workspaceSource.indexOf("function deleteSelection()");
     const deleteEnd = workspaceSource.indexOf("function copySelection()", deleteStart);
@@ -2364,8 +2537,70 @@ describe("Designer contextual properties", () => {
     const splitSource = workspaceSource.slice(splitStart, splitEnd);
     assert.match(focusSource, /setGeometrySelections\(isDesignerGeometrySelection\(nextSelection\) \? \[nextSelection\] : \[\]\)/);
     assert.match(focusSource, /setSelectedRouteIds\(nextSelection\.type === "route" \? \[nextSelection\.id\] : \[\]\)/);
-    assert.equal(pasteSource.match(/focusCreatedCanvasObject\(/g)?.length, 5);
+    assert.equal(pasteSource.match(/focusCreatedCanvasObject\(/g)?.length, 1);
+    assert.match(pasteSource, /const currentDesigner = documentRef\.current\.designer/);
+    assert.match(pasteSource, /pasteDesignerObject\(currentDesigner, clipboard\)/);
+    assert.match(pasteSource, /updateLiveDocument\(\(current\) => \(\{ \.\.\.current, designer: canonical \}\)/);
+    assert.match(workspaceSource, /editorMode === "design" && \(event\.ctrlKey \|\| event\.metaKey\)[\s\S]*?copySelection\(\)[\s\S]*?editorMode === "design" && \(event\.ctrlKey \|\| event\.metaKey\)[\s\S]*?pasteSelection\(\)/);
     assert.match(splitSource, /focusCreatedCanvasObject\(\{ type: "route", id: secondRoute\.id \}\)/);
+  });
+
+  it("pastes immutable Designer snapshots with collision-free identities", () => {
+    const designer = createDefaultPartituraDocument("designer_clipboard_snapshot").designer;
+    const source = designer.zones[0];
+    designer.sublayers = [{
+      id: "zone_folder",
+      name: "Letters",
+      scope: "zones",
+      visible: true,
+      locked: false,
+      objectIds: [source.id]
+    }];
+    designer.zones = [
+      source,
+      { ...source, id: `${source.id}_copy_1`, name: `${source.name} Copy` },
+      { ...source, id: `${source.id}_copy_3`, name: `${source.name} Copy 3` }
+    ];
+    const clipboard = createDesignerObjectClipboard(designer, { type: "zone", id: source.id });
+    assert.ok(clipboard && clipboard.type === "zone");
+    assert.equal(designerObjectClipboardCompatible(clipboard, { type: "channel", id: "another_channel" }), true);
+    assert.equal(designerObjectClipboardCompatible(clipboard, { type: "route", id: "another_route" }), false);
+
+    const live = {
+      ...designer,
+      zones: designer.zones.map((zone) => zone.id === source.id ? { ...zone, name: "Changed after Copy", x: zone.x + 50 } : zone)
+    };
+    const untouchedRoutes = live.routes;
+    const untouchedGroups = live.groups;
+    const pasted = pasteDesignerObject(live, clipboard);
+    const copy = pasted.designer.zones.find((zone) => zone.id === source.id + "_copy_2");
+
+    assert.ok(copy);
+    assert.equal(copy.name, `${source.name} Copy 2`);
+    assert.equal(copy.x, source.x + live.snapCm);
+    assert.strictEqual(pasted.designer.routes, untouchedRoutes);
+    assert.strictEqual(pasted.designer.groups, untouchedGroups);
+    assert.deepEqual(pasted.designer.sublayers[0].objectIds, [copy.id, source.id]);
+    assert.deepEqual(pasted.selection, { type: "zone", id: copy.id });
+  });
+
+  it("keeps route copies detached and reuses deleted ID gaps without collisions", () => {
+    const designer = createDefaultPartituraDocument("designer_route_clipboard").designer;
+    const source = { ...designer.routes[0], points: designer.routes[0].points.map((point) => ({ ...point, joint: true })) };
+    designer.routes = [
+      source,
+      { ...source, id: `${source.id}_copy_1` },
+      { ...source, id: `${source.id}_copy_3` }
+    ];
+    const clipboard = createDesignerObjectClipboard(designer, { type: "route", id: source.id });
+    assert.ok(clipboard && clipboard.type === "route");
+
+    const pasted = pasteDesignerObject(designer, clipboard);
+    const copy = pasted.designer.routes.find((route) => route.id === `${source.id}_copy_2`);
+
+    assert.ok(copy);
+    assert.ok(copy.points.every((point) => point.joint === undefined));
+    assert.equal(new Set(pasted.designer.routes.map((route) => route.id)).size, pasted.designer.routes.length);
   });
 
   it("keeps object workflow actions visible and forbids contextual catch-all menus", async () => {
@@ -2730,12 +2965,12 @@ describe("Channel creation from selected paths", () => {
     assert.ok(route);
     assert.equal(route.kind, "led_string");
     assert.equal(route.designSurface, "rear");
-    assert.deepEqual(route.lightingHost, { type: "channel", id: "rear_channel" });
+    assert.deepEqual(route.diffuserMapping, { mode: "restricted", targets: [{ type: "channel", id: "rear_channel" }] });
     assert.deepEqual(route.points[0], route.points[route.points.length - 1]);
     assert.deepEqual(route.points[0], { x: 4, y: 3 });
   });
 
-  it("generates independent offset strings explicitly hosted by their source Zone", () => {
+  it("generates independent offset strings explicitly mapped to their source Zone", () => {
     const designer = createNewPartituraDocument("zone_offset_string").designer;
     const zone: DesignerZoneForm = { id: "zone_offset", name: "Letter A", shape: "polygon", x: 0, y: 0, width: 5, height: 5, points: [{ x: 0, y: 0 }, { x: 5, y: 0 }, { x: 5, y: 5 }, { x: 0, y: 5 }], pathMode: "straight", visible: true, locked: false, opacity: 1 };
     const paths = [
@@ -2746,7 +2981,10 @@ describe("Channel creation from selected paths", () => {
 
     assert.equal(routes.length, 2);
     assert.notEqual(routes[0].id, routes[1].id);
-    assert.deepEqual(routes.map((route) => route.lightingHost), [{ type: "zone", id: zone.id }, { type: "zone", id: zone.id }]);
+    assert.deepEqual(routes.map((route) => route.diffuserMapping), [
+      { mode: "restricted", targets: [{ type: "zone", id: zone.id }] },
+      { mode: "restricted", targets: [{ type: "zone", id: zone.id }] }
+    ]);
     assert.deepEqual(routes.map((route) => route.designSurface), ["front", "front"]);
     assert.deepEqual(routes.map((route) => route.name), [`${zone.name} string`, `${zone.name} string 2`]);
     assert.deepEqual(routes.map((route) => route.points[0]), routes.map((route) => route.points.at(-1)));
@@ -3197,6 +3435,115 @@ describe("timeline clip placement", () => {
     ] }), 2);
   });
 
+  it("pastes a copied clip after the last clip on its original track", () => {
+    const source = { id: "source", name: "Pulse", enabled: false, target: "full_sign", coordinateSpace: "local" as const, effect: "solid", blend: "replace", startMs: 500, durationMs: 1000, layer: 1, params: { color: "#ff0000", stops: [1, 2] } };
+    const scene = {
+      id: "scene_copy",
+      name: "Copy",
+      loop: true,
+      durationMs: 2500,
+      laneCount: 3,
+      clips: [
+        source,
+        { id: "same_track", name: "Later", target: "full_sign", effect: "solid", blend: "replace", startMs: 2000, durationMs: 500, layer: 1, params: {} },
+        { id: "other_track", name: "Other", target: "full_sign", effect: "solid", blend: "replace", startMs: 8000, durationMs: 1000, layer: 2, params: {} }
+      ]
+    };
+
+    const first = duplicateClipAtTrackEnd(scene, source);
+    assert.equal(first.clip.startMs, 2500);
+    assert.equal(first.clip.layer, 1);
+    assert.equal(first.clip.durationMs, source.durationMs);
+    assert.equal(first.clip.enabled, source.enabled);
+    assert.equal(first.clip.target, source.target);
+    assert.equal(first.clip.effect, source.effect);
+    assert.equal(first.clip.blend, source.blend);
+    assert.equal(first.clip.coordinateSpace, source.coordinateSpace);
+    assert.equal(first.clip.name, "Pulse Copy");
+    assert.notEqual(first.clip.id, source.id);
+    assert.deepEqual(first.clip.params, source.params);
+    assert.notEqual(first.clip.params.stops, source.params.stops);
+    assert.equal(first.scene.durationMs, 3500);
+
+    const second = duplicateClipAtTrackEnd(first.scene, source);
+    assert.equal(second.clip.startMs, 3500);
+    assert.equal(second.clip.name, "Pulse Copy 2");
+    assert.equal(second.scene.durationMs, 4500);
+  });
+
+  it("merges timeline changes without replacing live Designer construction", () => {
+    const live = createDefaultPartituraDocument("timeline_authority");
+    const stale = structuredClone(live);
+    stale.designer.channels = [];
+    stale.designer.groups = [];
+    stale.designer.geometries = [];
+    const copiedClip: ClipForm = {
+      id: "clip_copy_1",
+      name: "Copied clip",
+      enabled: true,
+      target: "full_sign",
+      coordinateSpace: "local",
+      effect: "solid",
+      blend: "replace",
+      startMs: 0,
+      durationMs: 1000,
+      layer: 0,
+      params: { color: "#ff0000" }
+    };
+    const copiedScene = { ...stale.scenes[0], clips: [...stale.scenes[0].clips, copiedClip] };
+    const animation = animationDocumentState({
+      ...stale,
+      scenes: [copiedScene],
+      activeSceneId: copiedScene.id,
+      previewTimeMs: 250
+    });
+
+    const merged = mergeAnimationDocumentState(live, animation);
+
+    assert.strictEqual(merged.designer, live.designer);
+    assert.strictEqual(merged.compiledLayout, live.compiledLayout);
+    assert.strictEqual(merged.generatedPartitura, live.generatedPartitura);
+    assert.deepEqual(merged.designer.channels, live.designer.channels);
+    assert.deepEqual(merged.designer.groups, live.designer.groups);
+    assert.deepEqual(merged.designer.geometries, live.designer.geometries);
+    assert.equal(merged.scenes[0].clips.at(-1)?.id, copiedClip.id);
+    assert.equal(merged.previewTimeMs, 250);
+  });
+
+  it("routes Animate clipboard shortcuts to the selected clip without adding controls", async () => {
+    const source = await readFile("components/lighting/designer/designer-animate-timeline.tsx", "utf8");
+
+    assert.match(source, /window\.addEventListener\("keydown", handleClipClipboard, true\)/);
+    assert.match(source, /key === "c" && selectedClip && activeScene[\s\S]*setCopiedClip/);
+    assert.match(source, /key === "v" && copiedClip\?\.sceneId === activeScene\?\.id[\s\S]*pasteCopiedClip\(\)/);
+    assert.match(source, /duplicateClipAtTrackEnd\(currentScene, copiedClip\.clip\)/);
+    assert.match(source, /const liveAnimationRef = React\.useRef\(animationDocumentState\(document\)\)[\s\S]*?function commitAnimation/);
+    assert.match(source, /onAnimationChange: \(animation: AnimationDocumentState\) => void/);
+    assert.doesNotMatch(source, /onChange: \(document: PartituraDocument\) => void/);
+    assert.match(source, /patch\.effect \? patch\.params : \{ \.\.\.clip\.params, \.\.\.patch\.params \}/);
+    assert.doesNotMatch(source, />Copy clip<|>Paste clip</);
+  });
+
+  it("selects scenes from one dropdown and confirms deletion in the shared modal", async () => {
+    const source = await readFile("components/lighting/designer/designer-animate-timeline.tsx", "utf8");
+
+    assert.match(source, /<select[\s\S]*aria-label="Scene"[\s\S]*value=\{activeScene\.id\}[\s\S]*selectScene\(event\.target\.value\)/);
+    assert.match(source, /document\.scenes\.map\(\(scene\) => <option[\s\S]*<option value=\{ADD_SCENE_OPTION\}>\+ Add scene<\/option>/);
+    assert.doesNotMatch(source, /title="New scene"/);
+    assert.match(source, /title="Delete scene"[\s\S]*setPendingSceneDeleteId\(activeScene\.id\)/);
+    assert.match(source, /<Modal[\s\S]*open=\{pendingSceneDeleteId !== null\}[\s\S]*title="Confirm delete"[\s\S]*Delete scene/);
+  });
+
+  it("edits the active scene name inline without replacing the scene selector", async () => {
+    const source = await readFile("components/lighting/designer/designer-animate-timeline.tsx", "utf8");
+
+    assert.match(source, /title="Edit scene name"[\s\S]*onClick=\{beginSceneNameEdit\}/);
+    assert.match(source, /aria-label="Scene name"[\s\S]*onBlur=\{commitSceneName\}/);
+    assert.match(source, /event\.key === "Enter"[\s\S]*event\.currentTarget\.blur\(\)/);
+    assert.match(source, /event\.key === "Escape"[\s\S]*cancelSceneNameEdit\(\)/);
+    assert.match(source, /const name = sceneNameDraft\.trim\(\)[\s\S]*if \(name && name !== activeScene\.name\) updateScene\(\{ name \}\)/);
+  });
+
   it("coalesces clip drags into one cancelable preview generation", async () => {
     const [timelineSource, workspaceSource] = await Promise.all([
       readFile("components/lighting/designer/designer-animate-timeline.tsx", "utf8"),
@@ -3217,11 +3564,24 @@ describe("timeline clip placement", () => {
     );
   });
 
+  it("regenerates Animate preview after Undo or Redo restores clip history", async () => {
+    const workspaceSource = await readFile("components/lighting/partitura-workspace.tsx", "utf8");
+    const restoreHistory = workspaceSource.slice(
+      workspaceSource.indexOf("function restoreDesignerHistory"),
+      workspaceSource.indexOf("function undoDesignerChange")
+    );
+
+    assert.match(restoreHistory, /const restoredDocument = clonePartituraDocument\(entry\.document\)/);
+    assert.match(restoreHistory, /discardRuntimeArtifacts\(\)[\s\S]*?scheduleAnimationPreview\(restoredDocument, \{ play: resumeAnimation \}\)/);
+    assert.match(restoreHistory, /editorMode === "animate"/);
+  });
+
   it("reloads the animation Worker without rebuilding optical masks for clip-only changes", async () => {
     const surfaceSource = await readFile("components/lighting/player/player-surface.tsx", "utf8");
 
     assert.match(surfaceSource, /visualSceneCacheRef\.current\?\.designer !== designer \|\| visualSceneCacheRef\.current\.layout !== layout/);
-    assert.match(surfaceSource, /void controller\.load\(partitura\)/);
+    assert.match(surfaceSource, /const loading = controller\.load\(partitura\)/);
+    assert.match(surfaceSource, /controller\.seek\(previewTimeMsRef\.current\)[\s\S]*loading\.then/);
     assert.match(surfaceSource, /\}, \[partitura\]\);/);
     assert.match(surfaceSource, /renderer\.loadScene\(nextScene\)[\s\S]*\}, \[visualScene\]\);/);
   });
@@ -3451,6 +3811,10 @@ describe("animation target picking", () => {
       type: "channel",
       id: "channel_test"
     });
+    assert.deepEqual(pickAnimationTarget(designer, { x: 0, y: 0 }, 0.1, [{ type: "zone", id: "zone_behind" }]), {
+      type: "zone",
+      id: "zone_behind"
+    });
     assert.deepEqual(pickAnimationTarget(designer, { x: 5, y: 5 }, 0.1), {
       type: "zone",
       id: "zone_behind"
@@ -3486,6 +3850,25 @@ describe("animation target picking", () => {
 });
 
 describe("timeline clip target selection", () => {
+  it("filters the Animate target navigator by configured optical side", () => {
+    const designer = createDefaultPartituraDocument("animate_target_navigator").designer!;
+    designer.zones = [
+      { id: "zone_front", name: "Front", shape: "rect", x: 0, y: 0, width: 10, height: 10, visible: true, locked: false, opacity: 1 },
+      { id: "zone_rear", name: "Rear", shape: "rect", x: 12, y: 0, width: 10, height: 10, visible: true, locked: false, opacity: 1 },
+      { id: "zone_empty", name: "Empty", shape: "rect", x: 24, y: 0, width: 10, height: 10, visible: true, locked: false, opacity: 1 }
+    ];
+    designer.lightSources = [
+      { ...createDefaultOpticalTreatment("zone", "zone_front", "front"), id: "source_front" },
+      { ...createDefaultOpticalTreatment("zone", "zone_rear", "halo"), id: "source_rear" }
+    ];
+
+    assert.equal(animationTargetMatchesSurfaceView(designer, { type: "zone", id: "zone_front" }, "front"), true);
+    assert.equal(animationTargetMatchesSurfaceView(designer, { type: "zone", id: "zone_front" }, "rear"), false);
+    assert.equal(animationTargetMatchesSurfaceView(designer, { type: "zone", id: "zone_rear" }, "rear"), true);
+    assert.equal(animationTargetMatchesSurfaceView(designer, { type: "zone", id: "zone_empty" }, "front"), false);
+    assert.equal(animationTargetMatchesSurfaceView(designer, { type: "zone", id: "zone_empty" }, "both"), true);
+  });
+
   it("resolves a light-source clip to its owning zone", () => {
     const designer = createDefaultPartituraDocument("clip_source_selection").designer!;
     designer.zones = [{ id: "zone_logo", name: "Logo", shape: "rect", x: 0, y: 0, width: 10, height: 10, visible: true, locked: false, opacity: 1 }];
@@ -3621,6 +4004,18 @@ describe("timeline clip target selection", () => {
     const options = animationClipTargetOptions(compiled.designer!, compiled.compiledLayout);
     assert.equal(options.find((option) => option.id === designerGroupLightTargetId("group_letters", "front"))?.available, false);
     assert.equal(options.find((option) => option.id === designerGroupLightTargetId("group_letters", "rear"))?.available, true);
+    assert.deepEqual(animationEffectTargetOutlineOptions(compiled.designer!, compiled.compiledLayout), [
+      {
+        ...options.find((option) => option.id === designerGroupLightTargetId("group_letters", "front"))!,
+        groupId: "group_letters",
+        targets: []
+      },
+      {
+        ...options.find((option) => option.id === designerGroupLightTargetId("group_letters", "rear"))!,
+        groupId: "group_letters",
+        targets: [{ type: "zone", id: target.id }, { type: "channel", id: channel.id }]
+      }
+    ]);
     assert.deepEqual(designerOpticalTargetsForClipTarget(compiled.designer!, designerGroupLightTargetId("group_letters", "rear")), [{ type: "zone", id: target.id }, { type: "channel", id: channel.id }]);
   });
 
@@ -3638,15 +4033,25 @@ describe("timeline clip target selection", () => {
   });
 
   it("creates clips through one categorized Front/Rear target picker", async () => {
-    const source = await readFile("components/lighting/designer/designer-animate-timeline.tsx", "utf8");
+    const [source, modalSource] = await Promise.all([
+      readFile("components/lighting/designer/designer-animate-timeline.tsx", "utf8"),
+      readFile("components/ui/modal.tsx", "utf8")
+    ]);
 
-    assert.match(source, /title="Create a clip and choose its target"/);
+    assert.match(source, /function addClipForSelection/);
+    assert.match(source, /selectedTargetOptions\.filter\(\(option\) => option\.available\)/);
+    assert.match(source, /Create a clip for the selected object/);
     assert.match(source, /function AnimationTargetPicker/);
+    assert.match(source, /createPortal\(/);
+    assert.match(source, /className="max-w-5xl"/);
+    assert.match(source, /Clip target ·/);
     assert.match(source, /\["front", "rear"\]/);
     assert.match(source, /Effect targets/);
     assert.match(source, /Zones/);
     assert.match(source, /Channels/);
     assert.match(source, /Search targets/);
+    assert.match(source, /className="max-w-5xl"[\s\S]*?closeOnBackdrop/);
+    assert.match(modalSource, /closeOnBackdrop && event\.target === event\.currentTarget/);
     assert.doesNotMatch(source, /Select a zone with an assigned light strip/);
     assert.doesNotMatch(source, /Select label="Scope"/);
   });
@@ -3656,6 +4061,36 @@ describe("timeline clip target selection", () => {
 
     assert.match(source, /Name[\s\S]*?value=\{clip\.name\}[\s\S]*?onChange=\{\(event\) => onChange\(\{ name: event\.target\.value \}\)\}/);
     assert.match(source, /placeholder="Letter or effect name"/);
+  });
+
+  it("keeps one uninterrupted Animate inspector beside canvas and timeline", async () => {
+    const [workspace, timeline] = await Promise.all([
+      readFile("components/lighting/partitura-workspace.tsx", "utf8"),
+      readFile("components/lighting/designer/designer-animate-timeline.tsx", "utf8")
+    ]);
+
+    assert.match(workspace, /grid-rows-\[minmax\(0,1fr\)_auto\]/);
+    assert.match(workspace, /col-start-2 row-span-2 row-start-1/);
+    assert.match(workspace, /function AnimateInspectorTabs/);
+    assert.match(workspace, /role="tablist" aria-label="Animate inspector"/);
+    assert.match(workspace, /label: "Objects"[\s\S]*?label: "Target"[\s\S]*?label: "Clip"/);
+    assert.match(workspace, /col-start-2 row-span-2 row-start-1 flex min-h-0 flex-col border-l/);
+    assert.match(workspace, /ref=\{setAnimationClipInspectorHost\}/);
+    assert.match(workspace, /inspectorHost=\{animationClipInspectorHost\}/);
+    assert.match(timeline, /createPortal\(clipInspectorPanel, inspectorHost\)/);
+  });
+
+  it("shows a square-cornered Zones and Channels navigator with the shared side control", async () => {
+    const source = await readFile("components/lighting/partitura-workspace.tsx", "utf8");
+
+    assert.match(source, /function AnimateTargetsPanel/);
+    assert.match(source, /<AssemblySurfaceViewToggle value=\{surfaceView\}/);
+    assert.match(source, /label="Zones"[\s\S]*?label="Channels"/);
+    assert.match(source, /placeholder="Search Zones and Channels"/);
+    assert.match(source, /aria-label="Animate targets" className="flex h-full min-h-0 flex-col overflow-hidden bg-surface"/);
+    assert.match(source, /function AnimateTargetGroup[\s\S]*?aria-expanded=\{visible\}/);
+    assert.match(source, /function AnimateTargetGroup[\s\S]*?useState\(false\)/);
+    assert.match(source, /ChevronDown[\s\S]*?ChevronRight/);
   });
 
   it("keeps visible Front, Halo and Wall indicators on timeline clips", async () => {
@@ -3670,14 +4105,17 @@ describe("timeline clip target selection", () => {
     assert.match(source, /absolute bottom-0 right-0 top-0 z-40[\s\S]*?onDrag\(event, "end"\)/);
   });
 
-  it("keeps the complete Front calibration visible for a selected clip", async () => {
-    const source = await readFile("components/lighting/partitura-workspace.tsx", "utf8");
+  it("keeps Front calibration aligned with direct and diffused rendering", async () => {
+    const [source, rendererSource] = await Promise.all([
+      readFile("components/lighting/partitura-workspace.tsx", "utf8"),
+      readFile("components/lighting/player/gpu/webgl2-player-renderer.ts", "utf8")
+    ]);
     const frontEditor = source.slice(source.indexOf('function LightingMountsEditor'), source.indexOf('function DiffuserSlider'));
 
     assert.match(frontEditor, /label="Intensity"/);
-    assert.match(frontEditor, /label="Distance to diffusor"/);
-    assert.match(frontEditor, /label="Softness"/);
-    assert.match(frontEditor, /treatment\.material === "silicone"[\s\S]*?label="Transmission"[\s\S]*?label="Beam"/);
+    assert.match(frontEditor, /treatment\.material !== "none"[\s\S]*?label="Distance to diffusor"[\s\S]*?label="Beam"[\s\S]*?label="Softness"/);
+    assert.doesNotMatch(frontEditor, /label="Transmission"/);
+    assert.match(rendererSource, /treatment\.source\.intensity \* this\.settings\.intensity/);
   });
 
   it("shows compiled string assignments as read-only information", async () => {
@@ -4051,6 +4489,8 @@ describe("physical light mounts", () => {
     assert.match(workspaceSource, /construction === "continuous"[\s\S]*cutMode === "free_cut"/);
     assert.match(workspaceSource, /label="LEDs \/ cut"/);
     assert.match(workspaceSource, /label="LEDs \/ pixel"/);
+    assert.match(workspaceSource, /label="Voltage"[\s\S]*?voltageV: Math\.max\(0\.1, voltageV\)/);
+    assert.match(workspaceSource, /label="Current \/ LED"[\s\S]*?suffix="mA"[\s\S]*?ratedCurrentMaPerLed: Math\.max\(0\.01, ratedCurrentMaPerLed\)/);
     assert.match(workspaceSource, /physicalLedsPerAddressablePixel: Math\.max\(0\.1, physicalLedsPerAddressablePixel\)/);
     assert.doesNotMatch(workspaceSource, /physicalLedsPerCutSegment:[^\n]+physicalLedsPerMeter/);
     assert.doesNotMatch(workspaceSource, /physicalLedsPerAddressablePixel:[^\n]+(?:physicalLedsPerMeter|addressablePixelsPerMeter)/);
@@ -4173,19 +4613,19 @@ describe("physical light mounts", () => {
 
     const workspaceSource = await readFile("components/lighting/partitura-workspace.tsx", "utf8");
     assert.match(workspaceSource, /focusCompileIssueTarget/);
-    assert.match(workspaceSource, /assign Lighting host directly in each warning card/);
+    assert.match(workspaceSource, /restrict the string's Diffuser mapping directly in each warning card/);
     assert.match(workspaceSource, /function compileIssueTargetIcon[\s\S]*?Waypoints[\s\S]*?CircleDot[\s\S]*?Waves/);
     assert.match(workspaceSource, /function compileIssueTargetTone[\s\S]*?emerald-500[\s\S]*?amber-500[\s\S]*?sky-500/);
-    assert.match(workspaceSource, /function compileIssueLightingHostEditor[\s\S]*?Lighting host for \{route\.name\}[\s\S]*?Choose the physical owner of this string, then Compile again/);
+    assert.match(workspaceSource, /function compileIssueDiffuserMappingEditor[\s\S]*?Diffuser mapping for \{route\.name\}[\s\S]*?Select one or more diffusors, then Compile again/);
     const selectedRouteContextStart = workspaceSource.indexOf('editorMode === "design" && selectedRoute');
     const selectedRouteContext = workspaceSource.slice(selectedRouteContextStart, workspaceSource.indexOf('selectedArtworkCanCreateZones', selectedRouteContextStart));
-    assert.ok(selectedRouteContext.indexOf('ToolbarField label="Lighting host"') < selectedRouteContext.indexOf('ToolbarField label="Type"'));
+    assert.ok(selectedRouteContext.indexOf('ToolbarField label="Diffuser mapping"') < selectedRouteContext.indexOf('ToolbarField label="Type"'));
   });
 
-  it("uses an LED string Lighting host to disambiguate overlapping Front targets", async () => {
+  it("uses an LED string Diffuser mapping to select one or many overlapping Front targets", async () => {
     const designer = createDefaultPartituraDocument("stacked_front_sources").designer!;
     designer.routes = designer.routes.map((route) => route.id === "route_fondo"
-      ? { ...route, designSurface: "front", lightingHost: { type: "zone" as const, id: "fondo" } }
+      ? { ...route, designSurface: "front", diffuserMapping: { mode: "restricted" as const, targets: [{ type: "zone" as const, id: "fondo" }] } }
       : route.id === "data_feed_1" ? { ...route, designSurface: "front" } : route);
     designer.channels = [{
       id: "upper_channel", name: "Upper channel", points: designer.routes.find((route) => route.id === "route_fondo")!.points,
@@ -4199,14 +4639,24 @@ describe("physical light mounts", () => {
     assert.ok(compiledStringIdsForSource(layout, chamber.id).includes("route_fondo"));
     assert.deepEqual(compiledStringIdsForSource(layout, upperStrip.id), []);
     assert.equal(layout.validation.warnings.some((warning) => warning.includes("mapped to multiple Lighting Setups")), false);
-    const hostedByChannel = { ...designer, routes: designer.routes.map((route) => route.id === "route_fondo" ? { ...route, lightingHost: { type: "channel" as const, id: "upper_channel" } } : route) };
-    const channelLayout = compileDesignerLayout(hostedByChannel);
+    const mappedToChannel = { ...designer, routes: designer.routes.map((route) => route.id === "route_fondo" ? { ...route, diffuserMapping: { mode: "restricted" as const, targets: [{ type: "channel" as const, id: "upper_channel" }] } } : route) };
+    const channelLayout = compileDesignerLayout(mappedToChannel);
     assert.deepEqual(compiledStringIdsForSource(channelLayout, chamber.id), []);
     assert.ok(compiledStringIdsForSource(channelLayout, upperStrip.id).includes("route_fondo"));
-    assert.notEqual(designerCompileSignature(hostedByChannel), designerCompileSignature(designer));
+    assert.notEqual(designerCompileSignature(mappedToChannel), designerCompileSignature(designer));
+
+    const mappedToBoth = { ...designer, routes: designer.routes.map((route) => route.id === "route_fondo" ? { ...route, diffuserMapping: { mode: "restricted" as const, targets: [{ type: "zone" as const, id: "fondo" }, { type: "channel" as const, id: "upper_channel" }] } } : route) };
+    const bothLayout = compileDesignerLayout(mappedToBoth);
+    assert.ok(compiledStringIdsForSource(bothLayout, chamber.id).includes("route_fondo"));
+    assert.ok(compiledStringIdsForSource(bothLayout, upperStrip.id).includes("route_fondo"));
 
     const workspaceSource = await readFile("components/lighting/partitura-workspace.tsx", "utf8");
-    assert.match(workspaceSource, /ToolbarField label="Lighting host"[\s\S]*Auto · geometry[\s\S]*<optgroup label="Zones">[\s\S]*<optgroup label="Channels">/);
+    assert.match(workspaceSource, /ToolbarField label="Diffuser mapping"[\s\S]*DiffuserMappingPicker/);
+    assert.match(workspaceSource, /Diffuser mapping[\s\S]*Auto · geometry[\s\S]*Zones[\s\S]*Channels/);
+    const mappingPickerSource = workspaceSource.slice(workspaceSource.indexOf("function DiffuserMappingPicker"), workspaceSource.indexOf("function designerGeometrySelectionKey"));
+    assert.match(mappingPickerSource, /createPortal\([\s\S]*<Modal[\s\S]*className="max-w-5xl"[\s\S]*document\.body/);
+    assert.match(mappingPickerSource, /mappedTargetNames[\s\S]*Missing · \$\{target\.id\}[\s\S]*mappedTargetNames\[0\][\s\S]*MappingIcon/);
+    assert.doesNotMatch(mappingPickerSource, /<details/);
     assert.doesNotMatch(workspaceSource, /Emitter side/);
   });
 
@@ -4224,7 +4674,7 @@ describe("physical light mounts", () => {
   it("persists normalized Halo-Lit settings without changing the physical compile signature", () => {
     const document = createDefaultPartituraDocument("optics_test");
     const baseline = normalizeDefaultSignLayout(document);
-    baseline.designer.routes[0].lightingHost = { type: "zone", id: "fondo" };
+    baseline.designer.routes[0].diffuserMapping = { mode: "restricted", targets: [{ type: "zone", id: "fondo" }] };
     baseline.designer.lightSources = [{
       ...createDefaultOpticalTreatment("zone", "letra_1", "halo"),
       stringIds: ["route_letras"]
@@ -4239,7 +4689,7 @@ describe("physical light mounts", () => {
 
     const normalized = normalizeDefaultSignLayout(baseline).designer;
     assert.equal(normalized.lightSources[0].mode, "halo");
-    assert.deepEqual(normalized.routes[0].lightingHost, { type: "zone", id: "fondo" });
+    assert.deepEqual(normalized.routes[0].diffuserMapping, { mode: "restricted", targets: [{ type: "zone", id: "fondo" }] });
     assert.equal(normalized.lightSources[0].spreadCm, 7.5);
     assert.equal(designerCompileSignature(normalized), before);
   });

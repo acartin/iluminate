@@ -1,5 +1,6 @@
 import type { Partitura } from "@iluminate/lighting-core";
 import type { PlayerSceneMetadata, PlayerWorkerRequest, PlayerWorkerResponse } from "./player-worker-protocol";
+import { quantizePlayerTime } from "./player-control-sync";
 
 export type PlayerState = "empty" | "loading" | "ready" | "playing" | "paused" | "error" | "destroyed";
 
@@ -34,6 +35,7 @@ export class PlayerController {
   private activeLoadRequestId = 0;
   private inFlight = false;
   private pendingForcedSample: number | null = null;
+  private pendingSeekMs: number | null = null;
   private availableBuffer: ArrayBuffer | null = null;
   private frameRequest: number | null = null;
   private externallySuspended = false;
@@ -62,6 +64,8 @@ export class PlayerController {
     this.emitStatus(true);
     const requestId = ++this.requestId;
     this.activeLoadRequestId = requestId;
+    this.inFlight = false;
+    this.availableBuffer = null;
     this.pendingForcedSample = null;
     const result = new Promise<void>((resolve, reject) => {
       this.pendingLoad = { requestId, resolve, reject };
@@ -100,8 +104,17 @@ export class PlayerController {
   }
 
   seek(timeMs: number) {
+    this.assertAlive();
+    const requestedTimeMs = quantizePlayerTime(timeMs);
+    if (this.state === "empty" || this.state === "loading") {
+      this.pendingSeekMs = requestedTimeMs;
+      this.currentTimeMs = requestedTimeMs;
+      this.emitStatus(true);
+      return;
+    }
     this.assertPlayable();
-    this.currentTimeMs = this.normalizeTime(timeMs);
+    this.pendingSeekMs = null;
+    this.currentTimeMs = this.normalizeTime(requestedTimeMs);
     this.playOffsetMs = this.currentTimeMs;
     if (this.state === "playing") this.playStartedAt = performance.now();
     this.emitStatus(true);
@@ -169,15 +182,16 @@ export class PlayerController {
       this.sceneId = message.defaultScene;
       this.durationMs = this.scenes.get(this.sceneId)?.durationMs ?? 0;
       this.pixelCount = message.pixelCount;
-      this.currentTimeMs = 0;
-      this.playOffsetMs = 0;
+      this.currentTimeMs = this.normalizeTime(this.pendingSeekMs ?? 0);
+      this.playOffsetMs = this.currentTimeMs;
+      this.pendingSeekMs = null;
       this.availableBuffer = new ArrayBuffer(message.pixelCount * 3);
       this.state = "ready";
       const pending = this.pendingLoad;
       this.pendingLoad = null;
       pending?.resolve();
       this.emitStatus(true);
-      this.sample(0, true);
+      this.sample(this.currentTimeMs, true);
       return;
     }
     this.inFlight = false;
@@ -239,7 +253,7 @@ export class PlayerController {
     this.availableBuffer = null;
     this.inFlight = true;
     const requestId = ++this.requestId;
-    this.post({ type: "sample", requestId, sceneId: this.sceneId, timeMs, buffer }, [buffer]);
+    this.post({ type: "sample", requestId, sceneId: this.sceneId, timeMs: quantizePlayerTime(timeMs), buffer }, [buffer]);
   }
 
   private resolvePlayingTime(now: number) {

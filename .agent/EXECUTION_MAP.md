@@ -1,5 +1,8 @@
 # Execution Map
 
+**Status:** current validation routes and commands
+**Last reviewed:** 2026-10-26
+
 ## Objetivo
 
 Este archivo define donde validar cambios segun la ruta afectada. No es contexto
@@ -21,9 +24,11 @@ o desde el inicio cuando la tarea es de infraestructura/operacion. En Iluminate,
 |---|---|---|
 | `compose.yml` | Sintaxis compose | `docker compose config` |
 | `.env.example` | Alineacion con compose y docs | revision manual |
-| `.agent/*.md` | Revision de contenido | no requiere runtime |
+| `.agent/*.md` | Consistencia de rutas, links y manifiesto | `bash .agent/validar_documentacion.sh` |
 | `.agent/*.sh` | Sintaxis shell | `bash -n .agent/<script>.sh` |
-| `services/web/iluminate/` | Build/smoke de Next via Docker | `docker compose build iluminate-web` y `curl -I http://localhost:${ILUMINATE_WEB_PORT:-8420}` si esta levantado |
+| `services/web/iluminate/` | Tests, typecheck, lint, build y smoke de Next | `docker compose build iluminate-web`; ejecutar `npm test`, `npm run typecheck` y `npm run lint` dentro del entorno Node del servicio si se requiere diagnostico separado; `curl -I http://localhost:${ILUMINATE_WEB_PORT:-8420}` si esta levantado |
+| `services/web/iluminate/components/lighting/designer/` | Suite Designer y build Next | `npm test` y `docker compose build iluminate-web` |
+| `services/web/iluminate/components/lighting/player/` | Suite Player y build Next | `npm test` y `docker compose build iluminate-web` |
 | `services/web/iluminate-public/` | Typecheck, lint, build y smoke del sitio publico via Docker | `docker compose build iluminate-public-web` y `curl -I http://localhost:${ILUMINATE_PUBLIC_WEB_PORT:-8430}` si esta levantado |
 | `services/web/iluminate-prompt-builder/` | Tests del motor, build de imagen y smoke HTTP | `docker run --rm -v "$PWD/services/web/iluminate-prompt-builder:/work" -w /work node:22-alpine npm test` y `docker build -f services/web/iluminate-prompt-builder/Dockerfile -t iluminate-prompt-builder:test .` |
 | `services/render-worker/` | Typecheck/build del worker y coherencia con Compose | `docker build -f services/render-worker/Dockerfile -t iluminate-render-worker:check .` y `docker compose config` |
@@ -36,7 +41,7 @@ o desde el inicio cuando la tarea es de infraestructura/operacion. En Iluminate,
 | `services/auth/` | Por ahora docs/estructura; futuro tests/API auth | no aplica hasta tener runtime |
 | `services/device-protocol/` | Contratos y fixtures; futuro tests de schema | no aplica hasta tener runtime |
 | `services/firmware/` | Revision de notas y spikes temporales; el firmware PlatformIO organizado vive fuera de este repo | revision manual; build real en repo firmware externo |
-| `docs/` | Revision de documentacion de arquitectura | no requiere runtime |
+| `docs/` | Consistencia de documentacion | `bash .agent/validar_documentacion.sh` |
 
 ## Variables clave actuales
 
@@ -92,19 +97,16 @@ Cuando cambien canvas, defaults, rutas, snap/soldadura, controlador o persistenc
 1. Ejecutar `git diff --check`.
 2. Reconstruir `iluminate-web` con `docker compose up -d --build iluminate-web`.
 3. Verificar que `/partituras/designer` liste la partitura activa.
-4. Verificar por API que el documento activo esperado sea visible:
+4. Verificar por API que los registros expongan identificador, clave, nombre,
+   estado y resumen numerico:
 
 ```bash
 curl -s http://localhost:8420/api/lighting/partituras | jq -r '.records[] | "\(.id) \(.partituraKey) \(.name) \(.status) \(.canvasWidthCm)cm routes=\(.routes)"'
 ```
 
-Estado local esperado tras el reset actual:
-
-```text
-1 default_installation Default Installation draft 170cm routes=4
-```
-
-5. Probar manualmente en `/partituras/designer/1`:
+   Consultar el endpoint de detalle cuando la validacion requiera inspeccionar
+   el documento completo. No asumir un ID, nombre o conteo fijo del entorno.
+5. Probar manualmente en la ruta de detalle de la partitura activa:
    - controller arriba a la izquierda sin encimar Fondo;
    - puerto rojo + terminal verde de cable suelda solo si comparten snap point;
    - terminal verde + rojo entre rutas suelda solo si comparten snap point;

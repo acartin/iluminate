@@ -194,6 +194,15 @@ export function renderFrameInto(
 
   const { pixel, context, nextColor, frame } = runtime.scratch;
 
+  // The timeline origin is the unanimated installation state. Effects whose
+  // clips start at zero are evaluated only after the playhead advances.
+  if (sceneTime === 0) {
+    frame.sceneId = scene.id;
+    frame.timeMs = sceneTime;
+    frame.colors = colors;
+    return frame;
+  }
+
   for (const clip of scene.clips) {
     if (sceneTime < clip.startMs || sceneTime >= clip.endMs) continue;
     const localTimeMs = sceneTime - clip.startMs;

@@ -1,6 +1,6 @@
 # PixelMap Composer Direction
 
-**Last updated:** 2026-09-10
+**Last updated:** 2026-10-26
 **Purpose:** preserve the current product/architecture direction for the real sign composer.
 
 ## Current Decision
@@ -197,9 +197,10 @@ defined logical string segments.
   tolerance. Addressable pixel pitch never enlarges that footprint.
 - Lighting Setup string membership is compiler-derived, never a normal manual
   matrix. Front setups use Front strings and Halo-Lit / Wall Wash setups use Rear
-  strings. An LED string may additionally persist a Lighting host (`Zone` or
-  `Channel`) to disambiguate stacked assemblies whose targets overlap in plan;
-  an unset host preserves automatic geometric membership.
+  strings. Each LED string persists a Diffuser mapping. `auto` preserves all
+  geometric memberships on its construction side; `restricted` supplies a list
+  of allowed Zone/Channel targets. The list is a filter, not a manual pixel
+  assignment: every admitted target must still contain the physical pixel.
 - A group is a named, cycle-free composition of zones and/or groups. It does not
   change cable routing or duplicate pixels.
 - A selected pixel set can be evaluated in `serial`, `local`, or `global`
