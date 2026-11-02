@@ -11,6 +11,7 @@ const invalidOutput = readFixture("partitura-v2-invalid-output.json");
 const invalidReferences = readFixture("partitura-v2-invalid-references.json");
 
 assert(validatePartitura(valid).ok, "minimal fixture should validate");
+assert(valid.scenes[0].tracks[0].clips[0].name === "Ambient blue", "clip display names should survive the partitura contract");
 assert(!validatePartitura(invalidOutput).ok, "invalid output fixture should fail");
 assert(
   validatePartitura(invalidOutput).errors.some((issue) => issue.code === "output.invalid"),

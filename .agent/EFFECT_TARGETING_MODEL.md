@@ -65,6 +65,13 @@ clips when sources exist. Legacy zone targets remain valid during migration.
 A string remains visible as physical fabrication information, not the ordinary
 effect-authoring language.
 
+Animate may assign one optional target to a timeline track. When present, that
+track target applies to every clip in the row and the generated clips inherit
+it from the generated track. When absent, each clip retains its own target so a
+single row can still coordinate different zones or objects. Assigning a target
+to a track updates the authored clips in that row to the same destination;
+returning the row to per-clip mode does not reconstruct older assignments.
+
 Effect-target groups remain side-neutral authoring objects. Animate presents a
 Front/Rear choice before the categorized target list. Compile materializes a
 selected group side as `effect_target_<front|rear>_<groupId>` and resolves only

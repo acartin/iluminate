@@ -1114,6 +1114,10 @@ Current renderer module:
   the evaluation Worker without rebuilding WebGL geometry, optical masks or
   outline buffers; those renderer resources change only with the physical or
   optical visual scene.
+- Each authored timeline row may persist one optional target. A targeted row
+  generates one runtime track whose clips inherit that target; an untargeted
+  row generates clip-level target overrides. The row-header pencil owns this
+  choice, while the clip inspector edits a target only in per-clip mode.
 - `Webgl2PlayerRenderer` composes Front, Halo-Lit and directional Wall Washer
   mounts. A target may have more than one mount at the same time.
 - `visual-scene.v1` carries resolved physical Channel contours. The WebGL2

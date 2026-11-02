@@ -537,6 +537,8 @@ export type SceneForm = {
   loop: boolean;
   durationMs: number;
   laneCount?: number;
+  /** Optional target per timeline row. A null row keeps target selection on each clip. */
+  trackTargets?: Array<string | null>;
   clips: ClipForm[];
 };
 
@@ -753,6 +755,11 @@ export function nextEmptyClipLayer(scene: Pick<SceneForm, "laneCount" | "clips">
   return laneCount;
 }
 
+export function sceneTrackTarget(scene: Pick<SceneForm, "trackTargets">, layer: number) {
+  const target = scene.trackTargets?.[Math.max(0, Math.round(layer))];
+  return typeof target === "string" && target.length > 0 ? target : null;
+}
+
 export function normalizeDefaultSignLayout(document: PartituraDocument) {
   const fallback = createDefaultPartituraDocument(document.projectId);
   const source = clonePartituraDocument(document);
@@ -770,16 +777,23 @@ export function normalizeDefaultSignLayout(document: PartituraDocument) {
 
   return {
     projectId: source.projectId || fallback.projectId,
-    scenes: scenes.map((scene) => ({
-      ...scene,
-      laneCount: Math.max(1, Math.round(positiveNumber(scene.laneCount, inferSceneLaneCount(scene.clips ?? [])))),
-      clips: ensureUniqueClipNames(migrateClipsToLightSources(scene.clips ?? [], designer).map((clip) => ({
-        ...clip,
-        enabled: clip.enabled !== false,
-        target: targetIds.has(clip.target) ? clip.target : "full_sign",
-        coordinateSpace: "local"
-      })))
-    })),
+    scenes: scenes.map((scene) => {
+      const laneCount = Math.max(1, Math.round(positiveNumber(scene.laneCount, inferSceneLaneCount(scene.clips ?? []))));
+      return {
+        ...scene,
+        laneCount,
+        trackTargets: Array.from({ length: laneCount }, (_, layer) => {
+          const target = scene.trackTargets?.[layer];
+          return typeof target === "string" && targetIds.has(target) ? target : null;
+        }),
+        clips: ensureUniqueClipNames(migrateClipsToLightSources(scene.clips ?? [], designer).map((clip) => ({
+          ...clip,
+          enabled: clip.enabled !== false,
+          target: targetIds.has(clip.target) ? clip.target : "full_sign",
+          coordinateSpace: "local"
+        })))
+      };
+    }),
     activeSceneId: scenes.some((scene) => scene.id === source.activeSceneId) ? source.activeSceneId : scenes[0]?.id ?? "normal",
     previewTimeMs: typeof source.previewTimeMs === "number" ? source.previewTimeMs : 0,
     accentColor: typeof source.accentColor === "string" ? source.accentColor : "#FFFFFF",

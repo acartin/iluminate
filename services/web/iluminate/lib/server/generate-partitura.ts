@@ -2,7 +2,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import type { Partitura } from "@iluminate/lighting-core";
 import { normalizeDefaultSignLayout, type PartituraDocument } from "@/lib/lighting/partitura-model";
-import { resolveGeneratedPartituraTarget } from "@/lib/lighting/generated-partitura-target";
+import { buildGeneratedPartituraTracks } from "@/lib/lighting/generated-partitura-tracks";
 import { computeAuthoringSourceChecksum } from "@/lib/server/partitura-checksum";
 
 type LightingCore = typeof import("../../../../lighting-core/index.js");
@@ -35,28 +35,11 @@ export async function generatePartituraFromDocument(input: PartituraDocument): P
     zones: layout.zones,
     groups: layout.groups,
     scenes: document.scenes.map((scene) => ({
-      ...scene,
-      tracks: scene.clips
-        .filter((clip) => clip.enabled !== false && !disabledSourceIds.has(clip.target))
-        .flatMap((clip) => {
-          const target = resolveGeneratedPartituraTarget(clip.target, layout);
-          if (!target) return [];
-          return [{
-            id: `track_${clip.id}`,
-            name: clip.name,
-            target,
-            clips: [{
-              id: clip.id,
-              effect: clip.effect,
-              coordinateSpace: clip.coordinateSpace ?? "local",
-              startMs: clip.startMs,
-              durationMs: clip.durationMs,
-              layer: clip.layer,
-              blend: clip.blend as "replace" | "add" | "max" | "multiply" | "alpha" | "mask",
-              params: clip.params
-            }]
-          }];
-        })
+      id: scene.id,
+      name: scene.name,
+      loop: scene.loop,
+      durationMs: scene.durationMs,
+      tracks: buildGeneratedPartituraTracks(scene, layout, disabledSourceIds)
     })),
     metadata: { source: "designer-physical" }
   });

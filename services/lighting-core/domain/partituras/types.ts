@@ -41,6 +41,8 @@ export type EffectParams = Record<string, EffectParameterValue>;
 
 export type Clip = {
   id: string;
+  /** Human-readable authoring label; playback ignores it. */
+  name?: string;
   effect: EffectId | string;
   target?: PartituraTarget;
   coordinateSpace: EffectCoordinateSpace;

@@ -24,7 +24,8 @@ The contract is intentionally logical:
   time, so the realtime evaluator does not scan authoring geometry;
 - scenes contain tracks;
 - tracks target the installation, a zone or a group;
-- clips reference compiled-core effect identifiers and parameters.
+- clips preserve an optional human-readable authoring name while playback uses
+  only their compiled-core effect identifiers and parameters.
 
 Linear strips and surface-like areas use the same spatial pixel model. A strip is a row of pixels where `y = 0`; a rectangular or custom-lit area is represented by the same physical pixels with non-linear coordinates.
 

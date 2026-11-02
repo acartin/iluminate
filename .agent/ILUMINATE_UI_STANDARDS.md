@@ -133,6 +133,12 @@ La timeline debe usar el vocabulario de la partitura:
 - layers
 - blend modes
 
+Cada fila de track muestra un lapiz en su cabecera para asignar opcionalmente
+un destino de iluminacion. Con destino asignado, todos los clips de la fila lo
+heredan; sin destino, la fila permanece en modo `Targets per clip` y conserva
+la composicion de distintas zonas u objetos en paralelo. El inspector del clip
+abre la asignacion del track cuando este gobierna el destino.
+
 Cada clip expone dentro del propio bloque un ojo para habilitarlo o silenciarlo.
 El estado se persiste en el documento de autoría y los clips deshabilitados no
 se incluyen en la partitura generada; al cambiar ese estado se invalida de

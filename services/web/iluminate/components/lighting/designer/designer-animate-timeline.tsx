@@ -6,7 +6,7 @@ import { Check, ChevronDown, ChevronUp, CircleDot, Eye, EyeOff, GripVertical, Pa
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
 import type { EffectDefinition, EffectParameterDefinition } from "@/lib/lighting/effect-catalog";
-import { DESIGNER_GLOBAL_LIGHT_SOURCE_TARGETS, createClipIdentity, designerGlobalLightSourceMode, parseDesignerGroupLightTargetId, nextEmptyClipLayer, type ClipForm, type ClipParams, type DesignerLightingSide, type PartituraDocument, type SceneForm } from "@/lib/lighting/partitura-model";
+import { DESIGNER_GLOBAL_LIGHT_SOURCE_TARGETS, createClipIdentity, designerGlobalLightSourceMode, parseDesignerGroupLightTargetId, nextEmptyClipLayer, sceneTrackTarget, type ClipForm, type ClipParams, type DesignerLightingSide, type PartituraDocument, type SceneForm } from "@/lib/lighting/partitura-model";
 import { animationDocumentState, duplicateClipAtTrackEnd, type AnimationDocumentState } from "./designer-animation-clips";
 import { animationClipTargetOptions, animationClipTargetSide, clipIdForSelectedTargets, clipScopeTargets, clipTargetsForSelection, designerOpticalTargetsForClipTarget, explicitClipTargetSelectionSettled, type AnimationClipTargetOption } from "./designer-animation-selection";
 
@@ -39,7 +39,7 @@ type TimelineDrag =
 const ROW_HEIGHT = 34;
 const HEADER_HEIGHT = 16;
 const MIN_CLIP_MS = 100;
-const TRACK_GUTTER_WIDTH = 72;
+const TRACK_GUTTER_WIDTH = 112;
 const ADD_SCENE_OPTION = "__add_scene__";
 
 export function DesignerAnimateTimeline({
@@ -82,7 +82,7 @@ export function DesignerAnimateTimeline({
   const [sceneNameEditing, setSceneNameEditing] = React.useState(false);
   const [sceneNameDraft, setSceneNameDraft] = React.useState(activeScene?.name ?? "");
   const sceneNameCancelRef = React.useRef(false);
-  const [targetPickerIntent, setTargetPickerIntent] = React.useState<{ clipId?: string; selectedOnly?: boolean } | null>(null);
+  const [targetPickerIntent, setTargetPickerIntent] = React.useState<{ clipId?: string; trackLayer?: number; selectedOnly?: boolean } | null>(null);
   const [targetPickerSide, setTargetPickerSide] = React.useState<DesignerLightingSide>("front");
   const pendingExplicitClipIdRef = React.useRef<string | undefined>(undefined);
   const [timelineDrag, setTimelineDrag] = React.useState<TimelineDrag | null>(null);
@@ -98,6 +98,10 @@ export function DesignerAnimateTimeline({
   const targetPickerOptions = targetPickerIntent?.selectedOnly ? selectedTargetOptions : targetOptions;
   const durationMs = Math.max(100, activeScene?.durationMs ?? 4000);
   const laneCount = Math.max(1, activeScene?.laneCount ?? inferLaneCount(activeScene?.clips ?? []));
+  const selectedClipTarget = selectedClip && activeScene ? sceneTrackTarget(activeScene, selectedClip.layer) ?? selectedClip.target : null;
+  const targetPickerTrackTarget = activeScene && targetPickerIntent?.trackLayer !== undefined
+    ? sceneTrackTarget(activeScene, targetPickerIntent.trackLayer)
+    : null;
   const availableAxisWidth = Math.max(320, timelineViewportWidth - TRACK_GUTTER_WIDTH);
   const minPxPerSecond = availableAxisWidth / (durationMs / 1000);
   const pxPerSecond = minPxPerSecond * zoomFactor;
@@ -145,8 +149,8 @@ export function DesignerAnimateTimeline({
   }, [activeScene, selectedClipId, selectedTargetIdsKey, setSelectedClipId]);
 
   React.useEffect(() => {
-    onSelectedClipTargetChange?.(selectedClip?.target ?? null);
-  }, [selectedClip?.target]);
+    onSelectedClipTargetChange?.(selectedClipTarget);
+  }, [selectedClipTarget]);
 
   React.useEffect(() => {
     sceneNameCancelRef.current = false;
@@ -184,7 +188,7 @@ export function DesignerAnimateTimeline({
 
   function addScene() {
     const next = liveAnimationRef.current.scenes.length + 1;
-    const scene: SceneForm = { id: `scene_${next}`, name: `Scene ${next}`, loop: true, durationMs: 4000, laneCount: 1, clips: [] };
+    const scene: SceneForm = { id: `scene_${next}`, name: `Scene ${next}`, loop: true, durationMs: 4000, laneCount: 1, trackTargets: [null], clips: [] };
     commitAnimation((current) => ({ ...current, scenes: [...current.scenes, scene], activeSceneId: scene.id, previewTimeMs: 0 }));
     setSelectedClipId(undefined);
     onPreviewTimeChange(0);
@@ -265,12 +269,12 @@ export function DesignerAnimateTimeline({
   function selectClip(clip: ClipForm) {
     if (onClipTargetSelect) pendingExplicitClipIdRef.current = clip.id;
     setSelectedClipId(clip.id);
-    onClipTargetSelect?.(clip.target);
+    onClipTargetSelect?.(activeScene ? sceneTrackTarget(activeScene, clip.layer) ?? clip.target : clip.target);
   }
 
   function addLane() {
     if (!activeScene) return;
-    updateScene({ laneCount: laneCount + 1 });
+    updateScene({ laneCount: laneCount + 1, trackTargets: [...(activeScene.trackTargets ?? Array(laneCount).fill(null)), null] });
   }
 
   function removeLane(layer: number) {
@@ -280,6 +284,7 @@ export function DesignerAnimateTimeline({
       scenes: current.scenes.map((scene) => scene.id === activeScene.id ? {
         ...scene,
         laneCount: Math.max(1, (scene.laneCount ?? laneCount) - 1),
+        trackTargets: Array.from({ length: scene.laneCount ?? laneCount }, (_, index) => sceneTrackTarget(scene, index)).filter((_, index) => index !== layer),
         clips: scene.clips
           .filter((clip) => clip.layer !== layer)
           .map((clip) => clip.layer > layer ? { ...clip, layer: clip.layer - 1 } : clip)
@@ -289,13 +294,54 @@ export function DesignerAnimateTimeline({
   }
 
   function openTargetPicker(clip?: ClipForm, selectedOnly = false) {
-    if (clip && designer) setTargetPickerSide(animationClipTargetSide(designer, clip.target));
+    const effectiveTarget = clip && activeScene ? sceneTrackTarget(activeScene, clip.layer) ?? clip.target : clip?.target;
+    if (effectiveTarget && designer) setTargetPickerSide(animationClipTargetSide(designer, effectiveTarget));
     else setTargetPickerSide(selectedOnly ? selectedTargetOptions.find((option) => option.available)?.side ?? selectedTargetOptions[0]?.side ?? "front" : "front");
     setTargetPickerIntent(clip ? { clipId: clip.id } : { selectedOnly });
     if (collapsed) onToggleCollapsed?.();
   }
 
+  function openTrackTargetPicker(layer: number) {
+    if (!activeScene) return;
+    const target = sceneTrackTarget(activeScene, layer);
+    if (target && designer) setTargetPickerSide(animationClipTargetSide(designer, target));
+    else setTargetPickerSide("front");
+    setTargetPickerIntent({ trackLayer: layer });
+    if (collapsed) onToggleCollapsed?.();
+  }
+
+  function updateTrackTarget(layer: number, target: string | null) {
+    if (!activeScene) return;
+    commitAnimation((current) => ({
+      ...current,
+      scenes: current.scenes.map((scene) => {
+        if (scene.id !== activeScene.id) return scene;
+        const trackTargets = Array.from({ length: Math.max(scene.laneCount ?? 1, laneCount) }, (_, index) => sceneTrackTarget(scene, index));
+        trackTargets[layer] = target;
+        return {
+          ...scene,
+          trackTargets,
+          clips: target ? scene.clips.map((clip) => clip.layer === layer ? { ...clip, target } : clip) : scene.clips
+        };
+      })
+    }));
+    if (selectedClip?.layer === layer) {
+      const effectiveTarget = target ?? selectedClip.target;
+      onSelectedClipTargetChange?.(effectiveTarget);
+      onClipTargetSelect?.(effectiveTarget);
+    }
+    setTargetPickerIntent(null);
+  }
+
   function addClipForSelection() {
+    if (activeScene) {
+      const currentScene = liveAnimationRef.current.scenes.find((scene) => scene.id === activeScene.id);
+      const fixedTarget = currentScene ? sceneTrackTarget(currentScene, nextEmptyClipLayer(currentScene)) : null;
+      if (fixedTarget && targetOptions.some((target) => target.id === fixedTarget && target.available)) {
+        addClip(fixedTarget);
+        return;
+      }
+    }
     const available = selectedTargetOptions.filter((option) => option.available);
     if (available.length === 1) {
       addClip(available[0].id);
@@ -305,6 +351,10 @@ export function DesignerAnimateTimeline({
   }
 
   function chooseTarget(targetId: string) {
+    if (targetPickerIntent?.trackLayer !== undefined) {
+      updateTrackTarget(targetPickerIntent.trackLayer, targetId);
+      return;
+    }
     const clipId = targetPickerIntent?.clipId;
     if (clipId) {
       updateClip(clipId, { target: targetId });
@@ -325,11 +375,12 @@ export function DesignerAnimateTimeline({
     const effect = effects.solid ?? Object.values(effects)[0];
     const defaultStart = 0;
     const clipDuration = Math.min(Math.max(1000, MIN_CLIP_MS), currentScene.durationMs);
+    const effectiveTarget = sceneTrackTarget(currentScene, layer) ?? targetId;
     const clip: ClipForm = {
       id: identity.id,
       name: identity.name,
       enabled: true,
-      target: targetId,
+      target: effectiveTarget,
       coordinateSpace: "local",
       effect: effect?.id ?? "solid",
       blend: "replace",
@@ -411,7 +462,11 @@ export function DesignerAnimateTimeline({
     }
     const maxStart = Math.max(0, durationMs - drag.clip.durationMs);
     const startMs = snapTimeToNeighbors(clamp(drag.clip.startMs + deltaMs, 0, maxStart), drag.clip.id);
-    updateClip(drag.clip.id, { startMs, layer: nextLayer });
+    updateClip(drag.clip.id, {
+      startMs,
+      layer: nextLayer,
+      target: sceneTrackTarget(activeScene, nextLayer) ?? drag.clip.target
+    });
   }
 
   function laneFromClientY(clientY: number) {
@@ -440,11 +495,12 @@ export function DesignerAnimateTimeline({
       <div className="min-h-0 flex-1 overflow-y-auto p-3">
         {selectedClip ? <ClipInspector
           clip={selectedClip}
-          targetOption={targetOptions.find((target) => target.id === selectedClip.target)}
-          targetLabel={targets.find((target) => target.id === selectedClip.target)?.name ?? selectedClip.target}
+          targetOption={targetOptions.find((target) => target.id === selectedClipTarget)}
+          targetLabel={targets.find((target) => target.id === selectedClipTarget)?.name ?? selectedClipTarget ?? selectedClip.target}
+          trackTargetLayer={sceneTrackTarget(activeScene, selectedClip.layer) ? selectedClip.layer : null}
           effect={effects[selectedClip.effect]}
           effects={effects}
-          onChooseTarget={() => openTargetPicker(selectedClip)}
+          onChooseTarget={() => sceneTrackTarget(activeScene, selectedClip.layer) ? openTrackTargetPicker(selectedClip.layer) : openTargetPicker(selectedClip)}
           onChange={(patch) => {
             updateClip(selectedClip.id, patch);
           }}
@@ -523,19 +579,23 @@ export function DesignerAnimateTimeline({
                 <TimelineGrid durationMs={durationMs} laneCount={laneCount} pxPerSecond={pxPerSecond} />
                 {Array.from({ length: laneCount }, (_, layer) => (
                   <div key={layer} className="absolute left-0 right-0 border-b border-border/80" style={{ top: HEADER_HEIGHT + layer * ROW_HEIGHT, height: ROW_HEIGHT }}>
-                    <div className="pointer-events-none absolute left-0 top-0 flex h-full w-[72px] items-center border-r border-border bg-card/80 px-1 font-mono text-[10px] uppercase text-muted-foreground">Track {layer + 1}</div>
-                    {!activeScene.clips.some((clip) => clip.layer === layer) ? (
-                      <button type="button" title={`Delete empty track ${layer + 1}`} aria-label={`Delete empty track ${layer + 1}`} className="absolute left-[46px] top-1 z-10 flex h-6 w-6 items-center justify-center rounded border border-transparent text-muted-foreground hover:border-border-2 hover:bg-card hover:text-destructive" onPointerDown={stopTimelinePointer} onClick={(event) => { event.stopPropagation(); removeLane(layer); }}>
-                        <Trash2 className="h-3.5 w-3.5" />
+                    <div className="absolute left-0 top-0 flex h-full w-[112px] items-center border-r border-border bg-card/80 pl-2 pr-1 text-[10px] text-muted-foreground">
+                      <span className="min-w-0 flex-1 truncate font-mono uppercase" title={trackTargetName(activeScene, layer, targetOptions) ?? undefined}>{trackTargetName(activeScene, layer, targetOptions) ?? `Track ${layer + 1}`}</span>
+                      <button type="button" title={`Edit target for track ${layer + 1}`} aria-label={`Edit target for track ${layer + 1}`} className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-surface-hover hover:text-foreground" onPointerDown={stopTimelinePointer} onClick={(event) => { event.stopPropagation(); openTrackTargetPicker(layer); }}>
+                        <Pencil className="h-3.5 w-3.5" />
                       </button>
-                    ) : null}
+                      {!activeScene.clips.some((clip) => clip.layer === layer) ? <button type="button" title={`Delete empty track ${layer + 1}`} aria-label={`Delete empty track ${layer + 1}`} className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-surface-hover hover:text-destructive" onPointerDown={stopTimelinePointer} onClick={(event) => { event.stopPropagation(); removeLane(layer); }}>
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button> : null}
+                    </div>
                   </div>
                 ))}
                 {(activeScene.clips ?? []).map((clip) => {
                   const left = TRACK_GUTTER_WIDTH + timeToPx(clip.startMs, pxPerSecond);
                   const width = Math.max(34, timeToPx(clip.durationMs, pxPerSecond));
-                  const targetName = targetOptions.find((target) => target.id === clip.target)?.name ?? targets.find((target) => target.id === clip.target)?.name ?? clip.target;
-                  const targetPresentation = clipTargetPresentation(document, clip.target);
+                  const effectiveTarget = sceneTrackTarget(activeScene, clip.layer) ?? clip.target;
+                  const targetName = targetOptions.find((target) => target.id === effectiveTarget)?.name ?? targets.find((target) => target.id === effectiveTarget)?.name ?? effectiveTarget;
+                  const targetPresentation = clipTargetPresentation(document, effectiveTarget);
                   return <ClipBlock
                     key={clip.id}
                     clip={clip}
@@ -587,8 +647,10 @@ export function DesignerAnimateTimeline({
     {targetPickerIntent && typeof globalThis.document !== "undefined" ? createPortal(
       <Modal
         open
-        title={targetPickerClip ? `Clip target · ${targetPickerClip.name}` : "New clip · choose target"}
-        description={targetPickerIntent.selectedOnly ? "Choose one configured lighting destination for the selected object." : "Choose the lighting destination for this clip. Unavailable targets remain visible so you can identify missing setup."}
+        title={targetPickerIntent.trackLayer !== undefined ? `Track ${targetPickerIntent.trackLayer + 1} · target` : targetPickerClip ? `Clip target · ${targetPickerClip.name}` : "New clip · choose target"}
+        description={targetPickerIntent.trackLayer !== undefined
+          ? "Assign one lighting destination to every clip on this track, or keep targets configured per clip."
+          : targetPickerIntent.selectedOnly ? "Choose one configured lighting destination for the selected object." : "Choose the lighting destination for this clip. Unavailable targets remain visible so you can identify missing setup."}
         className="max-w-5xl"
         closeOnBackdrop
         onClose={() => setTargetPickerIntent(null)}
@@ -596,7 +658,9 @@ export function DesignerAnimateTimeline({
         <AnimationTargetPicker
           options={targetPickerOptions}
           side={targetPickerSide}
-          selectedTargetId={targetPickerClip?.target}
+          selectedTargetId={targetPickerTrackTarget ?? targetPickerClip?.target}
+          perClipSelected={targetPickerIntent.trackLayer !== undefined && !targetPickerTrackTarget}
+          onUsePerClip={targetPickerIntent.trackLayer !== undefined ? () => updateTrackTarget(targetPickerIntent.trackLayer!, null) : undefined}
           onSideChange={setTargetPickerSide}
           onSelect={chooseTarget}
           onCancel={() => setTargetPickerIntent(null)}
@@ -665,10 +729,12 @@ function TimelineGrid({ durationMs, laneCount, pxPerSecond }: { durationMs: numb
   </>;
 }
 
-function AnimationTargetPicker({ options, side, selectedTargetId, onSideChange, onSelect, onCancel }: {
+function AnimationTargetPicker({ options, side, selectedTargetId, perClipSelected = false, onUsePerClip, onSideChange, onSelect, onCancel }: {
   options: AnimationClipTargetOption[];
   side: DesignerLightingSide;
   selectedTargetId?: string;
+  perClipSelected?: boolean;
+  onUsePerClip?: () => void;
   onSideChange: (side: DesignerLightingSide) => void;
   onSelect: (targetId: string) => void;
   onCancel: () => void;
@@ -684,6 +750,17 @@ function AnimationTargetPicker({ options, side, selectedTargetId, onSideChange, 
   ];
   const sideCounts = (candidate: DesignerLightingSide) => options.filter((option) => option.side === candidate).length;
   return <div className="space-y-4">
+    {onUsePerClip ? <button
+      type="button"
+      className={`flex min-h-14 w-full items-center gap-3 rounded-md border px-4 py-3 text-left ${perClipSelected ? "border-blue-500 bg-blue-500/10" : "border-border-2 bg-card hover:bg-surface-hover"}`}
+      onClick={onUsePerClip}
+    >
+      <span className="min-w-0 flex-1">
+        <span className="block text-body-sm font-semibold">Targets per clip</span>
+        <span className="block text-meta text-muted-foreground">Keep this track flexible; every clip chooses its own lighting destination.</span>
+      </span>
+      {perClipSelected ? <Check className="h-4 w-4 shrink-0 text-blue-600" /> : null}
+    </button> : null}
     <div className="grid gap-3 md:grid-cols-[minmax(280px,0.55fr)_minmax(0,1fr)]">
       <div className="grid grid-cols-2 rounded-md border border-border-2 bg-surface-2 p-1">
         {(["front", "rear"] as const).map((candidate) => <button
@@ -739,7 +816,7 @@ function AnimationTargetPicker({ options, side, selectedTargetId, onSideChange, 
   </div>;
 }
 
-function ClipInspector({ clip, targetOption, targetLabel, effect, effects, onChooseTarget, onChange, onDelete }: { clip: ClipForm; targetOption?: AnimationClipTargetOption; targetLabel: string; effect?: EffectDefinition; effects: Record<string, EffectDefinition>; onChooseTarget: () => void; onChange: (patch: Partial<ClipForm>) => void; onDelete: () => void }) {
+function ClipInspector({ clip, targetOption, targetLabel, trackTargetLayer, effect, effects, onChooseTarget, onChange, onDelete }: { clip: ClipForm; targetOption?: AnimationClipTargetOption; targetLabel: string; trackTargetLayer: number | null; effect?: EffectDefinition; effects: Record<string, EffectDefinition>; onChooseTarget: () => void; onChange: (patch: Partial<ClipForm>) => void; onDelete: () => void }) {
   const definition = effect ?? effects.solid;
   const TargetIcon = targetOption?.category === "effectTargets" || targetOption?.category === "global" ? Sparkles : targetOption?.category === "channels" ? Waves : CircleDot;
   const targetColor = targetOption?.category === "effectTargets" ? "text-violet-600" : targetOption?.category === "global" ? "text-emerald-600" : targetOption?.category === "channels" ? "text-amber-600" : "text-sky-600";
@@ -759,7 +836,7 @@ function ClipInspector({ clip, targetOption, targetLabel, effect, effects, onCho
       />
     </label>
     <label className="block text-meta font-medium text-muted-foreground">
-      Target
+      {trackTargetLayer === null ? "Target" : `Target · Track ${trackTargetLayer + 1}`}
       <button type="button" className="mt-1 flex h-10 w-full items-center gap-2 rounded-md border border-input bg-card px-3 text-left text-foreground hover:border-blue-500 hover:bg-surface-hover" onClick={onChooseTarget}>
         <TargetIcon className={`h-4 w-4 shrink-0 ${targetColor}`} />
         <span className="min-w-0 flex-1 truncate text-body-sm">{targetOption ? `${targetOption.side === "front" ? "Front" : "Rear"} · ${targetOption.name}` : targetLabel}</span>
@@ -787,6 +864,12 @@ function clipTargetPresentation(document: PartituraDocument, targetId: string) {
   if (document.designer?.groups.some((group) => group.id === targetId)) return { label: "Group", borderClass: "border-emerald-500", badgeClass: "bg-emerald-100 text-emerald-900" };
   if (document.designer?.channels.some((channel) => channel.id === targetId)) return { label: "Channel", borderClass: "border-amber-500", badgeClass: "bg-amber-100 text-amber-900" };
   return { label: "Zone", borderClass: "border-blue-500", badgeClass: "bg-blue-100 text-blue-900" };
+}
+
+function trackTargetName(scene: SceneForm, layer: number, targets: Array<{ id: string; name: string }>) {
+  const target = sceneTrackTarget(scene, layer);
+  if (!target) return null;
+  return targets.find((entry) => entry.id === target)?.name ?? target;
 }
 
 function stopTimelinePointer(event: React.PointerEvent<HTMLElement>) {

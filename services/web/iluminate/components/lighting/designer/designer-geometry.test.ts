@@ -4,13 +4,14 @@ import { readFile } from "node:fs/promises";
 import paper from "paper";
 import type { VisualShape } from "@iluminate/lighting-core";
 import type { ClipForm, DesignerChannelForm, DesignerGeometry, DesignerZoneForm } from "../../../lib/lighting/partitura-model";
-import { DESIGNER_SCHEMA_VERSION, addDefaultLightSourcesForNewTargets, canonicalizeDesignerGeometry, createDefaultOpticalTreatment, createDefaultPartituraDocument, createNewPartituraDocument, designerGroupLightTargetId, nextEmptyClipLayer, normalizeDefaultSignLayout, resolveDesignerDerivedGeometry, resolveDesignerProjectionGeometry, wouldCreateDesignerDerivedGeometryCycle, wouldCreateDesignerProjectionCycle } from "../../../lib/lighting/partitura-model";
+import { DESIGNER_SCHEMA_VERSION, addDefaultLightSourcesForNewTargets, canonicalizeDesignerGeometry, createDefaultOpticalTreatment, createDefaultPartituraDocument, createNewPartituraDocument, designerGroupLightTargetId, nextEmptyClipLayer, normalizeDefaultSignLayout, resolveDesignerDerivedGeometry, resolveDesignerProjectionGeometry, sceneTrackTarget, wouldCreateDesignerDerivedGeometryCycle, wouldCreateDesignerProjectionCycle } from "../../../lib/lighting/partitura-model";
 import { designerFilletCornerIsEligible, filletDesignerGeometry, filletDesignerGeometryExact, offsetDesignerGeometry } from "../../../lib/lighting/designer-derived-geometry";
 import { DEFAULT_DESIGNER_FONT_ID, designerFontResource } from "../../../lib/lighting/designer-font-catalog";
 import { designerTextToGeometry } from "../../../lib/lighting/designer-text-geometry";
 import { inspectArtworkIntrinsicSize } from "../../../lib/lighting/artwork-intrinsic-size";
 import { placeSvgPathCandidates } from "../../../lib/lighting/artwork-svg-zones";
 import { resolveGeneratedPartituraTarget } from "../../../lib/lighting/generated-partitura-target";
+import { buildGeneratedPartituraTracks } from "../../../lib/lighting/generated-partitura-tracks";
 import { buildDocumentFromDesigner, compileDesignerLayout, compiledStringIdsForSource, designerCompileSignature } from "./designer-compiler";
 import { canvasInteractionSnapCm, CHANNEL_ROUTER_BIT_PRESETS, channelWidthForRouterDiameter, geometryToolAllowedOnLayer, geometryToolPolicy, POINTER_DRAG_THRESHOLD_PX, TERMINAL_SOLDER_CAPTURE_RADIUS_PX } from "./canvas/designer-tool-policy";
 import { designerMarqueeSelection, moveDesignerMarqueeDiffusors } from "./canvas/designer-marquee-selection";
@@ -2424,20 +2425,16 @@ describe("shared node authoring context", () => {
 });
 
 describe("Designer global command bar", () => {
-  it("keeps Animate Save synchronized while moving Share into the Viewer", async () => {
+  it("keeps Animate Save synchronized while moving Viewer and Share into the standalone page", async () => {
     const workspaceSource = await readFile("components/lighting/partitura-workspace.tsx", "utf8");
     const commandBar = workspaceSource.slice(
       workspaceSource.indexOf('<header className="relative z-30'),
       workspaceSource.indexOf('{editorMode === "design" ? <div className="flex h-10')
     );
-    const viewerHeader = workspaceSource.slice(
-      workspaceSource.indexOf('{editorMode === "animate" && animationViewerOpen ? ('),
-      workspaceSource.indexOf('<div className={editorMode === "animate" ? "min-h-0 flex-1"')
-    );
-
     assert.doesNotMatch(commandBar, /\{partitura\.name\}/);
     assert.doesNotMatch(commandBar, />Share<\/span>/);
-    assert.match(viewerHeader, /setShareOpen\(true\)[\s\S]*?Share/);
+    assert.match(commandBar, /openWebViewer\(\)[\s\S]*?Viewer/);
+    assert.doesNotMatch(workspaceSource, /animationViewerOpen|title="Share scene"/);
     assert.match(commandBar, /editorMode === "design"[\s\S]*?void compileLayout\(\)/);
     assert.match(commandBar, /onClick=\{\(\) => void save\(\)\}[\s\S]*?disabled=\{compiling \|\| saving \|\| !hasUnsavedChanges\}/);
     assert.equal(commandBar.match(/void save\(\)/g)?.length, 1);
@@ -3421,6 +3418,51 @@ describe("Phase 10 integrated Designer regression", () => {
 });
 
 describe("timeline clip placement", () => {
+  it("persists an optional target per track while leaving null tracks in per-clip mode", () => {
+    const document = createDefaultPartituraDocument("track_target_authoring");
+    const target = document.scenes[0].clips[0].target;
+    document.scenes[0].laneCount = 3;
+    document.scenes[0].trackTargets = [target, null, "missing_target"];
+
+    const normalized = normalizeDefaultSignLayout(document);
+
+    assert.equal(sceneTrackTarget(normalized.scenes[0], 0), target);
+    assert.equal(sceneTrackTarget(normalized.scenes[0], 1), null);
+    assert.equal(sceneTrackTarget(normalized.scenes[0], 2), null);
+  });
+
+  it("generates one inherited target for fixed tracks and clip overrides for mixed tracks", () => {
+    const scene = {
+      id: "scene_tracks",
+      name: "Tracks",
+      loop: true,
+      durationMs: 2000,
+      laneCount: 2,
+      trackTargets: ["zone_a", null],
+      clips: [
+        { id: "fixed", name: "Fixed", target: "zone_b", effect: "solid", blend: "replace", startMs: 0, durationMs: 1000, layer: 0, params: { color: "#ff0000" } },
+        { id: "mixed_a", name: "Mixed A", target: "zone_a", effect: "solid", blend: "replace", startMs: 0, durationMs: 1000, layer: 1, params: { color: "#00ff00" } },
+        { id: "mixed_b", name: "Mixed B", target: "zone_b", effect: "solid", blend: "replace", startMs: 1000, durationMs: 1000, layer: 1, params: { color: "#0000ff" } }
+      ]
+    };
+
+    const [fixedTrack, mixedTrack] = buildGeneratedPartituraTracks(scene, {
+      zones: [{ id: "zone_a", name: "Letter A" }, { id: "zone_b", name: "Letter B" }],
+      groups: []
+    }, new Set());
+
+    assert.deepEqual(fixedTrack.target, { type: "zone", id: "zone_a" });
+    assert.equal(fixedTrack.name, "Letter A");
+    assert.equal(fixedTrack.clips[0].name, "Fixed");
+    assert.equal(fixedTrack.clips[0].target, undefined);
+    assert.equal(mixedTrack.name, "Track 2");
+    assert.deepEqual(mixedTrack.clips.map((clip) => clip.name), ["Mixed A", "Mixed B"]);
+    assert.deepEqual(mixedTrack.clips.map((clip) => clip.target), [
+      { type: "zone", id: "zone_a" },
+      { type: "zone", id: "zone_b" }
+    ]);
+  });
+
   it("uses the last completely empty track", () => {
     assert.equal(nextEmptyClipLayer({ laneCount: 4, clips: [
       { id: "a", name: "A", target: "full_sign", effect: "solid", blend: "replace", startMs: 0, durationMs: 1000, layer: 0, params: {} },
@@ -3522,6 +3564,16 @@ describe("timeline clip placement", () => {
     assert.doesNotMatch(source, /onChange: \(document: PartituraDocument\) => void/);
     assert.match(source, /patch\.effect \? patch\.params : \{ \.\.\.clip\.params, \.\.\.patch\.params \}/);
     assert.doesNotMatch(source, />Copy clip<|>Paste clip</);
+  });
+
+  it("edits an optional track target from the row header and preserves per-clip mode", async () => {
+    const source = await readFile("components/lighting/designer/designer-animate-timeline.tsx", "utf8");
+
+    assert.match(source, /Edit target for track/);
+    assert.match(source, /openTrackTargetPicker\(layer\)/);
+    assert.match(source, /Targets per clip/);
+    assert.match(source, /trackTargets\[layer\] = target/);
+    assert.match(source, /clips: target \? scene\.clips\.map/);
   });
 
   it("selects scenes from one dropdown and confirms deletion in the shared modal", async () => {

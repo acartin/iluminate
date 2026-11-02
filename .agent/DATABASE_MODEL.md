@@ -165,6 +165,19 @@ Policies are `private`, `review`, `unlisted` and `public`. Private/review/
 unlisted media stays in the private bucket; public media requires explicit
 rights confirmation in the application flow.
 
+### `iluminate.viewer_bundles`
+
+Immutable runtime snapshots for the standalone Web Viewer. The primary key is
+the `bundleHash`; exact manifest, `partitura.v2` and `visual-scene.v1` bytes are
+stored once so checksum verification remains valid and possession links do not
+depend on the editable project or optional R2 render configuration.
+
+### `iluminate.viewer_links`
+
+Opaque, revocable `review`/`unlisted` possession links referencing one
+`viewer_bundles` snapshot. Resolution never accepts a tenant or partitura ID
+from the visitor and requires neither dashboard session nor cookies.
+
 ### `iluminate.publication_audit`
 
 Append-only tenant audit for share creation, policy transitions and revocation.

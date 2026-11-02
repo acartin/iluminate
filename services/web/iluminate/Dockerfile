@@ -16,7 +16,11 @@ RUN cd /app/services/lighting-core && npm pack --pack-destination /tmp \
   && tar -xzf /tmp/iluminate-lighting-core-1.0.0.tgz --strip-components=1 -C /app/services/web/iluminate/node_modules/@iluminate/lighting-core
 COPY services/web/iluminate .
 RUN npm test
-RUN npm run build
+# Google Fonts no longer returns extension-bearing WOFF2 URLs to the Chrome 104
+# user agent bundled in Next 16.4; its loader then rejects the response. A modern
+# build-only user agent preserves the same fonts and lets Next self-host them.
+RUN sed -i 's/Chrome\/104\.0\.0\.0/Chrome\/124.0.0.0/' node_modules/next/dist/compiled/@next/font/dist/google/fetch-resource.js \
+  && npm run build
 
 FROM node:20-alpine AS runner
 WORKDIR /app/services/web/iluminate

@@ -16,5 +16,5 @@
   ],
   "zones": [{ "id": "face", "name": "Face", "pixelIndices": [0, 1, 2] }],
   "groups": [{ "id": "full_sign", "name": "Full sign", "pixelIndices": [0, 1, 2] }],
-  "scenes": [{ "id": "normal", "name": "Normal", "loop": true, "durationMs": 1000, "tracks": [{ "id": "track_face", "name": "Face", "target": { "type": "group", "id": "full_sign" }, "clips": [{ "id": "clip_solid", "effect": "solid", "coordinateSpace": "global", "startMs": 0, "durationMs": 1000, "layer": 0, "blend": "replace", "params": { "color": "#00AAFF" } }] }] }]
+  "scenes": [{ "id": "normal", "name": "Normal", "loop": true, "durationMs": 1000, "tracks": [{ "id": "track_face", "name": "Face", "target": { "type": "group", "id": "full_sign" }, "clips": [{ "id": "clip_solid", "name": "Ambient blue", "effect": "solid", "coordinateSpace": "global", "startMs": 0, "durationMs": 1000, "layer": 0, "blend": "replace", "params": { "color": "#00AAFF" } }] }] }]
 }

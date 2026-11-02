@@ -7,6 +7,7 @@ import {
   type PlayerBundleManifestV1,
   type VisualSceneV1
 } from "@iluminate/lighting-core";
+import { sha256Hex } from "@/lib/crypto/sha256";
 
 export type LoadedPlayerBundle = {
   manifest: PlayerBundleManifestV1;
@@ -60,7 +61,5 @@ function parseJson<T>(bytes: Uint8Array, label: string): T {
 }
 
 async function sha256(bytes: Uint8Array): Promise<`sha256:${string}`> {
-  const digest = await crypto.subtle.digest("SHA-256", bytes);
-  const hex = Array.from(new Uint8Array(digest), (value) => value.toString(16).padStart(2, "0")).join("");
-  return `sha256:${hex}`;
+  return `sha256:${await sha256Hex(bytes)}`;
 }

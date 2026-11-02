@@ -19,6 +19,12 @@ La decisión central es:
 > público es una aplicación editorial independiente que presenta póster, video,
 > contenido SEO y, solo bajo demanda, abre o incrusta el Viewer de Iluminate.
 
+El Viewer canónico será una **página web independiente**, no un modal dentro de
+Animate. El botón `Viewer` de Animate navegará a esa página. La página reutiliza
+el evaluador, Worker, reloj y renderer WebGL2 existentes, pero define sus propios
+controles y capacidades según se acceda como propietario, review, unlisted,
+public o embed.
+
 No se copiarán ni moverán componentes React de Animate hacia
 `services/web/iluminate-public`. Tampoco se implementará un segundo evaluador de
 efectos, reloj, renderer WebGL2 o modelo óptico en el sitio público.
@@ -34,6 +40,12 @@ La implementación vigente ya contiene piezas que deben conservarse:
   `visual-scene.v1` y `player-bundle.v1`.
 - Animate usa un Worker dedicado y un renderer WebGL2 persistente bajo
   `services/web/iluminate/components/lighting/player`.
+- El botón `Viewer` de Animate materializa la partitura vigente, crea un enlace
+  opaco y navega a la página Web Viewer autónoma.
+- `/partituras/viewer/[id]` implementa la página autenticada bundle-first del
+  propietario, con reproducción, navegación visual y gestión de shares.
+- `/viewer/[opaqueToken]` implementa el Viewer autónomo sin AppShell ni sesión.
+  Su timeline de variaciones trabaja sobre una copia local del runtime.
 - La aplicación autenticada construye bundles inmutables y crea shares
   tenant-scoped.
 - El render worker consume el mismo bundle y el mismo render harness para
@@ -71,6 +83,11 @@ La arquitectura debe permitir:
 7. Mantener contenido editorial rastreable y renderizado por servidor para SEO.
 8. Conservar aislamiento multitenant, derechos de publicación y trazabilidad.
 9. Mantener paridad visual entre Animate, Viewer y render offline.
+10. Sustituir el Viewer modal/fullscreen de Animate por una página con URL
+    propia, sin rediseñar ni reestructurar Design o Animate.
+11. Permitir variaciones locales y acotadas de color, paleta, efecto u otros
+    parámetros únicamente cuando el propietario las autorice para targets
+    públicos concretos.
 
 ## 4. No objetivos
 
@@ -79,6 +96,8 @@ Esta arquitectura no debe:
 - mover Animate al sitio público;
 - hacer que `iluminate-public` importe componentes internos del dashboard;
 - implementar un segundo runtime, Worker o renderer;
+- refactorizar Design o Animate como condición para construir el Viewer;
+- convertir la página Viewer en una nueva pantalla de authoring;
 - cargar `document_json` o estado editable en el Viewer;
 - permitir Save, Compile, Generate, Publish o Deploy desde el Viewer;
 - exponer proyectos mediante identificadores secuenciales;
@@ -103,15 +122,17 @@ Esta arquitectura no debe:
 - verificación de tenant, usuario y permisos;
 - generación de `player-bundle.v1`;
 - acceso al bundle según política;
-- Viewer canónico de solo lectura;
+- página Web Viewer bundle-first y sus perfiles de capacidades;
 - Worker de evaluación, reloj y renderer WebGL2;
 - resolución de tokens de Viewer;
 - publicación y retiro administrativo del showroom;
 - escritura de registros persistentes y auditoría;
 - generación del read model público del catálogo.
 
-El Viewer es una superficie pública limitada dentro de la aplicación, no una
-sesión autenticada ni una versión reducida del dashboard.
+El Viewer es una página limitada dentro de la aplicación, no una versión
+reducida del dashboard. La entrada del propietario sí requiere sesión y
+permisos; review, unlisted y public se autorizan por tokens resueltos por el
+servidor y no heredan una sesión de edición.
 
 ### 5.2 Sitio público — `iluminate.space`
 
@@ -216,6 +237,14 @@ Editar proyecto
 Share no puede confiar en un compile o `generated_json` obsoleto. Debe conservar
 las invalidaciones y verificaciones definidas en `docs/partitura-lifecycle.md`.
 
+`document_json` permanece como fuente de verdad editable. Para reproducción
+fuera de Animate existe una sola materialización vigente: `generated_json`
+(`partitura.v2`) debe estar persistida, validada y ligada por checksum al
+documento actual. El Web Viewer, los shares, el catálogo y el render worker no
+generan partituras temporales al leer. El preview vivo de Animate puede generar
+en memoria para mostrar cambios aún no guardados, pero esa previsualización no
+es una versión publicable ni una segunda fuente de verdad.
+
 ### 7.2 Revisión de cliente
 
 ```text
@@ -265,16 +294,18 @@ haber sido descargados. La UI debe advertir esta limitación antes de publicar.
 
 ## 8. URLs objetivo
 
-Las rutas siguientes son objetivo; no deben documentarse como implementadas
-hasta que existan y pasen validación.
+Las rutas siguientes son objetivo. La columna Estado distingue la ruta ya
+implementada de las que no deben presentarse como existentes hasta que pasen su
+fase y validación.
 
-| Superficie | URL objetivo | Indexación | Embebible |
-| --- | --- | --- | --- |
-| Revisión | `https://app.iluminate.space/viewer/review/{opaqueToken}` | `noindex, nofollow` | No |
-| Viewer público | `https://app.iluminate.space/viewer/public/{publicToken}` | `noindex, nofollow` | Solo desde `https://iluminate.space` |
-| Share público | `https://iluminate.space/share/{opaqueSlug}` | Según política | No requerido |
-| Showroom | `https://iluminate.space/projects/{editorialSlug}` | Sí | Contiene el embed |
-| Template | `https://iluminate.space/templates/{slug}` | Sí | Puede enlazar al Viewer |
+| Superficie | URL objetivo | Indexación | Embebible | Estado |
+| --- | --- | --- | --- | --- |
+| Viewer propietario | `https://app.iluminate.space/partituras/viewer/{partituraId}` | `noindex, nofollow` | No | Implementada |
+| Viewer autónomo review/unlisted | `https://app.iluminate.space/viewer/{opaqueToken}` | `noindex, nofollow` | No por defecto | Implementada |
+| Viewer público | `https://app.iluminate.space/viewer/public/{publicToken}` | `noindex, nofollow` | Solo desde `https://iluminate.space` | Objetivo |
+| Share público | `https://iluminate.space/share/{opaqueSlug}` | Según política | No requerido | Video-first actual |
+| Showroom | `https://iluminate.space/projects/{editorialSlug}` | Sí | Contiene el embed | Objetivo |
+| Template | `https://iluminate.space/templates/{slug}` | Sí | Puede enlazar al Viewer | Objetivo |
 
 La página indexable es `/projects/{editorialSlug}`. El Viewer público se marca
 `noindex` para evitar duplicación, URLs con token en resultados y competencia
@@ -307,44 +338,116 @@ Animate puede conservar su adaptador authoring-aware. El Viewer y el render
 harness deben reutilizar clases y contratos existentes dentro de la misma
 aplicación, sin crear un segundo reloj o renderer.
 
-### 9.2 Controles de Viewer v1
+La página Viewer no autoriza una reestructuración preventiva de
+`partitura-workspace.tsx`, Design, Animate ni de los módulos del player. Debe
+consumir las interfaces existentes. Si una capacidad requiere modificar el
+motor compartido, esa modificación se separa, se justifica y se autoriza antes
+de implementarla.
+
+El reemplazo dentro de Animate queda limitado a:
+
+1. hacer que el botón `Viewer` navegue a la ruta autenticada del Viewer;
+2. retirar el estado y markup exclusivos del Viewer fullscreen/modal anterior;
+3. conservar sin cambios el canvas, timeline, selección, controles, layout y
+   comportamiento normal de Animate.
+
+### 9.2 Controles del Viewer
 
 Permitidos:
 
 - reproducir y pausar;
 - detener y volver al inicio;
 - seleccionar una escena incluida en el bundle;
-- scrub de tiempo;
+- scrub de tiempo mediante el playhead vertical de la timeline;
 - mostrar duración y estado;
 - zoom/pan o encuadre predeterminado;
-- `As built` y `LED map`, solo si ambos están soportados por el bundle;
 - pantalla completa;
 - recuperación ante pérdida de contexto WebGL2.
+- compartir el enlace vigente mediante Web Share, portapapeles, correo y redes
+  sociales, sin crear otra publicación ni escribir en el servidor;
+- mostrar u ocultar el panel de tracks;
+- mover y redimensionar clips dentro de su track publicado;
+- activar, desactivar, retirar localmente y restaurar clips;
+- cambiar el efecto y sus parámetros mediante el catálogo validado del core;
+- restaurar un clip o toda la partitura publicada.
 
-No permitidos en v1:
+No permitidos:
 
-- editar clips, pistas, targets o efectos;
-- cambiar parámetros de efectos;
-- reemplazar paletas;
-- persistir cambios;
+- crear, borrar o reasignar tracks y targets;
+- cambiar geometría, grupos o cableado;
+- persistir cambios en el servidor o compartirlos como nueva publicación;
 - Save, Compile, Generate, Publish o Deploy;
 - seleccionar controladores o enviar comandos;
-- mostrar Layers, barras de Designer o timeline editable;
+- mostrar Layers o barras de Designer;
 - descargar `document_json`;
 - revelar nombres internos, IDs tenant-scoped o rutas de storage.
 
-Los experimentos futuros con paleta, intensidad, velocidad o efecto deben ser
-temporales, explícitamente no persistentes y autorizados como una ampliación del
-contrato. No forman parte de Viewer v1.
+La timeline del Viewer es una superficie propia y limitada; no monta
+`DesignerAnimateTimeline` ni recibe `document_json`. Las modificaciones se
+materializan en una copia de `partitura.v2`, recargan el mismo Worker y nunca
+alteran el bundle inmutable.
 
-### 9.3 Modos visuales
+En desktop, desde `1024px`, la superficie se divide en dos columnas: la
+izquierda contiene el canvas y sus controles en la fila superior y el panel de
+tracks en la inferior; la derecha reserva toda la altura para los atributos del
+clip seleccionado. El toggle de tracks colapsa solo la fila inferior.
+
+Mobile y tablet no reducen el layout desktop. La timeline ajusta la duración
+completa al ancho disponible, sin scroll horizontal, reduce gutter, altura y
+controles internos de los clips, conserva su nombre truncado y mantiene áreas
+táctiles adecuadas. Los tracks con target fijo muestran el nombre humano
+materializado desde Designer; las filas mixtas conservan `Track N`. El
+inspector permanece fuera del flujo hasta tocar un clip: aparece como sheet
+inferior en mobile/tablet portrait y como panel lateral superpuesto en tablet
+landscape. Cerrarlo devuelve todo el espacio al viewer y a la timeline. Las
+variantes responsive terminan antes de `1024px`, por lo que no cambian la
+presentación desktop.
+
+El header de la ruta pública presenta el icono y nombre de `iluminate.space`
+como enlace al sitio público y expone las acciones de distribución del Viewer.
+El Viewer no crea un share desde allí: Web Share, correo y redes reciben la URL
+actual, y `Copy link` copia exactamente la URL de posesión abierta.
+
+### 9.3 Personalización local y capacidades
+
+La personalización implementada no convierte el bundle en editable. Los
+overrides se guardan en `localStorage` bajo `bundleHash`, se validan contra los
+clips originales y el catálogo de efectos, y se invalidan naturalmente cuando
+cambia el bundle. No se usa el token del enlace como clave.
+
+La fase actual mantiene inmutables tracks y targets y permite el catálogo de
+efectos soportado por el core. La siguiente restricción de producto será que el
+propietario publique una lista sanitizada de capacidades interactivas, por
+ejemplo:
+
+- grupo o target público seleccionable;
+- efectos permitidos para ese target;
+- parámetros permitidos y sus límites;
+- paletas o colores permitidos;
+- valor original y acción `Restaurar original`.
+
+El Viewer aplica esos overrides a una copia temporal del runtime. No escribe
+`document_json`, `compiledLayout`, `generated_json` ni el bundle publicado. La
+persistencia opcional usa almacenamiento del navegador, validado y versionado
+por `bundleHash` y por la versión de capacidades; nunca almacena el token de
+acceso como identificador legible. Una nueva versión del bundle invalida los
+overrides anteriores.
+
+### 9.4 Modos visuales
 
 El mismo renderer sirve ambos contextos, pero la envoltura cambia:
 
 - `review`: marca de revisión, política, estado y aviso de enlace revocable;
+- `unlisted`: acceso por posesión del enlace, no indexado y sin permisos de
+  publicación;
 - `public`: controles mínimos, marca Iluminate y CTA editorial opcional;
 - `embed`: igual semántica que `public`, sin navegación del dashboard y con UI
   compacta para el contenedor.
+
+El modo `owner` presenta las acciones de crear, copiar, abrir y revocar shares,
+además de la previsualización exacta de las capacidades públicas. No añade
+Save, Compile, Generate o Deploy; las variaciones de timeline disponibles en la
+previsualización siguen siendo locales al navegador y no editan la fuente.
 
 El parámetro `embed` nunca cambia permisos ni privacidad. Solo cambia layout.
 
@@ -431,6 +534,11 @@ Cada card requiere:
 - video corto opcional;
 - estado publicado;
 - orden o bandera `featured`.
+
+La card debe sentirse activa, pero no ejecuta una instancia WebGL del Viewer.
+Usa póster y un MP4 en loop producido desde el mismo bundle y renderer, por lo
+que representa la misma escena sin crear un Worker, canvas e iframe por card.
+El CTA `Personalizar` o `Abrir Viewer` navega a la página Viewer pública.
 
 Desktop puede reproducir video muted/loop al hover o cuando la card está
 visible. Móvil debe priorizar póster y evitar descargar todos los videos.
@@ -730,58 +838,141 @@ nunca IDs tenant-scoped ni tokens.
 
 ## 21. Secuencia de implementación
 
-### Fase 0 — Verificación operativa
+Cada fase debe cerrarse y validarse antes de abrir la siguiente. Construir el
+Viewer no autoriza cambios simultáneos en Animate, shares, sitio público o
+persistencia editorial.
 
-- Confirmar migración de rendering/shares.
-- Confirmar worker, buckets y origen público.
-- Crear un share `review` real y revocarlo.
-- Crear un share `public` de un Iluminate Original y revocarlo.
-- Verificar que ningún secreto llegue a ambos browsers.
+### Fase 0 — Línea base y protección de lo existente
 
-### Fase 1 — Viewer bundle-first dentro de Iluminate
+**Estado:** completada el 2026-10-30.
 
-- Crear la ruta y superficie de Viewer sin mover componentes a la web pública.
-- Cargar y verificar `player-bundle.v1`.
-- Reutilizar `PlayerController`, Worker y `Webgl2PlayerRenderer` existentes.
-- Implementar controles v1 y fallbacks.
-- Probar paridad con Animate y render harness usando el mismo bundle.
+- Registrar el comportamiento vigente de Design y Animate mediante sus pruebas
+  y smoke checks aplicables.
+- Identificar las interfaces actuales de `PlayerController`, Worker,
+  `Webgl2PlayerRenderer`, bundle builder y bundle loader que el Viewer puede
+  consumir sin refactor.
+- Confirmar migración de rendering/shares, worker, buckets y origen público sin
+  imprimir secretos.
+- Definir los archivos exactos autorizados para la Fase 1; Design y Animate
+  permanecen fuera de esa fase.
 
-### Fase 2 — Viewer review/public
+**Salida:** línea base reproducible y límite de cambio verificable.
 
-- Resolver tokens por servidor.
-- Separar policies, headers, noindex y frame policy.
-- Usar URLs firmadas para review y públicas para public.
-- Probar expiración, revocación, cross-tenant access y ausencia de sesión.
+### Fase 1 — Construcción de la página Web Viewer
 
-### Fase 3 — Embed en un Iluminate Original
+**Estado:** completada el 2026-10-30. La ruta existe y consume exclusivamente
+una `partitura.v2` materializada y vigente.
 
-- Mantener contenido local del proyecto.
-- Añadir póster/video reales.
-- Montar iframe solo bajo demanda.
-- Validar desktop, móvil, 320 px, reduced motion, WebGL2 ausente y fullscreen.
+- Crear la ruta autenticada objetivo
+  `/partituras/viewer/{partituraId}` dentro de `services/web/iluminate`.
+- Construir una superficie bundle-first que cargue y verifique
+  `player-bundle.v1` y consuma `partitura.v2` + `visual-scene.v1`.
+- Reutilizar, sin duplicarlos, `PlayerController`, el Worker y
+  `Webgl2PlayerRenderer` existentes.
+- Implementar reproducción, pausa, stop, seek, selección de escena, zoom/pan,
+  fullscreen, estado de carga y fallbacks.
+- Llevar a la página las acciones actuales de Share: crear, observar estado,
+  copiar, abrir, crear otro y revocar.
+- Mantener esta fase sin personalización de efectos y sin cambios en Animate.
 
-### Fase 4 — Persistencia editorial y read model
+**Salida:** la URL autenticada reproduce el mismo bundle que Animate y permite
+completar el flujo de Share que hoy vive dentro del Viewer fullscreen/modal.
 
-- Diseñar migración y ownership de `ShowroomPublication`.
-- Crear API administrativa tenant-scoped.
-- Escribir índice y manifiestos sanitizados.
-- Cambiar `/projects` y `/projects/[slug]` de contenido local a content provider.
-- Mantener fallback controlado durante la transición.
+### Fase 2 — Acceso desde Animate y retiro del Viewer anterior
 
-### Fase 5 — Administrador
+**Estado:** completada el 2026-10-30.
 
-- Listar shares públicos elegibles.
-- Crear/editar borrador editorial.
-- Seleccionar atribución y medios.
-- Confirmar derechos.
-- Preview exacto.
-- Publicar, reemplazar versión y retirar.
+- Cambiar únicamente el botón `Viewer` de Animate para navegar a la nueva ruta
+  autónoma con un token opaco `unlisted` para la partitura actual.
+- Antes de navegar, guardar el documento y materializar/validar la única
+  `partitura.v2` vigente mediante el endpoint persistente existente.
+- Conservar una navegación clara de regreso a Animate.
+- Retirar sólo el estado, markup y modal exclusivos del Viewer fullscreen y
+  Share que ya hayan sido sustituidos por la página.
+- No modificar canvas, timeline, paneles, herramientas, selección, calibración,
+  atajos ni presentación normal de Animate; Design no se toca.
+- Repetir la línea base de Fase 0 y verificar que Save, Compile, Generate y la
+  reproducción embebida continúan igual.
 
-### Fase 6 — Clientes
+**Salida:** `Animate -> Viewer` navega a `/viewer/{opaqueToken}`, una página sin
+`AppShell`, menús ni sesión requerida; Animate deja de poseer un segundo
+contenedor fullscreen o modal de Viewer.
 
-- Probar el flujo con proyectos autorizados.
-- Validar texto de consentimiento y atribución.
-- Añadir controles o automatización solo según evidencia de uso.
+### Fase 3 — Acceso mediante URLs externas
+
+**Estado:** en progreso. El acceso autónomo `review/unlisted` por token opaco y
+la entrega same-origin de snapshots inmutables están implementados; las políticas
+de embed y publicación pública permanecen pendientes.
+
+- Implementar rutas separadas para `review`, `unlisted` y `public`.
+- Resolver tokens y políticas exclusivamente en servidor.
+- Entregar bundles y medios privados mediante URLs firmadas de corta duración;
+  usar origen público sólo para publicaciones con derechos confirmados.
+- Aplicar expiración, revocación, `noindex`, headers y frame policy según el
+  modo.
+- No requerir sesión para visitantes ni confiar en tenant, policy o permisos
+  enviados por el browser.
+- Probar token inválido, expirado y revocado; acceso cross-tenant; ausencia de
+  cookies; y que ninguna respuesta exponga IDs o storage paths internos.
+
+**Salida:** un destinatario abre el Web Viewer desde un enlace opaco sin cargar
+Animate ni obtener capacidades de edición.
+
+### Fase 4 — Variaciones locales autorizadas
+
+- Definir un manifiesto sanitizado de capacidades por publicación/share sin
+  convertir `partitura.v2` en estado editorial.
+- Permitir al propietario seleccionar qué grupos, efectos, paletas, colores y
+  límites se exponen.
+- Aplicar los cambios del visitante únicamente a una copia temporal del
+  runtime y ofrecer `Restaurar original`.
+- Persistir opcionalmente en el navegador con claves versionadas por bundle y
+  capacidades; invalidar al publicar una versión nueva.
+- Mantener Save, Compile, Generate, Publish, Deploy y escritura de partitura
+  fuera del Viewer público.
+
+**Salida:** el visitante puede explorar variaciones permitidas sin alterar el
+bundle, Animate, la partitura original ni un controlador.
+
+### Fase 5 — Integración en páginas de proyecto de `iluminate.space`
+
+- Mantener el Viewer dentro de `app.iluminate.space`; no copiar componentes al
+  sitio público.
+- Añadir a `/projects/[slug]` póster y video reales, más CTA para abrir el
+  Viewer público.
+- Montar un único iframe sólo bajo acción explícita y conservar la opción de
+  abrir el Viewer como página independiente.
+- Validar CSP/frame ancestors, sandbox, fullscreen, desktop, móvil, 320 px,
+  reduced motion, WebGL2 ausente y fallback por timeout.
+
+**Salida:** una página editorial puede abrir o embeber el Viewer sin depender
+de él para contenido, SEO o disponibilidad básica.
+
+### Fase 6 — Catálogo público de proyectos
+
+- Alimentar `/projects` desde un read model público sanitizado.
+- Mostrar póster y MP4 en cards; reproducir video sólo según viewport,
+  preferencias de movimiento y ahorro de datos.
+- Añadir CTA `Personalizar` o `Abrir Viewer` hacia la URL pública autorizada.
+- No crear iframes, Workers o canvas WebGL por card.
+- Mantener poster/video funcionales si el Viewer está caído o es incompatible.
+
+**Salida:** el catálogo se percibe animado y cada proyecto puede abrir el Viewer
+interactivo sin degradar rendimiento móvil.
+
+### Fase 7 — Persistencia editorial y administración
+
+- Diseñar y autorizar la migración de `ShowroomPublication` y su auditoría.
+- Crear API administrativa tenant-scoped y read model público.
+- Listar shares públicos elegibles, editar borrador, seleccionar atribución y
+  medios, confirmar derechos, previsualizar, publicar, reemplazar y retirar.
+- Cambiar `/projects` y `/projects/[slug]` de contenido local al provider
+  público manteniendo un fallback controlado durante la transición.
+- Probar el flujo con proyectos expresamente autorizados antes de añadir nuevas
+  automatizaciones.
+
+**Salida:** publicar o retirar un proyecto no requiere editar TSX ni desplegar
+el sitio público y permanece separado de crear o revocar un share.
 
 ## 22. Pruebas obligatorias futuras
 
@@ -793,6 +984,17 @@ nunca IDs tenant-scoped ni tokens.
 - Checksums, tamaños y paths inseguros se rechazan.
 - Solo un frame permanece en vuelo y el buffer se reutiliza.
 - Hidden/offscreen suspende trabajo.
+- La página Viewer no importa `DesignerForm`, `compiledLayout`, selección ni
+  callbacks de edición.
+
+### Acceso desde Animate
+
+- El botón `Viewer` navega con la partitura correcta a la ruta autenticada.
+- Volver conserva el documento y comportamiento normal de Animate.
+- Design y la reproducción embebida de Animate conservan su línea base visual
+  y funcional.
+- No permanece un segundo Viewer fullscreen/modal después de completar la
+  migración.
 
 ### Seguridad
 
@@ -802,6 +1004,15 @@ nunca IDs tenant-scoped ni tokens.
 - No hay cookies o sesión requeridas para Viewer público.
 - Revocación impide nuevas cargas.
 - Ningún manifiesto público contiene IDs internos o URLs privadas.
+
+### Personalización limitada
+
+- Sólo aparecen targets, efectos y parámetros autorizados por el manifiesto.
+- Valores locales fuera de rango, obsoletos o incompatibles se rechazan.
+- `Restaurar original` reproduce nuevamente el bundle sin overrides.
+- Recargar conserva preferencias sólo cuando la política lo permite.
+- Cambiar `bundleHash` o versión de capacidades invalida preferencias previas.
+- Ninguna variación genera escrituras de partitura, publicación o dispositivo.
 
 ### Publicación
 
@@ -819,6 +1030,9 @@ nunca IDs tenant-scoped ni tokens.
 - Video/póster funcionan si Viewer falla.
 - Responsive sin overflow a 320 px.
 - Handoff a la aplicación permanece correcto.
+- Las cards no crean iframe, Worker ni contexto WebGL.
+- El CTA abre el Viewer correspondiente sin exponer el token en analytics o
+  metadata editorial.
 
 ## 23. Guardrails explícitos
 
@@ -849,6 +1063,8 @@ Guardrails permanentes:
 
 - No mover componentes del player al sitio público.
 - No duplicar shader, Worker, reloj, evaluator o semántica óptica.
+- No refactorizar Design o Animate para construir la página Viewer; dentro de
+  Animate sólo se sustituye la entrada/modal de Viewer acordada.
 - No modificar `partitura.v2` para guardar estado editorial.
 - No modificar reglas de Save, Compile, Generate o invalidación.
 - No hacer público un objeto privado por cambio de ACL o rename.
@@ -870,11 +1086,13 @@ El sitio público conserva su despliegue y seguridad independientes.
 El showroom no requiere editar HTML por proyecto.
 Share y showroom son estados separados.
 El contenido indexable no depende del iframe.
-La interacción usa un bundle inmutable y de solo lectura.
+La interacción usa un bundle inmutable más overrides locales autorizados.
 Los medios privados nunca entran al bucket público.
 Publicar requiere derechos explícitos y auditados.
 Video y póster mantienen la experiencia si el Viewer falla.
 ```
 
-Hasta que existan proyectos mostrables, esta especificación guía la dirección
-pero no obliga a construir anticipadamente el CMS ni el Viewer interactivo.
+Esta secuencia es el plan objetivo aprobado. Cada fase requiere su propio
+alcance de implementación y validación; el documento no autoriza ejecutar de
+una vez migraciones, infraestructura, CMS ni cambios protegidos de fases
+posteriores.

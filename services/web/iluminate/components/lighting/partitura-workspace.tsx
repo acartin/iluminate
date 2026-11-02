@@ -1,10 +1,11 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { Partitura } from "@iluminate/lighting-core";
-import { AlertCircle, ArrowLeft, Cable, Check, ChevronDown, ChevronRight, Circle, CircleDot, ClipboardPaste, Copy, Cpu, Download, FlipHorizontal as SquareCenterlineDashedVertical, Group, Hammer, Hand, Image as ImageIcon, Layers, Layers2, Lightbulb, LoaderCircle, Magnet, Maximize2, MousePointer2, Move, Pause, PenLine, Play, Plus, Radius, Redo2, Ruler, RotateCcw, Save, Scissors, Search, Settings2, Share2, Sparkles, Spline, Square, Tally2, Trash2, Undo2, Ungroup, Waves, Waypoints, X } from "lucide-react";
+import { AlertCircle, ArrowLeft, Cable, Check, ChevronDown, ChevronRight, Circle, CircleDot, ClipboardPaste, Copy, Cpu, Download, FlipHorizontal as SquareCenterlineDashedVertical, Group, Hammer, Hand, Image as ImageIcon, Layers, Layers2, Lightbulb, LoaderCircle, Magnet, Maximize2, MousePointer2, Move, Pause, PenLine, Play, Plus, Radius, Redo2, Ruler, Save, Scissors, Search, Settings2, Sparkles, Spline, Square, Tally2, Trash2, Undo2, Ungroup, Waves, Waypoints, X } from "lucide-react";
 import { Alert } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -331,19 +332,6 @@ type ApiResult = {
 };
 
 type EffectCatalog = Record<string, EffectDefinition>;
-
-type SharePolicy = "private" | "review" | "unlisted" | "public";
-
-type ScenePublication = {
-  shareId: string;
-  slug: string;
-  title?: string;
-  policy: SharePolicy;
-  status: "pending" | "rendering" | "ready" | "failed" | "cancelled";
-  errorSummary?: string | null;
-  shareUrl: string | null;
-  revoked?: boolean;
-};
 
 type DesignerHistoryEntry = {
   document: PartituraDocument;
@@ -807,6 +795,7 @@ function persistedDocumentSignature(document: PartituraDocument) {
 }
 
 export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura: PersistedPartitura }) {
+  const router = useRouter();
   const [partitura, setPartitura] = useState(initialPartitura);
   const [document, setDocument] = useState<PartituraDocument>(() => normalizeDefaultSignLayout(initialPartitura.document));
   const documentRef = useRef<PartituraDocument>(document);
@@ -819,8 +808,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
   const [animationResult, setAnimationResult] = useState<ApiResult | null>(null);
   const [animationGenerating, setAnimationGenerating] = useState(false);
   const [animationPlaying, setAnimationPlaying] = useState(false);
-  const [animationViewerOpen, setAnimationViewerOpen] = useState(false);
-  const [animationViewerViewport, setAnimationViewerViewport] = useState<DesignerViewport | null>(null);
+  const [viewerOpening, setViewerOpening] = useState(false);
   const playerSurfaceRef = useRef<PlayerSurfaceHandle | null>(null);
   const [playerStatus, setPlayerStatus] = useState<PlayerStatus | null>(null);
   const animationResultRef = useRef<ApiResult | null>(null);
@@ -830,12 +818,6 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
   const pendingAnimationPreviewRef = useRef<{ document: PartituraDocument; play: boolean } | null>(null);
   const animationTimelineInteractionRef = useRef(false);
   const animationResumePlaybackRef = useRef(false);
-  const [shareOpen, setShareOpen] = useState(false);
-  const [sharePolicy, setSharePolicy] = useState<SharePolicy>("review");
-  const [shareRightsConfirmed, setShareRightsConfirmed] = useState(false);
-  const [shareSubmitting, setShareSubmitting] = useState(false);
-  const [shareError, setShareError] = useState<string | null>(null);
-  const [sharePublication, setSharePublication] = useState<ScenePublication | null>(null);
   const setupDetailsRef = useRef<HTMLDetailsElement | null>(null);
   const [tool, setTool] = useState<DesignerTool>("select");
   const [nodeCreationType, setNodeCreationType] = useState<DesignerPointNodeType>("corner");
@@ -936,23 +918,6 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
     cancelScheduledAnimationPreview();
     animationGenerationAbortRef.current?.abort();
   }, []);
-
-  useEffect(() => {
-    if (!sharePublication || !["pending", "rendering"].includes(sharePublication.status)) return;
-    let cancelled = false;
-    const refresh = async () => {
-      const response = await fetch(`/api/lighting/scene-shares/${encodeURIComponent(sharePublication.shareId)}`, { cache: "no-store" });
-      if (!response.ok || cancelled) return;
-      const payload = await response.json() as { publication?: ScenePublication };
-      if (payload.publication) setSharePublication(payload.publication);
-    };
-    const timer = window.setInterval(() => void refresh(), 3_000);
-    void refresh();
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [sharePublication?.shareId, sharePublication?.status]);
 
   useEffect(() => {
     if (editorMode === "animate" && !animationResultRef.current?.ok && !animationGenerating) {
@@ -3807,16 +3772,23 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
     }
   }
 
-  function openAnimationViewer() {
-    setAnimationViewerViewport(fitViewportToDesigner(designer));
-    setAnimationViewerOpen(true);
-    if (!animationResultRef.current?.ok) void previewAnimation();
-  }
-
-  function stopAnimationViewer() {
-    setAnimationPlaying(false);
-    playerSurfaceRef.current?.stop();
-    updateLiveDocument((current) => ({ ...current, previewTimeMs: 0 }), { recordHistory: false });
+  async function openWebViewer() {
+    if (viewerOpening) return;
+    setViewerOpening(true);
+    try {
+      const generated = await generateAndSaveAnimation();
+      if (!generated) return;
+      const response = await fetch(`/api/lighting/partituras/${encodeURIComponent(partitura.id)}/viewer-links`, { method: "POST" });
+      const payload = await response.json() as { viewer?: { slug: string }; message?: string };
+      if (!response.ok || !payload.viewer?.slug) {
+        throw new Error(payload.message ?? "Unable to create the standalone Viewer URL.");
+      }
+      router.push(`/viewer/${encodeURIComponent(payload.viewer.slug)}`);
+    } catch (error) {
+      setFabricationNotice(error instanceof Error ? error.message : "Unable to open the standalone Viewer.");
+    } finally {
+      setViewerOpening(false);
+    }
   }
 
   function cancelScheduledAnimationPreview() {
@@ -3922,32 +3894,6 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
     }
   }
 
-  async function publishScene() {
-    setShareSubmitting(true);
-    setShareError(null);
-    try {
-      const generated = await generateAndSaveAnimation();
-      if (!generated) throw new Error("The generated partitura could not be saved.");
-      const response = await fetch(`/api/lighting/partituras/${encodeURIComponent(partitura.id)}/shares`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          privacy: sharePolicy,
-          profile: sharePolicy === "review" ? "review-720p30" : "social-1080p30",
-          rightsConfirmed: sharePolicy === "public" && shareRightsConfirmed
-        })
-      });
-      const payload = await response.json() as { publication?: ScenePublication; message?: string };
-      if (!response.ok || !payload.publication) throw new Error(payload.message ?? "Unable to create the share.");
-      setSharePublication(payload.publication);
-      setFabricationNotice("Render queued. The share will activate when the video is ready.");
-    } catch (error) {
-      setShareError(error instanceof Error ? error.message : "Unable to create the share.");
-    } finally {
-      setShareSubmitting(false);
-    }
-  }
-
   async function generateAndSaveAnimation() {
     const saved = await save(documentRef.current);
     if (!saved) return null;
@@ -3956,7 +3902,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
     });
     const generated = await response.json() as ApiResult & { saved?: { status: PersistedPartitura["status"]; updatedAt: string } };
     if (!response.ok || !generated.ok || !generated.partitura) {
-      setShareError(generated.message ?? "Generate a valid partitura before sharing.");
+      setFabricationNotice(generated.message ?? "Generate a valid partitura before opening the Viewer.");
       return null;
     }
     animationResultRef.current = generated;
@@ -3971,16 +3917,6 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
     }));
     setFabricationNotice(`partitura.v2 generated and saved · ${generated.partitura.pixelMap.length} pixels.`);
     return generated.partitura;
-  }
-
-  async function revokeCurrentShare() {
-    if (!sharePublication) return;
-    const response = await fetch(`/api/lighting/scene-shares/${encodeURIComponent(sharePublication.shareId)}`, { method: "DELETE" });
-    if (!response.ok) {
-      setShareError("Unable to revoke the link.");
-      return;
-    }
-    setSharePublication((current) => current ? { ...current, revoked: true, shareUrl: null } : current);
   }
 
   function previewAnimationAt(timeMs: number) {
@@ -4443,8 +4379,8 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
                 onChange={setEnabledAnimationOutlineTargetIds}
               />
             </ToolbarField>
-            <Button type="button" variant="outline" density="compact" className="px-2" title="Open fullscreen viewer" onClick={openAnimationViewer}>
-              <Maximize2 className="h-4 w-4" /> <span className="hidden xl:inline">Viewer</span>
+            <Button type="button" variant="outline" density="compact" className="px-2" disabled={viewerOpening || saving} title="Generate the current materialized version and open a standalone Web Viewer URL" onClick={() => void openWebViewer()}>
+              {viewerOpening ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Maximize2 className="h-4 w-4" />} <span className="hidden xl:inline">{viewerOpening ? "Opening" : "Viewer"}</span>
             </Button>
             <Button type="button" variant="outline" density="compact" className="px-2" disabled={animationGenerating || saving} title="Generate and save the firmware partitura" onClick={() => void generateAndSaveAnimation()}>
               <Sparkles className="h-4 w-4" /> <span className="hidden xl:inline">Generate</span>
@@ -4998,40 +4934,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
           </div> : <div className="min-h-0 flex-1" />}
         </aside> : null}
 
-        <main className={`min-w-0 overflow-hidden bg-muted ${editorMode === "animate" ? "col-start-1 row-start-1 flex flex-col p-0" : "p-2"} ${editorMode === "animate" && animationViewerOpen ? "fixed inset-0 z-50 bg-background" : ""}`}>
-          {editorMode === "animate" && animationViewerOpen ? (
-            <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border-2 bg-card px-4">
-              <Button type="button" variant="outline" className="h-9" onClick={() => setAnimationViewerOpen(false)}>
-                <ArrowLeft className="h-4 w-4" />
-                Return
-              </Button>
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-body-sm font-semibold">{partitura.name}</div>
-                <div className="truncate font-mono text-[10px] uppercase text-muted-foreground">{document.scenes.find((scene) => scene.id === document.activeSceneId)?.name ?? document.activeSceneId}</div>
-              </div>
-              <Badge>{document.compiledLayout?.pixelMap.length ?? 0} px</Badge>
-              <Button type="button" variant="outline" className="h-9" title="Render a video or create a controlled share" onClick={() => { setShareError(null); setShareOpen(true); }}>
-                <Share2 className="h-4 w-4" />
-                Share
-              </Button>
-              <Button
-                type="button"
-                className="h-9"
-                disabled={animationGenerating}
-                onClick={() => {
-                  if (!animationResult?.ok) void previewAnimation();
-                  else setAnimationPlaying((current) => !current);
-                }}
-              >
-                {animationPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-                {animationGenerating ? "Preparing" : animationPlaying ? "Pause" : "Play"}
-              </Button>
-              <Button type="button" variant="outline" className="h-9" disabled={!animationResult?.ok} onClick={stopAnimationViewer}>
-                <RotateCcw className="h-4 w-4" />
-                Stop
-              </Button>
-            </header>
-          ) : null}
+        <main className={`min-w-0 overflow-hidden bg-muted ${editorMode === "animate" ? "col-start-1 row-start-1 flex flex-col p-0" : "p-2"}`}>
           <div className={editorMode === "animate" ? "min-h-0 flex-1" : "h-full"}>
           {editorMode === "design" ? <DesignerStudioCanvas
             designer={canvasDesigner}
@@ -5089,7 +4992,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
             partitura={animationResult.partitura}
             designer={designer}
             layout={document.compiledLayout}
-            viewport={animationViewerOpen ? animationViewerViewport ?? activeViewport : activeViewport}
+            viewport={activeViewport}
             activeSceneId={document.activeSceneId}
             previewTimeMs={document.previewTimeMs}
             playing={animationPlaying}
@@ -5098,7 +5001,7 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
             settings={diffuserSettings}
             outlineTargets={animationOutlineTargets}
             selection={selection}
-            onViewportChange={animationViewerOpen ? setAnimationViewerViewport : setViewport}
+            onViewportChange={setViewport}
             onSelect={selectDesignerItem}
             onStatus={setPlayerStatus}
           /></Suspense> : <div className="grid h-full place-items-center p-8 text-center text-body-sm text-muted-foreground">
@@ -5345,74 +5248,6 @@ export function PartituraDesignerStudio({ initialPartitura }: { initialPartitura
             <Button type="button" disabled={fabricationExporting} onClick={() => void exportFabrication("svg")}><Download className="h-4 w-4" /> {fabricationExporting ? "Validating…" : "Export SVG"}</Button>
           </div>
         </div>
-      </Modal>
-      <Modal
-        open={shareOpen}
-        title="Share scene"
-        description="The worker renders the same partitura and visual scene as the browser player. Viewers receive video by default, not the editor runtime."
-        onClose={() => setShareOpen(false)}
-        className="max-w-2xl"
-      >
-        {sharePublication ? (
-          <div className="space-y-4">
-            <Alert
-              title={sharePublication.revoked ? "Link revoked" : sharePublication.status === "ready" ? "Share ready" : sharePublication.status === "failed" ? "Render failed" : "Render queued"}
-              variant={sharePublication.revoked ? "warning" : sharePublication.status === "ready" ? "success" : sharePublication.status === "failed" ? "error" : "info"}
-            >
-              {sharePublication.revoked
-                ? "The external link no longer resolves."
-                : sharePublication.status === "ready"
-                  ? "The immutable video and poster are available."
-                  : sharePublication.status === "failed"
-                    ? sharePublication.errorSummary ?? "The renderer exhausted its retries."
-                    : "You can close this window; rendering continues in the background."}
-            </Alert>
-            {sharePublication.shareUrl && !sharePublication.revoked ? (
-              <div className="rounded-md border border-border-2 bg-surface-2 p-3">
-                <div className="text-meta font-semibold uppercase tracking-wide text-muted-foreground">Share link</div>
-                <div className="mt-2 break-all font-mono text-body-sm">{sharePublication.shareUrl}</div>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  <Button type="button" variant="outline" onClick={() => void navigator.clipboard.writeText(new URL(sharePublication.shareUrl!, window.location.origin).toString())}><Copy className="h-4 w-4" /> Copy link</Button>
-                  <Button asChild type="button"><a href={sharePublication.shareUrl} target="_blank" rel="noreferrer">Open</a></Button>
-                </div>
-              </div>
-            ) : sharePublication.policy === "private" && !sharePublication.revoked ? (
-              <p className="text-body-sm text-muted-foreground">Private renders stay in the tenant media bucket and do not create an external link.</p>
-            ) : null}
-            <div className="flex flex-wrap justify-between gap-2 border-t border-border pt-4">
-              <Button type="button" variant="outline" onClick={() => { setSharePublication(null); setShareError(null); }}>Create another</Button>
-              {!sharePublication.revoked ? <Button type="button" variant="outline" className="border-red-500/50 text-red-700 hover:bg-red-500/10 dark:text-red-300" onClick={() => void revokeCurrentShare()}>Revoke link</Button> : null}
-            </div>
-          </div>
-        ) : (
-          <div className="space-y-5">
-            <fieldset className="grid gap-2">
-              <legend className="mb-2 text-body-sm font-semibold">Access policy</legend>
-              {([
-                ["private", "Private render", "Stored for this tenant only; no external URL."],
-                ["review", "Client review", "Opaque, revocable and non-indexed review link."],
-                ["unlisted", "Unlisted", "Stable non-indexed link; anyone with the URL can view."],
-                ["public", "Public", "Public CDN page with social video metadata; can be indexed and reshared."]
-              ] as const).map(([value, label, detail]) => (
-                <label key={value} className={`flex cursor-pointer gap-3 rounded-md border p-3 ${sharePolicy === value ? "border-blue-500 bg-blue-500/10" : "border-border-2 bg-card"}`}>
-                  <input type="radio" name="share-policy" value={value} checked={sharePolicy === value} onChange={() => { setSharePolicy(value); setShareRightsConfirmed(false); }} className="mt-1 h-4 w-4 accent-blue-600" />
-                  <span><span className="block text-body-sm font-semibold">{label}</span><span className="mt-0.5 block text-meta text-muted-foreground">{detail}</span></span>
-                </label>
-              ))}
-            </fieldset>
-            {sharePolicy === "public" ? (
-              <label className="flex gap-3 rounded-md border border-amber-500/50 bg-amber-500/10 p-3 text-body-sm">
-                <input type="checkbox" checked={shareRightsConfirmed} onChange={(event) => setShareRightsConfirmed(event.target.checked)} className="mt-0.5 h-4 w-4 accent-blue-600" />
-                <span>I confirm that this scene may be publicly distributed and that I have the necessary client, artwork and brand rights.</span>
-              </label>
-            ) : null}
-            {shareError ? <Alert title="Unable to publish" variant="error">{shareError}</Alert> : null}
-            <div className="flex justify-end gap-2 border-t border-border pt-4">
-              <Button type="button" variant="outline" onClick={() => setShareOpen(false)}>Cancel</Button>
-              <Button type="button" disabled={shareSubmitting || sharePolicy === "public" && !shareRightsConfirmed} onClick={() => void publishScene()}><Share2 className="h-4 w-4" /> {shareSubmitting ? "Preparing…" : "Generate and render"}</Button>
-            </div>
-          </div>
-        )}
       </Modal>
       <Modal
         open={compileIssuesOpen}

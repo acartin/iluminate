@@ -111,6 +111,7 @@
       "required": ["id", "effect", "coordinateSpace", "startMs", "durationMs", "layer", "blend", "params"],
       "properties": {
         "id": { "$ref": "#/$defs/id" },
+        "name": { "type": "string", "minLength": 1 },
         "effect": { "enum": ["off", "solid", "fade", "pulse", "chase", "comet", "wipe", "toggle", "flame", "spatial_fill", "spatial_wave", "aurora"] },
         "target": { "$ref": "#/$defs/target" },
         "coordinateSpace": { "enum": ["serial", "local", "global"] },

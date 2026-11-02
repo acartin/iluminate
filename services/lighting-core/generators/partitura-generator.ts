@@ -135,6 +135,7 @@ function normalizeScene(scene: SceneConfig): Scene {
 function normalizeClip(clip: ClipConfig, index: number): Clip {
   return {
     id: clip.id ?? `clip_${index + 1}`,
+    name: clip.name,
     effect: clip.effect,
     target: clip.target,
     coordinateSpace: clip.coordinateSpace ?? "local",

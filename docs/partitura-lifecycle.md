@@ -23,6 +23,7 @@ iluminate.partituras.document_json
 - Designer geometry: controller, data cables, LED strings, references, artwork, zones and groups;
 - `compiledLayout`, when the Designer has been explicitly compiled;
 - scenes;
+- optional track targets aligned with the authored timeline rows;
 - clips;
 - simulator/player defaults that are part of authoring.
 
@@ -279,6 +280,17 @@ The partitura owns:
 - effect identifiers and parameters;
 - `defaultScene`.
 
+An authored timeline row has an optional target. A targeted row generates one
+runtime track target inherited by its clips. A row without a target generates
+clip-level target overrides, preserving mixed-zone composition without a
+second editable model.
+
+Generated tracks preserve the human-readable name of their fixed compiled
+target, and generated clips preserve their optional authoring name. These
+labels are descriptive metadata for Player and Viewer surfaces; the realtime
+evaluator and firmware behavior do not depend on them. Mixed-target rows retain
+the neutral `Track N` label because no single Designer target names the row.
+
 The controller runtime owns:
 
 - physical pin mapping;
@@ -362,6 +374,13 @@ The hot path is fixed:
 Optical presentation remains a renderer concern. It models local LED
 contributions and Face Graphic transmission from the immutable visual scene; it
 must not mutate the score, wiring or firmware target membership.
+
+The Web Viewer may materialize a browser-local runtime copy of the immutable
+bundle score for visitor variations. It may move or resize existing clips,
+toggle or locally remove them, and replace effects/parameters without changing
+track targets. These overrides are keyed by bundle hash in browser storage,
+reload only the player Worker, and never write `document_json`, `generated_json`
+or the published bundle. `Restore original` discards the overrides.
 
 ## Player Bundles, Video And Sharing
 

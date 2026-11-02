@@ -5,13 +5,13 @@
 
 ## Snapshot
 
-- Generated UTC: `2026-10-26T17:12:31Z`
+- Generated UTC: `2026-10-30T20:29:01Z`
 - Repository root: `/srv/iluminate`
-- Git branch: `HETZNER-DEV-2026-Octubre-23`
-- Git commit: `7e67794`
-- Worktree: `dirty` (24 changed paths, excluding generated context files)
-- Status fingerprint: `d6dde32e3117e40ef51b4d5415167dbd13d1f048869c3127e6e635381767ef35`
-- Tracked diff fingerprint: `169be92ed1de487623509de05614e3f559dc4c68390c6f5d2f2fb60e36df60d8`
+- Git branch: `HETZNER-DEV-2026-Octubre-29`
+- Git commit: `65e8246`
+- Worktree: `dirty` (36 changed paths, excluding generated context files)
+- Status fingerprint: `6eeb245f0069eefbd21c220c5f02446fd89e48c3589896419cbd5826837dced8`
+- Tracked diff fingerprint: `814e8c0f123e556edf0b3b1fe6d50b5384bc9f804fd4a7ff994f1c0b0cc7ef17`
 
 The commit identifies the base revision. When the worktree is dirty, the two
 fingerprints distinguish the local state without copying diffs or secrets into
@@ -35,10 +35,10 @@ this file. Untracked file contents are never read for fingerprinting.
 ## Compose Services
 
 ```text
+iluminate-public-web
 iluminate-web
 postgres
 render-worker
-iluminate-public-web
 ```
 
 ## Context Inventory
