@@ -877,6 +877,12 @@ services/
     effects/
     compositor/
 
+  3d-worker/
+    contracts/
+    engine/
+    jobs/
+    exporters/
+
   device-protocol/
     provisioning/
     deployments/
@@ -888,6 +894,12 @@ services/
 ```
 
 `services/lighting-core` debe ser la fuente de verdad del dominio LED y de la partitura. Konva, la timeline y el simulador son vistas y herramientas sobre ese modelo.
+
+`services/3d-worker` is an explicitly bounded later-phase exception to the
+initial no-3D scope: an isolated, non-HTTP SVG-to-solid artifact worker. It is
+not part of the LED/partitura domain and must not turn Designer into a 3D CAD
+editor. Its authoritative target contract is
+`.agent/THREE_D_WORKER_CONTRACT.md`.
 
 ---
 
@@ -1017,7 +1029,9 @@ Un fabricante crea o modifica una escena desde la web, la simula, la publica y e
 ## 22. No objetivos iniciales
 
 - Editor vectorial equivalente a Illustrator.
-- Modelado 3D.
+- Modelado 3D general dentro de Designer o Animate. The separately authorized
+  bounded `3d-worker` and its future independent canvas are governed by
+  `.agent/THREE_D_WORKER_CONTRACT.md`.
 - Simulación fotorealista.
 - Colaboración multiusuario en tiempo real.
 - Marketplace de efectos.

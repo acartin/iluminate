@@ -2,7 +2,7 @@
 
 **Authority:** mandatory operating instructions for AI work in this repository.
 **Human entry point:** `.agent/ILUMINATE_BOOTSTRAP.md`.
-**Last reviewed:** 2026-10-26.
+**Last reviewed:** 2026-11-02.
 **Goal:** load the smallest reliable context, preserve architectural decisions,
 make scoped changes and validate them without turning generated context into a
 second source of truth.
@@ -53,6 +53,7 @@ spanning several areas may combine rows, but duplicated documents are read once.
 | Service ownership, new folders, moves or cross-service dependencies | `.agent/FILESYSTEM_GUARDRAILS.md` | Service README files; `BRAIN_MAP.md` for the current high-level topology. |
 | Designer canvas interaction, tools, bars, Layers or selection UX | Relevant headings in `.agent/DESIGNER_UX_CONTRACT.md` and `.agent/DESIGNER_HANDOFF.md` | `.agent/ILUMINATE_UI_STANDARDS.md` for shared UI conventions. |
 | Designer geometry engine, projections, booleans, text or fabrication export | Relevant implementation headings in `.agent/DESIGNER_HANDOFF.md` | UX contract only when controls/interactions change; `docs/upgrade.doc` only for regression history or unfinished acceptance checks. |
+| 3D worker, SVG-to-solid modeling, STEP/3MF/STL or future 3D canvas | `.agent/THREE_D_WORKER_CONTRACT.md`, `.agent/FILESYSTEM_GUARDRAILS.md` | `.agent/DESIGNER_HANDOFF.md` only for the immutable SVG/canonical-geometry handoff; `.agent/ILUMINATE_UI_STANDARDS.md` only when the separately authorized 3D canvas changes; `.agent/EXECUTION_MAP.md` for implementation/validation. |
 | Animate renderer or optical preview | Animate/rendering headings in `.agent/DESIGNER_HANDOFF.md` | UX contract for operator behavior; effect model/lifecycle only if their contracts change. |
 | Composer, routes, controller, LED density or generated pixelMap | `.agent/PIXELMAP_COMPOSER_DIRECTION.md`, `.agent/DESIGNER_HANDOFF.md` | `.agent/EFFECT_TARGETING_MODEL.md` when targets/effect coordinates change; `docs/partitura-lifecycle.md` when Compile/Generate state changes. |
 | Effects, zones, groups, simulator or playback semantics | `.agent/EFFECT_TARGETING_MODEL.md` | `.agent/PIXELMAP_COMPOSER_DIRECTION.md`, `docs/partitura-lifecycle.md`, and current effect/player code as applicable. |
@@ -172,6 +173,10 @@ and a concise list of affected code paths.
 - The currently supported repository contract models logical controller outputs
   1, 2 and 3. Future controller profiles require an explicit contract change;
   they are not implied by roadmap text.
+- `services/3d-worker` is a separately bounded, non-HTTP modeling worker. It
+  must not enter `lighting-core`, `render-worker`, Designer or Animate. The
+  future 3D canvas is an independent authenticated module and may reuse UI
+  conventions, not mutable state or electrical/partitura behavior.
 - Physical wiring and visual targets remain separate. Operators author
   controller/data-cable/LED-string topology plus zones/groups; raw logical
   ranges and pixelMap entries are derived.
@@ -240,4 +245,8 @@ Stop or challenge changes that would:
 - connect a browser directly to PostgreSQL;
 - remove tenant, permission, schema or deployment safety checks;
 - treat generated context as more authoritative than source documents/code;
+- connect Designer or Animate to `3d-worker`, mount the future 3D canvas inside
+  either workspace, or add hidden 3D job actions to those interfaces;
+- let `3d-worker` execute arbitrary SVG behavior, Python/CAD scripts, shell
+  commands or caller-selected filesystem/network destinations;
 - require reading the entire `.agent` or `docs` tree for every task.

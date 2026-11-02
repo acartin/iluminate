@@ -19,6 +19,11 @@ un dominio durable o cambie su ownership. Sus contextos deben seguir el router
 de `.agent/RULES.md`; los presets que cruzan servicios deben abrir explícitamente
 las superficies sensibles necesarias sin desproteger dominios no relacionados.
 
+`3d-worker` y su futuro canvas son dominios separados. Sus presets mantienen
+protegido el aislamiento que impide conectar Designer o Animate al worker; una
+tarea de backend no abre el canvas y una tarea de canvas no abre el motor,
+Compose, PostgreSQL ni los artefactos CAD.
+
 ## Ejecutar
 
 Con Node 22:

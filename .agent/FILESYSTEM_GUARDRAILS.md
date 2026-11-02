@@ -2,7 +2,7 @@
 
 **Status:** project organization guardrails  
 **Applies to:** `/srv/iluminate`  
-**Last reviewed:** 2026-10-26
+**Last reviewed:** 2026-11-02
 **Purpose:** keep the monorepo understandable as services, APIs, partitura contracts, editor and simulator evolve.
 
 ---
@@ -35,6 +35,7 @@ services/
   lighting-core      # LED choreography domain and partitura model
   auth               # identity and authorization domain
   render-worker      # private queue worker for deterministic scene media
+  3d-worker          # isolated queue worker for SVG-to-solid model artifacts
   device-protocol    # controller/cloud communication contracts
   firmware           # notes for the external ESP32 firmware interpreter
 ```
@@ -162,6 +163,33 @@ The worker must consume immutable `player-bundle.v1` artifacts and the same
 runtime/renderer contract as browser playback. It must not introduce a second
 simulation or authoring model.
 
+### `services/3d-worker`
+
+Currently a documentation-only service scaffold. Its approved target contract
+is `.agent/THREE_D_WORKER_CONTRACT.md`.
+
+Owns, when implemented:
+
+- versioned SVG-to-solid job and result contracts;
+- controlled profile-sweep and future bounded 3D fabrication operations;
+- B-Rep/result validation and STEP/3MF/STL export;
+- its PostgreSQL queue, leases, diagnostics and migrations;
+- private tenant-scoped 3D artifact storage and cleanup;
+- its Python/build123d/OCP container, fixtures and deterministic tests.
+
+Does not own:
+
+- Designer or Animate UI, geometry mutation, partitura or Compile semantics;
+- auth/session/role decisions or freely submitted tenant authority;
+- scene rendering, player bundles or public showroom media;
+- slicing, G-code, printers, CNC toolpaths, firmware or device protocols;
+- arbitrary SVG features, CAD scripts, Python execution or network imports.
+
+It is a queue consumer with no HTTP/public port. The future 3D canvas is a
+separate authenticated web module and is not a Designer/Animate tab. It may
+reuse their approved UI conventions but may not share mutable state or bypass
+the worker's versioned job boundary.
+
 ### `services/device-protocol`
 
 Owns communication contracts between cloud services and controllers:
@@ -207,6 +235,14 @@ render-worker
   -> web/iluminate protected render harness
   -> render queue and render-artifact storage
 
+future web/iluminate 3D module
+  -> authenticated server-side 3D job adapter
+  -> immutable SVG snapshot and versioned 3D recipe
+
+3d-worker
+  -> its own contracts, validators, queue and migrations
+  -> private tenant-scoped R2 3D artifacts
+
 device-protocol
   -> lighting-core/contracts, only for exported partitura/deployment shapes
 
@@ -223,6 +259,11 @@ Avoid:
 - `web/iluminate-public` connecting directly to PostgreSQL or receiving private service credentials.
 - API handlers duplicating validation rules that belong in `validators/`.
 - render-worker implementing its own effect, clock, optical or partitura semantics.
+- Designer or Animate invoking `3d-worker`, enqueuing 3D jobs or mounting the
+  future 3D canvas.
+- `3d-worker` importing web, Designer, Animate, lighting-core or render-worker
+  implementation code.
+- browsers connecting to the worker, its PostgreSQL queue or R2 credentials.
 
 ---
 
@@ -303,6 +344,8 @@ Expected ownership:
 - `lighting-core/storage`: projects, controllers, partituras, deployments,
   device commands, device status, assets metadata, render artifacts/jobs and
   scene shares.
+- `3d-worker`: future 3D jobs, leases, result metadata and its versioned
+  migrations. Shared project identity is referenced, not re-owned.
 
 ---
 

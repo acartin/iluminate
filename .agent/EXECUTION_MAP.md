@@ -1,7 +1,7 @@
 # Execution Map
 
 **Status:** current validation routes and commands
-**Last reviewed:** 2026-10-26
+**Last reviewed:** 2026-11-02
 
 ## Objetivo
 
@@ -32,6 +32,7 @@ o desde el inicio cuando la tarea es de infraestructura/operacion. En Iluminate,
 | `services/web/iluminate-public/` | Typecheck, lint, build y smoke del sitio publico via Docker | `docker compose build iluminate-public-web` y `curl -I http://localhost:${ILUMINATE_PUBLIC_WEB_PORT:-8430}` si esta levantado |
 | `services/web/iluminate-prompt-builder/` | Tests del motor, build de imagen y smoke HTTP | `docker run --rm -v "$PWD/services/web/iluminate-prompt-builder:/work" -w /work node:22-alpine npm test` y `docker build -f services/web/iluminate-prompt-builder/Dockerfile -t iluminate-prompt-builder:test .` |
 | `services/render-worker/` | Typecheck/build del worker y coherencia con Compose | `docker build -f services/render-worker/Dockerfile -t iluminate-render-worker:check .` y `docker compose config` |
+| `services/3d-worker/` | Mientras sea scaffold, contrato/documentacion; con runtime autorizado, Pytest, fixtures CAD, build no-root y coherencia con Compose | ahora `bash .agent/validar_documentacion.sh`; futuro `pytest`, build de su Dockerfile y `docker compose config` segun `.agent/THREE_D_WORKER_CONTRACT.md` |
 | `services/lighting-core/` | Build y fixtures del dominio | `docker run --rm -v "$PWD/services/lighting-core:/work" -w /work node:22-alpine sh -c "npm ci && npm test"` |
 | `services/lighting-core/pixel-map/` | Build core y validar generation/simulation por API si afecta web | `docker compose up -d --build iluminate-web` |
 | `services/lighting-core/domain/effects/` | Build core/web y smoke de `/api/lighting/effects`; si cambia renderer, generar frame de Lab por API | `docker compose up -d --build iluminate-web` |
@@ -64,6 +65,7 @@ o desde el inicio cuando la tarea es de infraestructura/operacion. En Iluminate,
 - `CLOUDFLARE_R2_REGION`
 - `CLOUDFLARE_R2_ACCESS_KEY_ID`
 - `CLOUDFLARE_R2_SECRET_ACCESS_KEY`
+- `CLOUDFLARE_R2_BUCKET` (assets privados, incluido el futuro prefijo tenant-scoped de modelos 3D)
 - `CLOUDFLARE_R2_PRIVATE_RENDER_BUCKET`
 - `CLOUDFLARE_R2_PUBLIC_SHARE_BUCKET`
 

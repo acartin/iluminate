@@ -17,6 +17,9 @@ export const PROTECTED_SURFACES = [
   { id: "compile_lifecycle", label: "Save / Compile / Generate", guardrail: "No cambies las reglas de Save, Compile, Preview, Generate, Publish ni invalidación de artefactos." },
   { id: "effect_contract", label: "Contratos de efectos y clips", guardrail: "No cambies identificadores, parámetros, targets, coordinate spaces, blend modes ni semántica de clips/efectos." },
   { id: "optical_model", label: "Óptica y Face Graphic", guardrail: "No cambies Front, Halo, Wall Wash, materiales, difusión, Face Graphic ni composición óptica." },
+  { id: "three_d_worker_contract", label: "Motor y artefactos 3D", guardrail: "No cambies contratos, perfiles, sweep, validación B-Rep, jobs ni salidas STEP/3MF/STL de 3d-worker." },
+  { id: "three_d_canvas_contract", label: "Canvas 3D independiente", guardrail: "No añadas ni cambies el futuro canvas 3D, su documento, herramientas, layout, rutas o navegación." },
+  { id: "three_d_isolation", label: "Aislamiento de 3d-worker", guardrail: "No conectes Designer ni Animate con 3d-worker; no añadas botones, tabs, links, jobs, imports o estado compartido entre esas superficies." },
   { id: "api_contract", label: "APIs y contratos entre servicios", guardrail: "No cambies endpoints, DTOs, respuestas, ownership de APIs ni contratos entre servicios." },
   { id: "database", label: "Base de datos y tenancy", guardrail: "No cambies PostgreSQL, migraciones, client_id, R2 ni reglas de propiedad multitenant." },
   { id: "auth_security", label: "Auth, permisos y secretos", guardrail: "No cambies login, sesiones, roles, permisos, cookies, credenciales ni límites de seguridad." },
@@ -30,6 +33,7 @@ export const PROTECTED_SURFACES = [
 export const GROUPS = [
   { id: "experience", label: "Experiencia y portal" },
   { id: "designer", label: "Designer y fabricación" },
+  { id: "three_d", label: "Modelado 3D aislado" },
   { id: "animation", label: "Animate, player y efectos" },
   { id: "domain", label: "Partitura y dominio LED" },
   { id: "platform", label: "Datos, dispositivos y plataforma" },
@@ -140,6 +144,22 @@ export const DOMAINS = [
     context: [".agent/DESIGNER_HANDOFF.md", "docs/upgrade.doc"],
     validations: ["Pruebas de export SVG/DXF", "Abrir fixtures generados", "Build web"],
     keywords: ["export", "svg", "dxf", "fabricación", "corte", "router"]
+  },
+  {
+    id: "three_d_worker", group: "three_d", label: "3d-worker y generación de modelos",
+    summary: "Servicio aislado SVG-to-solid, jobs PostgreSQL, build123d/OCP, R2 privado y artefactos STEP/3MF/STL.",
+    paths: ["services/3d-worker", "compose.yml", ".env.example"],
+    context: [".agent/THREE_D_WORKER_CONTRACT.md", ".agent/FILESYSTEM_GUARDRAILS.md", ".agent/EXECUTION_MAP.md", ".agent/DESIGNER_HANDOFF.md", "services/3d-worker/README.md"],
+    validations: ["Pytest y fixtures geométricos de 3d-worker cuando exista runtime", "Build no-root del contenedor 3d-worker", "docker compose config", "Pruebas de aislamiento client_id/R2 y de que Designer/Animate permanecen intactos"],
+    keywords: ["3d-worker", "3d", "svg", "sweep", "build123d", "opencascade", "step", "3mf", "stl", "r2", "modelo"]
+  },
+  {
+    id: "three_d_canvas", group: "three_d", label: "Canvas 3D independiente",
+    summary: "Futuro módulo autenticado de autoría 3D, con documento y ruta propios y sin acceso desde Designer o Animate.",
+    paths: [".agent/THREE_D_WORKER_CONTRACT.md", ".agent/ILUMINATE_UI_STANDARDS.md"],
+    context: [".agent/THREE_D_WORKER_CONTRACT.md", ".agent/ILUMINATE_UI_STANDARDS.md", ".agent/FILESYSTEM_GUARDRAILS.md"],
+    validations: ["Build web cuando el canvas tenga implementación autorizada", "Smoke aislado de su ruta propia", "Confirmar que Designer/Animate no ganaron tabs, links ni llamadas 3D"],
+    keywords: ["3d canvas", "canvas 3d", "modelado", "viewport", "layers", "perfil", "sweep", "workspace 3d"]
   },
   {
     id: "timeline_clips", group: "animation", label: "Timeline, scenes, tracks y clips",
@@ -268,6 +288,8 @@ export const PRESETS = [
   { id: "timeline", label: "Timeline / clips", description: "Edición temporal sin abrir player o contratos.", domains: ["timeline_clips"], unprotect: ["user_behavior"] },
   { id: "designer_ui", label: "UI del Designer", description: "Barras, Layers o herramientas visibles.", domains: ["designer_layout"], unprotect: ["ui_layout", "user_behavior"] },
   { id: "canvas", label: "Canvas", description: "Interacción Paper, zoom, pan o herramientas.", domains: ["designer_canvas"], unprotect: ["user_behavior"] },
+  { id: "three_d_worker", label: "3d-worker", description: "Motor headless, jobs y artefactos 3D sin abrir interfaces web actuales.", domains: ["three_d_worker"], unprotect: ["three_d_worker_contract", "database", "dependencies", "infrastructure"] },
+  { id: "three_d_canvas", label: "Canvas 3D", description: "Futuro canvas separado, sin abrir Designer, Animate ni el runtime del worker.", domains: ["three_d_canvas"], unprotect: ["three_d_canvas_contract", "ui_layout", "user_behavior"] },
   { id: "electrical", label: "Cableado / Compile", description: "Strings, controller, soldadura o pixelMap.", domains: ["electrical_routes", "compile_pixelmap"], unprotect: ["electrical_model", "compile_lifecycle"] },
   { id: "effects", label: "Efectos", description: "Catálogo o renderer matemático de efectos.", domains: ["effects"], unprotect: ["effect_contract"] },
   { id: "data", label: "Persistencia", description: "Partitura, PostgreSQL o migraciones.", domains: ["partitura_model", "persistence_database"], unprotect: ["partitura_schema", "database"] },

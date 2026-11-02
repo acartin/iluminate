@@ -1,7 +1,7 @@
 # Iluminate UI Standards
 
 **Status:** canonical authenticated UI conventions
-**Last reviewed:** 2026-10-26
+**Last reviewed:** 2026-11-02
 
 Documento obligatorio para cualquier trabajo en `services/web/iluminate`.
 
@@ -31,6 +31,10 @@ Estructura esperada:
 - `components/lighting`: componentes especificos del dominio LED.
 - `components/lighting/designer`: editor grafico de partituras; debe mantenerse modular por tipos, canvas, renderer, geometria/wiring, compiler y UI.
 - `components/lighting/player`: player reutilizable, Worker controller y renderer WebGL2.
+- Future 3D authoring must use its own component and route namespace. It must
+  not be mounted inside `components/lighting/designer`, the Designer workspace
+  or Animate. The exact namespace is deferred until that implementation is
+  authorized.
 - `lib`: clientes API, helpers, tipos de UI y mocks temporales explicitamente marcados.
 
 Reglas:
@@ -121,6 +125,24 @@ Herramientas esperadas:
 - Crear grupos nombrados que combinen zonas, sin alterar cableado ni duplicar pixeles.
 
 El formato principal no debe ser JSON privado de Konva ni de una libreria de timeline.
+
+## 6.1 Future 3D canvas
+
+The 3D canvas is a separate authenticated product module governed by
+`.agent/THREE_D_WORKER_CONTRACT.md`. Designer and Animate must not expose a tab,
+button, panel, route handoff or hidden job action for it.
+
+Its interface should take the established Designer scheme as a baseline where
+appropriate: authenticated shell, technical viewport, global/contextual bars,
+left tool rail, Layers-style hierarchy, Setup, millimeter units, grid,
+selection, zoom/pan and existing light/dark tokens. Reuse visual primitives and
+interaction vocabulary deliberately; do not reuse Designer's mutable state,
+electrical tools, partitura lifecycle or geometry mutation boundary.
+
+The future module owns its own 3D document/view state and communicates only
+through an authenticated server adapter and versioned asynchronous job
+contracts. Its exact route, navigation label and component namespace remain
+deferred decisions, not placeholders to add to the current UI.
 
 ## 7. Timeline y simulacion
 

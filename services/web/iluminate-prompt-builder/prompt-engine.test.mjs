@@ -86,6 +86,48 @@ test("scene sharing preset opens its cross-service surfaces and routes complete 
   assert.doesNotMatch(prompt, /No cambies contenido, SEO, rutas/);
 });
 
+test("3d-worker preset preserves hard isolation from Designer and Animate", () => {
+  const preset = PRESETS.find((entry) => entry.id === "three_d_worker");
+  const domain = DOMAINS.find((entry) => entry.id === "three_d_worker");
+  assert.ok(preset);
+  assert.ok(domain);
+  assert.deepEqual(preset.domains, ["three_d_worker"]);
+  assert.ok(preset.unprotect.includes("three_d_worker_contract"));
+  assert.ok(!preset.unprotect.includes("three_d_isolation"));
+  assert.ok(domain.context.includes(".agent/THREE_D_WORKER_CONTRACT.md"));
+  assert.ok(domain.paths.includes("services/3d-worker"));
+  assert.ok(domain.paths.every((path) => !path.includes("/designer") && !path.includes("animate")));
+
+  const prompt = createPrompt({
+    objective: "Implementa una fase autorizada de 3d-worker.",
+    mode: "implement",
+    allowedDomainIds: preset.domains,
+    protectedSurfaceIds: allProtected.filter((id) => !preset.unprotect.includes(id))
+  });
+  assert.match(prompt, /Servicio aislado SVG-to-solid/);
+  assert.match(prompt, /\.agent\/THREE_D_WORKER_CONTRACT\.md/);
+  assert.match(prompt, /No conectes Designer ni Animate con 3d-worker/);
+  assert.doesNotMatch(prompt, /No cambies contratos, perfiles, sweep/);
+});
+
+test("3d canvas is a separate protected domain and does not open the worker", () => {
+  const preset = PRESETS.find((entry) => entry.id === "three_d_canvas");
+  assert.ok(preset);
+  assert.deepEqual(preset.domains, ["three_d_canvas"]);
+  assert.ok(!preset.unprotect.includes("three_d_worker_contract"));
+  assert.ok(!preset.unprotect.includes("three_d_isolation"));
+
+  const prompt = createPrompt({
+    objective: "Implementa una fase autorizada del canvas 3D.",
+    mode: "implement",
+    allowedDomainIds: preset.domains,
+    protectedSurfaceIds: allProtected.filter((id) => !preset.unprotect.includes(id))
+  });
+  assert.match(prompt, /Futuro módulo autenticado de autoría 3D/);
+  assert.match(prompt, /No cambies contratos, perfiles, sweep/);
+  assert.match(prompt, /No conectes Designer ni Animate con 3d-worker/);
+});
+
 test("catalog identifiers and preset references are internally valid", () => {
   const domainIds = DOMAINS.map((domain) => domain.id);
   const groupIds = new Set(GROUPS.map((group) => group.id));

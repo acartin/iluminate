@@ -5,13 +5,13 @@
 
 ## Snapshot
 
-- Generated UTC: `2026-10-30T20:29:01Z`
+- Generated UTC: `2026-11-02T17:04:13Z`
 - Repository root: `/srv/iluminate`
-- Git branch: `HETZNER-DEV-2026-Octubre-29`
-- Git commit: `65e8246`
-- Worktree: `dirty` (36 changed paths, excluding generated context files)
-- Status fingerprint: `6eeb245f0069eefbd21c220c5f02446fd89e48c3589896419cbd5826837dced8`
-- Tracked diff fingerprint: `814e8c0f123e556edf0b3b1fe6d50b5384bc9f804fd4a7ff994f1c0b0cc7ef17`
+- Git branch: `HETZNER-DEV-2026-Noviembre-02`
+- Git commit: `ad8aefa`
+- Worktree: `dirty` (12 changed paths, excluding generated context files)
+- Status fingerprint: `5fd15aa967f726286d8b21c8e802a8797e1eff0f64fbd9946f70f95e86a27730`
+- Tracked diff fingerprint: `7e408c82fac7a5ed84fc390ebd291ba91df646550eb099075003012744e65b55`
 
 The commit identifies the base revision. When the worktree is dirty, the two
 fingerprints distinguish the local state without copying diffs or secrets into
@@ -27,6 +27,7 @@ this file. Untracked file contents are never read for fingerprinting.
 | `services/lighting-core` | Canonical LED, effect, partitura and validation domain. |
 | `services/auth` | Identity, sessions, organizations, roles and permissions. |
 | `services/render-worker` | Private queue worker for deterministic MP4/WebP scene rendering. |
+| `services/3d-worker` | Documentation-only scaffold for the isolated SVG-to-solid modeling worker. |
 | `services/device-protocol` | Cloud/controller protocol contracts. |
 | `services/firmware` | Compatibility notes and temporary spikes; organized firmware is external. |
 | `docs` | Lifecycle and operational runbooks selected by task. |
@@ -52,6 +53,7 @@ render-worker
 | `.agent/FILESYSTEM_GUARDRAILS.md` | Service ownership and dependency boundaries. |
 | `.agent/DESIGNER_UX_CONTRACT.md` | Authoritative Designer interaction contract. |
 | `.agent/DESIGNER_HANDOFF.md` | Current Designer implementation handoff. |
+| `.agent/THREE_D_WORKER_CONTRACT.md` | Target ownership, isolation and security contract for 3d-worker and its future canvas. |
 | `.agent/PIXELMAP_COMPOSER_DIRECTION.md` | Composer and physical mapping direction. |
 | `.agent/EFFECT_TARGETING_MODEL.md` | Effect targets and coordinate semantics. |
 | `.agent/ILUMINATE_UI_STANDARDS.md` | Authenticated web UI standards. |
@@ -67,6 +69,7 @@ render-worker
 ## Current Service Topology
 
 ```text
+services/3d-worker
 services/auth
 services/auth/api
 services/auth/contracts

@@ -1,6 +1,6 @@
 # Iluminate Designer Handoff
 
-**Last updated:** 2026-10-26
+**Last updated:** 2026-11-02
 **Purpose:** detailed current implementation handoff. Use the context router in
 `.agent/RULES.md` and read only the headings relevant to the task instead of
 loading this complete file by default.
@@ -200,6 +200,12 @@ Every file carries partitura/project identity, generation time and a SHA-256
 source checksum. Export does not require or change electrical Compile and does
 not create firmware/toolpaths. PDF, EPS, STL and proprietary cutter formats
 remain outside the implemented contract.
+
+The separately authorized future `3d-worker` may consume an immutable,
+validated SVG snapshot through its own job contract, but it does not extend this
+Export modal and must not add a Designer or Animate action. Its target boundary
+is `.agent/THREE_D_WORKER_CONTRACT.md`; STL remains outside the implemented
+Designer contract.
 
 Alignment/calibration marks are configured in `Setup` as one Designer-global
 orthogonal set (enabled, locked, origin and exact spacing; 100 mm by default).
