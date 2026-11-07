@@ -8,6 +8,7 @@ on:
       - .github/workflows/publish-images.yml
       - services/lighting-core/**
       - services/render-worker/**
+      - services/3d-worker/**
       - services/web/iluminate/**
       - services/web/iluminate-public/**
   workflow_dispatch:
@@ -29,6 +30,8 @@ jobs:
             dockerfile: services/web/iluminate-public/Dockerfile
           - image: iluminate-render-worker
             dockerfile: services/render-worker/Dockerfile
+          - image: iluminate-3d-worker
+            dockerfile: services/3d-worker/Dockerfile
 
     steps:
       - name: Checkout repository
@@ -36,6 +39,12 @@ jobs:
 
       - name: Configure Docker Buildx
         uses: docker/setup-buildx-action@v3
+
+      - name: Test 3D worker image
+        if: matrix.image == 'iluminate-3d-worker'
+        run: |
+          docker build --target test -f services/3d-worker/Dockerfile -t iluminate-3d-worker:test .
+          docker run --rm iluminate-3d-worker:test
 
       - name: Authenticate with GHCR
         uses: docker/login-action@v3

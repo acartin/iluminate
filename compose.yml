@@ -22,6 +22,9 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     logging: *iluminate-logging
+    networks:
+      - default
+      - 3d-worker-net
 
   iluminate-web:
     build:
@@ -90,9 +93,50 @@ services:
     restart: unless-stopped
     logging: *iluminate-logging
 
+  3d-worker:
+    build:
+      context: .
+      dockerfile: services/3d-worker/Dockerfile
+      target: runtime
+    image: iluminate-3d-worker:dev
+    environment:
+      ILUMINATE_DATABASE_URL: ${ILUMINATE_DATABASE_URL:-postgresql://${DB_USER}:${DB_PASS}@postgres:5432/${DB_NAME}}
+      CLOUDFLARE_R2_BUCKET: ${CLOUDFLARE_R2_BUCKET:-}
+      CLOUDFLARE_R2_ENDPOINT: ${CLOUDFLARE_R2_ENDPOINT:-}
+      CLOUDFLARE_R2_REGION: ${CLOUDFLARE_R2_REGION:-auto}
+      CLOUDFLARE_R2_ACCESS_KEY_ID: ${CLOUDFLARE_R2_ACCESS_KEY_ID:-}
+      CLOUDFLARE_R2_SECRET_ACCESS_KEY: ${CLOUDFLARE_R2_SECRET_ACCESS_KEY:-}
+      ILUMINATE_3D_POLL_SECONDS: ${ILUMINATE_3D_POLL_SECONDS:-2}
+      ILUMINATE_3D_JOB_TIMEOUT_SECONDS: ${ILUMINATE_3D_JOB_TIMEOUT_SECONDS:-300}
+      ILUMINATE_3D_JOB_MEMORY_MB: ${ILUMINATE_3D_JOB_MEMORY_MB:-2048}
+    depends_on:
+      - postgres
+    restart: unless-stopped
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,nodev,noexec,size=512m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 2560m
+    healthcheck:
+      test: ["CMD", "python", "-m", "iluminate_3d_worker.healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    logging: *iluminate-logging
+    networks:
+      - 3d-worker-net
+
 networks:
   default:
     name: iluminate-net
+  3d-worker-net:
+    name: iluminate-3d-worker-net
 
 volumes:
   postgres_data:

@@ -5,7 +5,7 @@ publican los contenedores y qué partes están operativas o pendientes. Está
 escrito como guía humana de operación; no debe contener contraseñas, tokens,
 llaves privadas ni valores de secretos.
 
-Última revisión: 2026-10-07.
+Última revisión: 2026-11-02.
 
 ## Estado actual
 
@@ -19,6 +19,7 @@ llaves privadas ni valores de secretos.
 | PostgreSQL de producción | No desplegado | Se añadirá cuando la aplicación autenticada esté lista |
 | Render y share de escenas | Implementado, no publicado | Requiere PostgreSQL, dos buckets R2, origen CDN y token interno de producción |
 | Render worker | Imagen automatizada; servicio no desplegado | Chromium/FFmpeg consume una cola PostgreSQL; no recibe tráfico público |
+| 3D worker | Imagen automatizada; servicio no desplegado | build123d/OCP consume su cola PostgreSQL y escribe modelos privados en el bucket de assets; no recibe tráfico público |
 | Sitio DataSyncSA | No desplegado | Compartirá la VM, con contenedor y ciclo propios |
 | Despliegue automático al servidor | Pendiente | La construcción y publicación de imágenes sí está automatizada |
 
@@ -171,8 +172,8 @@ El workflow se encuentra en:
 .github/workflows/publish-images.yml
 ```
 
-Se ejecuta al hacer push a `main` cuando cambia el workflow, `lighting-core`, el
-render worker o alguna de las dos aplicaciones web. Ejecuta las validaciones
+Se ejecuta al hacer push a `main` cuando cambia el workflow, `lighting-core`,
+alguno de los workers o alguna de las dos aplicaciones web. Ejecuta las validaciones
 definidas en los Dockerfiles, construye las imágenes y las publica en GHCR.
 
 Imágenes actuales:
@@ -181,6 +182,7 @@ Imágenes actuales:
 ghcr.io/acartin/iluminate-public
 ghcr.io/acartin/iluminate-web
 ghcr.io/acartin/iluminate-render-worker
+ghcr.io/acartin/iluminate-3d-worker
 ```
 
 Cada construcción publica dos tags:
@@ -327,8 +329,9 @@ Cuando esté lista, el stack previsto dentro de la misma VM será:
 cloudflared
 ├── iluminate-public
 └── iluminate-web
-      ├── postgres (red interna, sin ruta de túnel ni puerto público)
-      └── iluminate-render-worker (sin ruta de túnel ni puerto público)
+postgres (red interna, sin ruta de túnel ni puerto público)
+iluminate-render-worker (red normal de aplicación; sin puerto público)
+iluminate-3d-worker (red dedicada solo con PostgreSQL; sin puerto público)
 ```
 
 PostgreSQL debe ejecutarse en un contenedor separado con volumen persistente.
@@ -372,6 +375,23 @@ services/lighting-core/migrations/2026-10-07_create_scene_rendering_and_shares.s
 El orden de alta es: buckets y CDN, backup PostgreSQL, migración, dashboard,
 worker, share privado de prueba, share público de prueba y prueba de revocación.
 El runbook detallado vive en `services/render-worker/README.md`.
+
+## Modelado 3D privado
+
+`iluminate-3d-worker` reutiliza el bucket privado de assets configurado por
+`CLOUDFLARE_R2_BUCKET`; no usa los buckets de render/share. Solo puede operar
+bajo `clients/<client_id>/3d-models/<project_id>/<job_id>/`. Antes de iniciar el
+servicio se debe aplicar, después del backup, esta migración:
+
+```text
+services/3d-worker/migrations/2026-11-02_create_3d_model_jobs.sql
+```
+
+El worker no publica puerto ni ruta de Cloudflare. El canvas autenticado vive
+de forma independiente en `/3d-modeler` y el adaptador productor en
+`/api/3d-modeler`; ambos derivan el tenant desde la sesión y nunca aceptan
+claves R2 aportadas por el cliente. Designer y Animate no exponen ni invocan
+este módulo. Su runbook técnico vive en `services/3d-worker/README.md`.
 
 YouTube no es el almacén canónico y no recibe subidas automáticas. Una futura
 exportación a YouTube debe ser una acción separada, explícita y autorizada por

@@ -1,0 +1,383 @@
+{
+  "$defs": {
+    "ProfileContour": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.:-]{0,127}$",
+          "type": "string"
+        },
+        "nodes": {
+          "items": {
+            "$ref": "#/$defs/ProfileNode"
+          },
+          "maxItems": 128,
+          "minItems": 3,
+          "type": "array"
+        }
+      },
+      "required": [
+        "id",
+        "nodes"
+      ],
+      "type": "object"
+    },
+    "ProfileNode": {
+      "additionalProperties": false,
+      "properties": {
+        "handleIn": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProfileVector"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "handleOut": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ProfileVector"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "nodeType": {
+          "default": "corner",
+          "enum": [
+            "corner",
+            "straight",
+            "smooth",
+            "symmetric"
+          ],
+          "type": "string"
+        },
+        "xMm": {
+          "maximum": 1000.0,
+          "minimum": -1000.0,
+          "type": "number"
+        },
+        "yMm": {
+          "maximum": 1000.0,
+          "minimum": -1000.0,
+          "type": "number"
+        }
+      },
+      "required": [
+        "xMm",
+        "yMm"
+      ],
+      "type": "object"
+    },
+    "ProfileSweepRecipe": {
+      "additionalProperties": false,
+      "properties": {
+        "angularToleranceRad": {
+          "default": 0.1,
+          "maximum": 0.5,
+          "minimum": 0.01,
+          "type": "number"
+        },
+        "bodyPolicy": {
+          "default": "separate",
+          "enum": [
+            "separate",
+            "union"
+          ],
+          "type": "string"
+        },
+        "cornerPolicy": {
+          "default": "round",
+          "enum": [
+            "miter",
+            "round"
+          ],
+          "type": "string"
+        },
+        "endCap": {
+          "const": "flat",
+          "default": "flat",
+          "type": "string"
+        },
+        "fitClearanceDirection": {
+          "default": "outward",
+          "enum": [
+            "outward",
+            "inward"
+          ],
+          "type": "string"
+        },
+        "fitClearanceMm": {
+          "default": 0.0,
+          "maximum": 5.0,
+          "minimum": 0.0,
+          "type": "number"
+        },
+        "linearToleranceMm": {
+          "default": 0.05,
+          "maximum": 0.5,
+          "minimum": 0.01,
+          "type": "number"
+        },
+        "operation": {
+          "const": "profile_sweep",
+          "default": "profile_sweep",
+          "type": "string"
+        },
+        "outputs": {
+          "contains": {
+            "const": "step"
+          },
+          "items": {
+            "enum": [
+              "step",
+              "3mf",
+              "stl"
+            ],
+            "type": "string"
+          },
+          "maxItems": 3,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "pathIds": {
+          "items": {
+            "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.:-]{0,127}$",
+            "type": "string"
+          },
+          "maxItems": 128,
+          "minItems": 1,
+          "type": "array",
+          "uniqueItems": true
+        },
+        "profile": {
+          "discriminator": {
+            "mapping": {
+              "rectangle": "#/$defs/RectangleProfile",
+              "vector": "#/$defs/VectorProfile"
+            },
+            "propertyName": "type"
+          },
+          "oneOf": [
+            {
+              "$ref": "#/$defs/RectangleProfile"
+            },
+            {
+              "$ref": "#/$defs/VectorProfile"
+            }
+          ]
+        },
+        "profileYawDeg": {
+          "default": 0.0,
+          "maximum": 180.0,
+          "minimum": -180.0,
+          "type": "number"
+        },
+        "sourceOriginMm": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SolidOrigin"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "sweepId": {
+          "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.:-]{0,127}$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "sweepId",
+        "pathIds",
+        "profile"
+      ],
+      "type": "object"
+    },
+    "ProfileVector": {
+      "additionalProperties": false,
+      "properties": {
+        "xMm": {
+          "maximum": 1000.0,
+          "minimum": -1000.0,
+          "type": "number"
+        },
+        "yMm": {
+          "maximum": 1000.0,
+          "minimum": -1000.0,
+          "type": "number"
+        }
+      },
+      "required": [
+        "xMm",
+        "yMm"
+      ],
+      "type": "object"
+    },
+    "RectangleProfile": {
+      "additionalProperties": false,
+      "properties": {
+        "catalogId": {
+          "const": "rectangular-channel.v1",
+          "default": "rectangular-channel.v1",
+          "type": "string"
+        },
+        "heightMm": {
+          "maximum": 100.0,
+          "minimum": 0.5,
+          "type": "number"
+        },
+        "type": {
+          "const": "rectangle",
+          "default": "rectangle",
+          "type": "string"
+        },
+        "widthMm": {
+          "maximum": 100.0,
+          "minimum": 0.5,
+          "type": "number"
+        }
+      },
+      "required": [
+        "widthMm",
+        "heightMm"
+      ],
+      "type": "object"
+    },
+    "SolidOrigin": {
+      "additionalProperties": false,
+      "properties": {
+        "xMm": {
+          "maximum": 100000.0,
+          "minimum": -100000.0,
+          "type": "number"
+        },
+        "yMm": {
+          "maximum": 100000.0,
+          "minimum": -100000.0,
+          "type": "number"
+        },
+        "zMm": {
+          "default": 0.0,
+          "maximum": 100000.0,
+          "minimum": -100000.0,
+          "type": "number"
+        }
+      },
+      "required": [
+        "xMm",
+        "yMm"
+      ],
+      "type": "object"
+    },
+    "SourceArtifact": {
+      "additionalProperties": false,
+      "properties": {
+        "checksum": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "type": "string"
+        },
+        "mediaType": {
+          "const": "image/svg+xml",
+          "default": "image/svg+xml",
+          "type": "string"
+        },
+        "objectKey": {
+          "maxLength": 512,
+          "minLength": 1,
+          "type": "string"
+        },
+        "sizeBytes": {
+          "exclusiveMinimum": 0,
+          "maximum": 2097152,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "objectKey",
+        "checksum",
+        "sizeBytes"
+      ],
+      "type": "object"
+    },
+    "VectorProfile": {
+      "additionalProperties": false,
+      "properties": {
+        "catalogId": {
+          "const": "custom-vector.v1",
+          "default": "custom-vector.v1",
+          "type": "string"
+        },
+        "contours": {
+          "items": {
+            "$ref": "#/$defs/ProfileContour"
+          },
+          "maxItems": 8,
+          "minItems": 1,
+          "type": "array"
+        },
+        "fillRule": {
+          "const": "evenodd",
+          "default": "evenodd",
+          "type": "string"
+        },
+        "type": {
+          "const": "vector",
+          "default": "vector",
+          "type": "string"
+        }
+      },
+      "required": [
+        "contours"
+      ],
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "properties": {
+    "clientId": {
+      "exclusiveMinimum": 0,
+      "type": "integer"
+    },
+    "engineVersion": {
+      "const": "build123d-0.13.0-ocp-8.0.1.1.0-r7",
+      "default": "build123d-0.13.0-ocp-8.0.1.1.0-r7",
+      "type": "string"
+    },
+    "jobId": {
+      "exclusiveMinimum": 0,
+      "type": "integer"
+    },
+    "projectId": {
+      "exclusiveMinimum": 0,
+      "type": "integer"
+    },
+    "recipe": {
+      "$ref": "#/$defs/ProfileSweepRecipe"
+    },
+    "source": {
+      "$ref": "#/$defs/SourceArtifact"
+    },
+    "version": {
+      "const": "3d-model-job.v1",
+      "default": "3d-model-job.v1",
+      "type": "string"
+    }
+  },
+  "required": [
+    "clientId",
+    "projectId",
+    "jobId",
+    "source",
+    "recipe"
+  ],
+  "type": "object"
+}

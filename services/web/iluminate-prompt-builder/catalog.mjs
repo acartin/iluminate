@@ -154,11 +154,19 @@ export const DOMAINS = [
     keywords: ["3d-worker", "3d", "svg", "sweep", "build123d", "opencascade", "step", "3mf", "stl", "r2", "modelo"]
   },
   {
-    id: "three_d_canvas", group: "three_d", label: "Canvas 3D independiente",
-    summary: "Futuro módulo autenticado de autoría 3D, con documento y ruta propios y sin acceso desde Designer o Animate.",
-    paths: [".agent/THREE_D_WORKER_CONTRACT.md", ".agent/ILUMINATE_UI_STANDARDS.md"],
+    id: "three_d_profile", group: "three_d", label: "Profile 3D: dibujo y validación",
+    summary: "Autoría vectorial de perfiles cerrados, nodos y handles, punto de conexión, corrección geométrica y validación previa al guardado.",
+    paths: ["services/web/iluminate/components/three-d-modeler/three-d-modeler-studio.tsx", "services/web/iluminate/components/three-d-modeler/three-d-layers-panel.tsx", "services/web/iluminate/lib/three-d-modeler/contracts.ts", "services/web/iluminate/lib/three-d-modeler/profile-save-validation.ts", "services/web/iluminate/lib/three-d-modeler/vector-editing.ts"],
     context: [".agent/THREE_D_WORKER_CONTRACT.md", ".agent/ILUMINATE_UI_STANDARDS.md", ".agent/FILESYSTEM_GUARDRAILS.md"],
-    validations: ["Build web cuando el canvas tenga implementación autorizada", "Smoke aislado de su ruta propia", "Confirmar que Designer/Animate no ganaron tabs, links ni llamadas 3D"],
+    validations: ["Pruebas deterministas de dibujo, edición y validación de Profile", "Build web del modelador 3D", "Smoke de creación, edición, corrección y guardado de Profile"],
+    keywords: ["profile", "perfil", "contorno", "nodo", "handle", "bezier", "punto de conexión", "validación", "autocorrección"]
+  },
+  {
+    id: "three_d_canvas", group: "three_d", label: "Modelador y Canvas 3D independiente",
+    summary: "Módulo autenticado de autoría 3D con documento y ruta propios; por defecto reutiliza los colores, iconos, controles, funcionamiento y patrones UX/UI del Designer, sin compartir su estado ni acceder desde Designer o Animate.",
+    paths: ["services/web/iluminate/app/3d-modeler", "services/web/iluminate/app/api/3d-modeler", "services/web/iluminate/components/three-d-modeler", "services/web/iluminate/lib/three-d-modeler"],
+    context: [".agent/THREE_D_WORKER_CONTRACT.md", ".agent/ILUMINATE_UI_STANDARDS.md", ".agent/FILESYSTEM_GUARDRAILS.md"],
+    validations: ["Build web del modelador 3D", "Smoke aislado de su ruta propia y revisión visual contra los patrones UX/UI del Designer", "Confirmar que Designer/Animate no ganaron tabs, links ni llamadas 3D"],
     keywords: ["3d canvas", "canvas 3d", "modelado", "viewport", "layers", "perfil", "sweep", "workspace 3d"]
   },
   {
@@ -289,7 +297,8 @@ export const PRESETS = [
   { id: "designer_ui", label: "UI del Designer", description: "Barras, Layers o herramientas visibles.", domains: ["designer_layout"], unprotect: ["ui_layout", "user_behavior"] },
   { id: "canvas", label: "Canvas", description: "Interacción Paper, zoom, pan o herramientas.", domains: ["designer_canvas"], unprotect: ["user_behavior"] },
   { id: "three_d_worker", label: "3d-worker", description: "Motor headless, jobs y artefactos 3D sin abrir interfaces web actuales.", domains: ["three_d_worker"], unprotect: ["three_d_worker_contract", "database", "dependencies", "infrastructure"] },
-  { id: "three_d_canvas", label: "Canvas 3D", description: "Futuro canvas separado, sin abrir Designer, Animate ni el runtime del worker.", domains: ["three_d_canvas"], unprotect: ["three_d_canvas_contract", "ui_layout", "user_behavior"] },
+  { id: "three_d_profile", label: "Profile 3D", description: "Dibujo vectorial, nodos, handles, conexión y validación del perfil.", domains: ["three_d_profile"], unprotect: ["three_d_canvas_contract", "ui_layout", "user_behavior"] },
+  { id: "three_d_canvas", label: "Modelador / Canvas 3D", description: "Módulo separado que sigue por defecto los patrones UX/UI del Designer, sin abrir Designer, Animate ni el runtime del worker.", domains: ["three_d_canvas"], unprotect: ["three_d_canvas_contract", "ui_layout", "user_behavior"] },
   { id: "electrical", label: "Cableado / Compile", description: "Strings, controller, soldadura o pixelMap.", domains: ["electrical_routes", "compile_pixelmap"], unprotect: ["electrical_model", "compile_lifecycle"] },
   { id: "effects", label: "Efectos", description: "Catálogo o renderer matemático de efectos.", domains: ["effects"], unprotect: ["effect_contract"] },
   { id: "data", label: "Persistencia", description: "Partitura, PostgreSQL o migraciones.", domains: ["partitura_model", "persistence_database"], unprotect: ["partitura_schema", "database"] },

@@ -895,10 +895,11 @@ services/
 
 `services/lighting-core` debe ser la fuente de verdad del dominio LED y de la partitura. Konva, la timeline y el simulador son vistas y herramientas sobre ese modelo.
 
-`services/3d-worker` is an explicitly bounded later-phase exception to the
-initial no-3D scope: an isolated, non-HTTP SVG-to-solid artifact worker. It is
-not part of the LED/partitura domain and must not turn Designer into a 3D CAD
-editor. Its authoritative target contract is
+`services/3d-worker` is an explicitly bounded exception to the initial no-3D
+scope: an implemented, isolated, non-HTTP SVG-to-solid artifact worker. Its
+enqueue adapter and independent canvas remain future work. It is not part of
+the LED/partitura domain and must not turn Designer into a 3D CAD editor. Its
+authoritative contract is
 `.agent/THREE_D_WORKER_CONTRACT.md`.
 
 ---

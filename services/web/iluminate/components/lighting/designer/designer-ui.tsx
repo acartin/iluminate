@@ -7,7 +7,8 @@ import { CSS } from "@dnd-kit/utilities";
 import { AlignEndHorizontal, AlignStartHorizontal, AlignVerticalJustifyCenter, Blend, Cable, ChevronDown, ChevronRight, CircleDot, Contrast, CornerDownRight, Cpu, Eye, EyeOff, FlipHorizontal as SquareCenterlineDashedVertical, GripVertical, Hammer, ImageIcon, Info, Layers, Layers3, Lightbulb, ListTree, Lock, Minus, PanelRightClose, Pencil, Plus, Route, Search, Sparkles, Spline, SquareDashed, Trash2, Type, Unlock, Upload, Waves, Waypoints, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Modal } from "@/components/ui/modal";
-import type { DesignerArtworkForm, DesignerBuildAreaForm, DesignerChannelForm, DesignerFaceGraphicForm, DesignerFabricationPartForm, DesignerFabricationPathForm, DesignerForm, DesignerGroupForm, DesignerLayerSettings, DesignerLayersForm, DesignerPointNodeType, DesignerSublayerForm, DesignerSublayerScope, DesignerSystemSublayerScope, DesignerText, DesignerWorkLineForm, DesignerZoneForm } from "@/lib/lighting/partitura-model";
+import type { DesignerArtworkForm, DesignerBuildAreaForm, DesignerChannelForm, DesignerFaceGraphicForm, DesignerFabricationPartForm, DesignerFabricationPathForm, DesignerForm, DesignerGroupForm, DesignerLayerSettings, DesignerLayersForm, DesignerSublayerForm, DesignerSublayerScope, DesignerSystemSublayerScope, DesignerText, DesignerWorkLineForm, DesignerZoneForm } from "@/lib/lighting/partitura-model";
+export { NodeTypePicker } from "@/components/ui/node-type-picker";
 import { resolveDesignerDerivedGeometry, resolveDesignerProjectionGeometry, type DesignerDerivedGeometry, type DesignerProjection, type DesignerProjectionLayer } from "@/lib/lighting/partitura-model";
 import { formatDecimal, rulerTicks } from "./designer-geometry";
 import { channelMatchesSurfaceView, designerAdditiveSelectionRequested, designerLayerForSelection, routeMatchesSurfaceView, type DesignerActiveLayer, type DesignerLayerTarget, type DesignerRouteSummary, type DesignerRouteSurfaceView, type DesignerSelection, type DesignerViewport } from "./types";
@@ -2297,32 +2298,6 @@ export function ToolbarNumber({ label, value, suffix, onChange }: { label: strin
         {suffix ? <span className="pr-2 text-[11px] text-muted-foreground">{suffix}</span> : null}
       </div>
     </ToolbarField>
-  );
-}
-
-export function NodeTypePicker({ value = "smooth", onChange }: { value?: DesignerPointNodeType; onChange: (value: DesignerPointNodeType) => void }) {
-  const options: Array<{ value: DesignerPointNodeType; label: string; icon: React.ComponentType<{ className?: string }> }> = [
-    { value: "corner", label: "Corner node", icon: CornerDownRight },
-    { value: "straight", label: "Straight node", icon: Minus },
-    { value: "smooth", label: "Smooth node", icon: Spline },
-    { value: "symmetric", label: "Symmetric node", icon: CircleDot }
-  ];
-  return (
-    <div className="flex h-8 items-center rounded-md border border-input bg-card p-0.5">
-      {options.map(({ value: optionValue, label, icon: Icon }) => (
-        <button
-          key={optionValue}
-          type="button"
-          title={label}
-          aria-label={label}
-          aria-pressed={value === optionValue}
-          onClick={() => onChange(optionValue)}
-          className={`flex h-6 w-7 items-center justify-center rounded transition ${value === optionValue ? "bg-blue-600 text-white" : "text-muted-foreground hover:bg-surface-hover hover:text-foreground"}`}
-        >
-          <Icon className="h-3.5 w-3.5" />
-        </button>
-      ))}
-    </div>
   );
 }
 

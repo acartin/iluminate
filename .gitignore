@@ -9,6 +9,9 @@ dist/
 **/.next/
 out/
 coverage/
+__pycache__/
+*.py[cod]
+.pytest_cache/
 
 # env / secrets
 .env

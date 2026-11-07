@@ -165,8 +165,9 @@ simulation or authoring model.
 
 ### `services/3d-worker`
 
-Currently a documentation-only service scaffold. Its approved target contract
-is `.agent/THREE_D_WORKER_CONTRACT.md`.
+Implemented as an isolated queue-consumer runtime. Its authoritative contract
+is `.agent/THREE_D_WORKER_CONTRACT.md`; its authenticated adapter and independent
+3D Modeler canvas live under the separate `/3d-modeler` web namespace.
 
 Owns, when implemented:
 
@@ -185,7 +186,7 @@ Does not own:
 - slicing, G-code, printers, CNC toolpaths, firmware or device protocols;
 - arbitrary SVG features, CAD scripts, Python execution or network imports.
 
-It is a queue consumer with no HTTP/public port. The future 3D canvas is a
+It is a queue consumer with no HTTP/public port. The 3D canvas is a
 separate authenticated web module and is not a Designer/Animate tab. It may
 reuse their approved UI conventions but may not share mutable state or bypass
 the worker's versioned job boundary.
@@ -344,7 +345,7 @@ Expected ownership:
 - `lighting-core/storage`: projects, controllers, partituras, deployments,
   device commands, device status, assets metadata, render artifacts/jobs and
   scene shares.
-- `3d-worker`: future 3D jobs, leases, result metadata and its versioned
+- `3d-worker`: 3D jobs, leases, result metadata and its versioned
   migrations. Shared project identity is referenced, not re-owned.
 
 ---

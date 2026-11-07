@@ -5,12 +5,12 @@
 
 ## Snapshot
 
-- Generated UTC: `2026-11-02T17:04:13Z`
+- Generated UTC: `2026-11-05T17:33:36Z`
 - Git branch: `HETZNER-DEV-2026-Noviembre-02`
-- Git commit: `ad8aefa`
-- Worktree: `dirty` (12 changed paths, excluding generated context files)
-- Status fingerprint: `5fd15aa967f726286d8b21c8e802a8797e1eff0f64fbd9946f70f95e86a27730`
-- Tracked diff fingerprint: `7e408c82fac7a5ed84fc390ebd291ba91df646550eb099075003012744e65b55`
+- Git commit: `7e1206c`
+- Worktree: `dirty` (80 changed paths, excluding generated context files)
+- Status fingerprint: `4aafe91d6b68ea9fb4d895505327b8658dc4f594889134c5846e959683c71f25`
+- Tracked diff fingerprint: `2cae60d20de5ba77e050de5c06842dcc5713f4bc482de01c69d0b3f29b9192ed`
 
 ## How To Use
 
@@ -29,23 +29,23 @@ partial 180-line copies and conflicts with the originals.
 | `AGENTS.md` | 12 | `ad5eaf42ccc4104b` | Repository AI entry point |
 | `.agent/RULES.md` | 252 | `860fb612e1b9cfa0` | AI procedure and router |
 | `.agent/ILUMINATE_BOOTSTRAP.md` | 85 | `0897d1f48420a2d8` | Human workflow |
-| `.agent/BRAIN_MAP.md` | 112 | `85f40953ae8459fe` | Generated structural snapshot |
-| `.agent/AI_CONTEXT_LED_ORCHESTRATION_PLATFORM.md` | 1101 | `f7a61d70de5d0fde` | Product/domain direction |
-| `.agent/FILESYSTEM_GUARDRAILS.md` | 421 | `caf48e61f7ce6a6e` | Service boundaries |
+| `.agent/BRAIN_MAP.md` | 117 | `8a85c293d29c2e49` | Generated structural snapshot |
+| `.agent/AI_CONTEXT_LED_ORCHESTRATION_PLATFORM.md` | 1102 | `4033fa5829edc891` | Product/domain direction |
+| `.agent/FILESYSTEM_GUARDRAILS.md` | 422 | `3dc48c7097b8a2db` | Service boundaries |
 | `.agent/DESIGNER_UX_CONTRACT.md` | 794 | `21a06558bb24cba7` | Designer UX contract |
-| `.agent/DESIGNER_HANDOFF.md` | 1261 | `f00293aa288d9369` | Current Designer handoff |
-| `.agent/THREE_D_WORKER_CONTRACT.md` | 289 | `ef1aa16aaafd5522` | 3D worker target contract |
+| `.agent/DESIGNER_HANDOFF.md` | 1261 | `6edd5f2012dfbab8` | Current Designer handoff |
+| `.agent/THREE_D_WORKER_CONTRACT.md` | 580 | `12c8f25209c8afb6` | 3D worker runtime and isolation contract |
 | `.agent/PIXELMAP_COMPOSER_DIRECTION.md` | 289 | `6b076969aabb78d1` | Composer/pixelMap direction |
 | `.agent/EFFECT_TARGETING_MODEL.md` | 159 | `517f12d2d35df40f` | Effect targeting |
-| `.agent/ILUMINATE_UI_STANDARDS.md` | 277 | `06afdd0b97c19048` | Authenticated UI standards |
+| `.agent/ILUMINATE_UI_STANDARDS.md` | 315 | `bd2e93eddca0aa47` | Authenticated UI standards |
 | `.agent/PUBLIC_SITE_DIRECTION.md` | 282 | `ca0b0f4191742b56` | Public site direction |
-| `.agent/DATABASE_MODEL.md` | 275 | `4b442dcbd67ee9ee` | Persistence model |
-| `.agent/EXECUTION_MAP.md` | 116 | `9462d66c9facbc34` | Validation map |
-| `.agent/regenerar_contexto.sh` | 241 | `68c9485eddb3060e` | Context generator |
+| `.agent/DATABASE_MODEL.md` | 309 | `0c5e680e91c9c5cd` | Persistence model |
+| `.agent/EXECUTION_MAP.md` | 119 | `82780db59c50d3a8` | Validation map |
+| `.agent/regenerar_contexto.sh` | 241 | `87c9a7ae25da638a` | Context generator |
 | `.agent/validar_documentacion.sh` | 136 | `23755ba0c718c10a` | Documentation consistency check |
 | `services/web/iluminate-prompt-builder/README.md` | 58 | `6001337108d3824f` | Internal prompt builder |
-| `services/3d-worker/README.md` | 25 | `ff5936f50fe61189` | 3D worker service scaffold |
+| `services/3d-worker/README.md` | 69 | `dee1783b2e71dc7d` | 3D worker service runbook |
 | `docs/partitura-lifecycle.md` | 430 | `53ac5fa9ee94514f` | Partitura lifecycle |
 | `docs/public-showroom-viewer-architecture.md` | 1098 | `1f5c322b14ff0e4b` | Showroom and Viewer architecture |
-| `docs/production-deployment.md` | 428 | `ba700ac44521379c` | Production runbook |
+| `docs/production-deployment.md` | 448 | `b9d66b388732a436` | Production runbook |
 | `docs/upgrade.doc` | 1624 | `0c1a4315084e320e` | Designer upgrade history/regression |

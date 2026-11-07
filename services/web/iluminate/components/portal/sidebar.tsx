@@ -16,6 +16,7 @@ import {
   KeyRound,
   Link2,
   Shield,
+  Shapes,
   Sparkles,
   Users
 } from "lucide-react";
@@ -43,6 +44,8 @@ const icons: Record<string, React.ComponentType<{ className?: string }>> = {
   roles: Shield,
   "partitura-generator": Sparkles,
   designer: DraftingCompass,
+  "three-d-modeler": Boxes,
+  profiles: Shapes,
   audit: KeyRound,
   security: KeyRound
 };
@@ -67,6 +70,8 @@ const bubbleClasses: Record<string, string> = {
   roles: "bg-[var(--purple-bg)] text-[var(--purple-text)]",
   "partitura-generator": "bg-[var(--amber-bg)] text-[var(--amber-text)]",
   designer: "bg-[var(--blue-bg)] text-[var(--blue-text)]",
+  "three-d-modeler": "bg-[var(--purple-bg)] text-[var(--purple-text)]",
+  profiles: "bg-[var(--teal-bg)] text-[var(--teal-text)]",
   audit: "bg-[var(--coral-bg)] text-[var(--coral-text)]"
 };
 

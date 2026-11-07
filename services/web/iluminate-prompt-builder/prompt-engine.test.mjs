@@ -110,12 +110,45 @@ test("3d-worker preset preserves hard isolation from Designer and Animate", () =
   assert.doesNotMatch(prompt, /No cambies contratos, perfiles, sweep/);
 });
 
+test("Profile 3D is available as a focused preset and modifiable domain", () => {
+  const preset = PRESETS.find((entry) => entry.id === "three_d_profile");
+  const domain = DOMAINS.find((entry) => entry.id === "three_d_profile");
+  assert.ok(preset);
+  assert.ok(domain);
+  assert.equal(preset.label, "Profile 3D");
+  assert.deepEqual(preset.domains, ["three_d_profile"]);
+  assert.equal(domain.group, "three_d");
+  assert.ok(domain.paths.includes("services/web/iluminate/lib/three-d-modeler/profile-save-validation.ts"));
+  assert.ok(domain.paths.includes("services/web/iluminate/lib/three-d-modeler/vector-editing.ts"));
+  assert.ok(!preset.unprotect.includes("three_d_worker_contract"));
+  assert.ok(!preset.unprotect.includes("three_d_isolation"));
+
+  const prompt = createPrompt({
+    objective: "Corrige la edición y validación de Profile.",
+    mode: "diagnose_implement",
+    allowedDomainIds: preset.domains,
+    protectedSurfaceIds: allProtected.filter((id) => !preset.unprotect.includes(id))
+  });
+  assert.match(prompt, /Profile 3D: dibujo y validación/);
+  assert.match(prompt, /profile-save-validation\.ts/);
+  assert.match(prompt, /No conectes Designer ni Animate con 3d-worker/);
+});
+
 test("3d canvas is a separate protected domain and does not open the worker", () => {
   const preset = PRESETS.find((entry) => entry.id === "three_d_canvas");
+  const domain = DOMAINS.find((entry) => entry.id === "three_d_canvas");
   assert.ok(preset);
+  assert.ok(domain);
   assert.deepEqual(preset.domains, ["three_d_canvas"]);
   assert.ok(!preset.unprotect.includes("three_d_worker_contract"));
   assert.ok(!preset.unprotect.includes("three_d_isolation"));
+  assert.ok(domain.context.includes(".agent/ILUMINATE_UI_STANDARDS.md"));
+  [
+    "services/web/iluminate/app/3d-modeler",
+    "services/web/iluminate/app/api/3d-modeler",
+    "services/web/iluminate/components/three-d-modeler",
+    "services/web/iluminate/lib/three-d-modeler"
+  ].forEach((path) => assert.ok(domain.paths.includes(path), "missing 3d modeler path " + path));
 
   const prompt = createPrompt({
     objective: "Implementa una fase autorizada del canvas 3D.",
@@ -123,7 +156,9 @@ test("3d canvas is a separate protected domain and does not open the worker", ()
     allowedDomainIds: preset.domains,
     protectedSurfaceIds: allProtected.filter((id) => !preset.unprotect.includes(id))
   });
-  assert.match(prompt, /Futuro módulo autenticado de autoría 3D/);
+  assert.match(prompt, /por defecto reutiliza los colores, iconos, controles, funcionamiento y patrones UX\/UI del Designer/);
+  assert.match(prompt, /services\/web\/iluminate\/components\/three-d-modeler/);
+  assert.match(prompt, /\.agent\/ILUMINATE_UI_STANDARDS\.md/);
   assert.match(prompt, /No cambies contratos, perfiles, sweep/);
   assert.match(prompt, /No conectes Designer ni Animate con 3d-worker/);
 });

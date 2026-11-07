@@ -126,9 +126,10 @@ Herramientas esperadas:
 
 El formato principal no debe ser JSON privado de Konva ni de una libreria de timeline.
 
-## 6.1 Future 3D canvas
+## 6.1 3D Modeler canvas
 
-The 3D canvas is a separate authenticated product module governed by
+The 3D canvas is a separate authenticated product module at `/3d-modeler`,
+governed by
 `.agent/THREE_D_WORKER_CONTRACT.md`. Designer and Animate must not expose a tab,
 button, panel, route handoff or hidden job action for it.
 
@@ -139,10 +140,47 @@ selection, zoom/pan and existing light/dark tokens. Reuse visual primitives and
 interaction vocabulary deliberately; do not reuse Designer's mutable state,
 electrical tools, partitura lifecycle or geometry mutation boundary.
 
-The future module owns its own 3D document/view state and communicates only
+In the Profile vector editor, `Select`, `Move`, node insertion, Pan and Snap
+use the same operator gestures as Designer: first click selects, dragging an
+already-selected object moves it, double-click on a segment inserts a node,
+right-drag pans from any tool, and the Setup Snap interval drives the magnet
+toggle. Connection-point markers must not obscure their axis intersection.
+
+The module owns its own `3d-model-document.v1` document/view state and communicates only
 through an authenticated server adapter and versioned asynchronous job
-contracts. Its exact route, navigation label and component namespace remain
-deferred decisions, not placeholders to add to the current UI.
+contracts. Its components live under `components/three-d-modeler`; importing
+Designer/Animate mutable state or domain components is prohibited.
+
+Its detail workspace is full-screen like Designer and uses the same density,
+global/contextual bar placement, technical rulers and `dnd-kit` interaction
+conventions. `Profile` owns only the 2D profile editor and its profile tools.
+`3D` owns one orbitable assembly viewport and the Layers panel with fixed
+`Paths`, `Profiles` and `Solid Objects` collections. The persisted Sweep
+relation is internal assembly state rather than a fourth visible collection;
+`Solid Objects` are the successful materializations of those relations and
+their eye controls mesh visibility. Selecting
+a Solid Object explicitly in Layers or on the canvas activates the standard red
+contextual trash action; mere visibility never implies selection. With no
+deletable selection the same trash affordance remains present but disabled. The `Paths` plus action imports an
+immutable Fabrication Plan snapshot; Fabrication Plans are sources, not rows in
+the persisted Paths collection. Profiles live at root or in one selectable user
+folder, and both folders and objects expose independent eye and lock controls.
+Selecting a Path and Profile immediately previews their connected assembly;
+current asynchronous status, generated mesh and downloads stay in that same 3D
+space. Assembly tools use the established left rail and contextual-bar
+positions. `Rotate Profile` pivots in the horizontal XY plane around the common
+connection point, using local Path `+Y` as its zero-angle reference while
+profile `+Z` stays vertical. Horizontal viewport drag and bounded
+numeric/slider controls share that persisted yaw; `Flip Profile Side` adds 180
+degrees for per-Path lip orientation. `Save` persists that orientation and `Sweep` materializes the selected
+Path/Profile pair idempotently. Generated meshes preserve their authored Z elevation; viewport
+fit may center X/Y but must never recenter the result across `Z=0`. `Project Geometry` is not
+part of the current 3D toolbar.
+
+Transient 3D-workspace operation messages use the shared `FeedbackAlert`
+component and its standard success/error timeouts. A terminal job transition
+emits one message; terminal status must not reconstruct a persistent overlay on
+every render.
 
 ## 7. Timeline y simulacion
 

@@ -108,7 +108,7 @@ this file. Untracked file contents are never read for fingerprinting.
 | \`services/lighting-core\` | Canonical LED, effect, partitura and validation domain. |
 | \`services/auth\` | Identity, sessions, organizations, roles and permissions. |
 | \`services/render-worker\` | Private queue worker for deterministic MP4/WebP scene rendering. |
-| \`services/3d-worker\` | Documentation-only scaffold for the isolated SVG-to-solid modeling worker. |
+| \`services/3d-worker\` | Isolated non-HTTP SVG-to-solid queue worker with authenticated enqueue adapter and independent 3D Modeler canvas. |
 | \`services/device-protocol\` | Cloud/controller protocol contracts. |
 | \`services/firmware\` | Compatibility notes and temporary spikes; organized firmware is external. |
 | \`docs\` | Lifecycle and operational runbooks selected by task. |
@@ -131,7 +131,7 @@ $(compose_services compose.yml)
 | \`.agent/FILESYSTEM_GUARDRAILS.md\` | Service ownership and dependency boundaries. |
 | \`.agent/DESIGNER_UX_CONTRACT.md\` | Authoritative Designer interaction contract. |
 | \`.agent/DESIGNER_HANDOFF.md\` | Current Designer implementation handoff. |
-| \`.agent/THREE_D_WORKER_CONTRACT.md\` | Target ownership, isolation and security contract for 3d-worker and its future canvas. |
+| \`.agent/THREE_D_WORKER_CONTRACT.md\` | Runtime ownership, Model Path/Sweep contract, isolation and security rules for 3d-worker and its canvas. |
 | \`.agent/PIXELMAP_COMPOSER_DIRECTION.md\` | Composer and physical mapping direction. |
 | \`.agent/EFFECT_TARGETING_MODEL.md\` | Effect targets and coordinate semantics. |
 | \`.agent/ILUMINATE_UI_STANDARDS.md\` | Authenticated web UI standards. |
@@ -219,7 +219,7 @@ manifest_row ".agent/AI_CONTEXT_LED_ORCHESTRATION_PLATFORM.md" "Product/domain d
 manifest_row ".agent/FILESYSTEM_GUARDRAILS.md" "Service boundaries"
 manifest_row ".agent/DESIGNER_UX_CONTRACT.md" "Designer UX contract"
 manifest_row ".agent/DESIGNER_HANDOFF.md" "Current Designer handoff"
-manifest_row ".agent/THREE_D_WORKER_CONTRACT.md" "3D worker target contract"
+manifest_row ".agent/THREE_D_WORKER_CONTRACT.md" "3D worker runtime and isolation contract"
 manifest_row ".agent/PIXELMAP_COMPOSER_DIRECTION.md" "Composer/pixelMap direction"
 manifest_row ".agent/EFFECT_TARGETING_MODEL.md" "Effect targeting"
 manifest_row ".agent/ILUMINATE_UI_STANDARDS.md" "Authenticated UI standards"
@@ -229,7 +229,7 @@ manifest_row ".agent/EXECUTION_MAP.md" "Validation map"
 manifest_row ".agent/regenerar_contexto.sh" "Context generator"
 manifest_row ".agent/validar_documentacion.sh" "Documentation consistency check"
 manifest_row "services/web/iluminate-prompt-builder/README.md" "Internal prompt builder"
-manifest_row "services/3d-worker/README.md" "3D worker service scaffold"
+manifest_row "services/3d-worker/README.md" "3D worker service runbook"
 manifest_row "docs/partitura-lifecycle.md" "Partitura lifecycle"
 manifest_row "docs/public-showroom-viewer-architecture.md" "Showroom and Viewer architecture"
 manifest_row "docs/production-deployment.md" "Production runbook"

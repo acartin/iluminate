@@ -158,6 +158,34 @@ Leased offline-render queue. One active job exists per tenant/artifact. Workers
 claim with `FOR UPDATE SKIP LOCKED`, increment bounded attempts and may reclaim
 expired leases. Browser playback never creates one render job per viewer.
 
+### `iluminate.three_d_model_jobs`
+
+Tenant-scoped queue owned only by `services/3d-worker`. It stores immutable
+source/recipe hashes, an optional operator-defined `display_name` for a
+successful Solid Object, bounded lease and retry state, safe diagnostics and the
+successful private manifest metadata. SVG and CAD bytes remain in the existing
+private assets bucket under
+`clients/<client_id>/3d-models/<project_id>/<job_id>/`; the table never stores
+those binaries. The authenticated `/api/3d-modeler` adapter derives tenant and
+project authority, writes the immutable source first and then enqueues the row.
+
+### `iluminate.three_d_model_documents`
+
+Stores one independent `3d-model-document.v1` profile/sweep setup per project,
+tenant-scoped through a composite project/client foreign key. It contains only
+bounded vector profile and setup JSON plus a revision; SVG source bytes and CAD
+artifacts remain in private R2, and no partitura or Designer geometry is stored
+or linked here.
+
+### `iluminate.three_d_profiles`
+
+Stores the deliberately global fabrication Profile catalog used across
+projects. Each record owns bounded `custom-vector.v1` geometry, display
+metadata, lifecycle status and an optimistic revision. It has no `client_id`
+because Profiles are internal system-managed lookup data rather than tenant or
+project property. Only trusted system-administrator routes may create or edit
+these records; project 3D documents remain tenant-scoped.
+
 ### `iluminate.scene_shares`
 
 Opaque, revocable access records joining a partitura to a render artifact.
@@ -260,6 +288,12 @@ The render/share pipeline is created by:
 
 ```text
 services/lighting-core/migrations/2026-10-07_create_scene_rendering_and_shares.sql
+```
+
+The isolated 3D model queue is created by its owning service migration:
+
+```text
+services/3d-worker/migrations/2026-11-02_create_3d_model_jobs.sql
 ```
 
 See also:

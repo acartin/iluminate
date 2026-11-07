@@ -29,7 +29,8 @@ export const permissionsByRole: Record<Role, string[]> = {
     "lighting:partituras:manage",
     "lighting:deployments:manage",
     "device:controllers:read",
-    "device:controllers:manage"
+    "device:controllers:manage",
+    "three-d:models:manage"
   ],
   "client-viewer": ["lighting:projects:read", "lighting:partituras:read", "device:controllers:read"]
 };
@@ -52,6 +53,13 @@ export const menuCatalog: MenuSection[] = [
         href: "/partituras/designer",
         description: "Full-screen visual composer for signs, zones and LED routing.",
         required_permission: "lighting:partituras:manage"
+      },
+      {
+        id: "three-d-modeler",
+        label: "3D Modeler",
+        href: "/3d-modeler",
+        description: "Independent profile-sweep workspace for print-ready 3D model jobs.",
+        required_permission: "three-d:models:manage"
       }
     ]
   },
@@ -79,6 +87,13 @@ export const menuCatalog: MenuSection[] = [
         href: "/settings/roles",
         description: "Roles, grants and authorization policy placeholders.",
         required_permission: "auth:roles:manage"
+      },
+      {
+        id: "profiles",
+        label: "Profiles",
+        href: "/profiles",
+        description: "Global fabrication profiles available to every project.",
+        required_permission: "three-d:profiles:manage"
       },
       {
         id: "led-strips",
@@ -161,19 +176,15 @@ function withoutLegacyGenerator(menu: MenuPayload): MenuPayload {
       }))
       .filter((section) => section.items.length > 0)
   };
-  if (normalized.user.role !== "system-admin" || normalized.sections.some((section) => section.items.some((item) => item.href === "/settings/led-strips"))) {
-    return normalized;
-  }
-  const item = menuCatalog.flatMap((section) => section.items).find((entry) => entry.href === "/settings/led-strips");
-  if (!item) return normalized;
-  const settings = normalized.sections.find((section) => section.id === "settings");
-  if (settings) {
-    return {
-      ...normalized,
-      sections: normalized.sections.map((section) => section.id === "settings" ? { ...section, items: [...section.items, item] } : section)
-    };
-  }
-  return { ...normalized, sections: [...normalized.sections, { id: "settings", label: "Settings", items: [item] }] };
+  const additions = menuCatalog.flatMap((section) => section.items.map((item) => ({ section, item }))).filter(({ item }) =>
+    canAccess(normalized.user.role, item) && ["/settings/led-strips", "/3d-modeler", "/profiles"].includes(item.href) && !normalized.sections.some((section) => section.items.some((existing) => existing.href === item.href))
+  );
+  return additions.reduce<MenuPayload>((current, { section: catalogSection, item }) => {
+    const existing = current.sections.find((section) => section.id === catalogSection.id);
+    return existing
+      ? { ...current, sections: current.sections.map((section) => section.id === catalogSection.id ? { ...section, items: [...section.items, item] } : section) }
+      : { ...current, sections: [...current.sections, { id: catalogSection.id, label: catalogSection.label, items: [item] }] };
+  }, normalized);
 }
 
 async function authHeaders(): Promise<HeadersInit> {
